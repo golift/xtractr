@@ -12,7 +12,7 @@ import (
 )
 
 // ExtractRAR extracts a rar file.. to a destination.
-func ExtractRAR(path string, destination string) (int64, []string, error) {
+func ExtractRAR(path string, to string) (int64, []string, error) {
 	rr, err := rardecode.OpenReader(path, "")
 	if err != nil {
 		return 0, nil, fmt.Errorf("creating reader: %v", err)
@@ -29,7 +29,7 @@ func ExtractRAR(path string, destination string) (int64, []string, error) {
 			break
 		}
 
-		rfile := filepath.Join(destination, header.Name)
+		rfile := filepath.Join(to, header.Name)
 		if strings.Contains(rfile, "../") || (runtime.GOOS == "windows" && strings.Contains(rfile, `..\`)) {
 			return size, files, fmt.Errorf("archived file contains invalid file path: %v", rfile)
 		}

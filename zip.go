@@ -10,8 +10,8 @@ import (
 )
 
 // ExtractZIP extracts a zip file.. to a destination.
-func ExtractZIP(source string, destination string) (int64, []string, error) {
-	r, err := zip.OpenReader(source)
+func ExtractZIP(path string, to string) (int64, []string, error) {
+	r, err := zip.OpenReader(path)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -21,25 +21,25 @@ func ExtractZIP(source string, destination string) (int64, []string, error) {
 	size := int64(0)
 
 	for _, zf := range r.Reader.File {
-		s, err := unzipFile(zf, destination)
+		s, err := unzipFile(zf, to)
 		if err != nil {
 			return size, files, err
 		}
 
-		files = append(files, filepath.Join(destination, zf.Name))
+		files = append(files, filepath.Join(to, zf.Name))
 		size += s
 	}
 
 	return size, files, nil
 }
 
-func unzipFile(zf *zip.File, destination string) (int64, error) {
+func unzipFile(zf *zip.File, to string) (int64, error) {
 	if strings.Contains(zf.Name, "../") || (runtime.GOOS == "windows" && strings.Contains(zf.Name, `..\`)) {
 		return 0, fmt.Errorf("archived file contains invalid file path: %v", zf.Name)
 	}
 
 	if strings.HasSuffix(zf.Name, "/") {
-		return 0, os.MkdirAll(filepath.Join(destination, zf.Name), 0755)
+		return 0, os.MkdirAll(filepath.Join(to, zf.Name), 0755)
 	}
 
 	rc, err := zf.Open()
@@ -48,5 +48,5 @@ func unzipFile(zf *zip.File, destination string) (int64, error) {
 	}
 	defer rc.Close()
 
-	return WriteNewFile(filepath.Join(destination, zf.Name), rc, zf.FileInfo().Mode())
+	return WriteNewFile(filepath.Join(to, zf.Name), rc, zf.FileInfo().Mode())
 }
