@@ -1,4 +1,4 @@
-module golift.io/extractorr
+module golift.io/xtractr
 
 go 1.13
 

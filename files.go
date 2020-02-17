@@ -1,4 +1,4 @@
-package extractorr
+package xtractr
 
 import (
 	"fmt"
@@ -12,13 +12,13 @@ import (
 
 // GetFileList returns all the files in a path.
 // This is non-resursive and only returns files _in_ the base path provided.
-func (e *Extractorr) GetFileList(path string) (files []string) {
+func (x *Xtractr) GetFileList(path string) (files []string) {
 	if fileList, err := ioutil.ReadDir(path); err == nil {
 		for _, file := range fileList {
 			files = append(files, filepath.Join(path, file.Name()))
 		}
 	} else {
-		e.log("Error: Reading path '%s': %v", path, err)
+		x.log("Error: Reading path '%s': %v", path, err)
 	}
 
 	return
@@ -46,11 +46,11 @@ func Difference(slice1 []string, slice2 []string) (diff []string) {
 	return diff
 }
 
-// FindCompressedFiles returns all the rar and zip files in a path. This attempts to grab only the first
-// file in a multi-part archive. Sometimes there are multiple archives, so if the archive
-// does not have "part" followed by a number in the name, then it will be considered
-// an independent archive. Some packagers seem to use different naming schemes, so this
-// will need to be updated as time progresses. So far it's working well. -dn2@8/3/19
+// FindCompressedFiles returns all the rar and zip files in a path. This attempts to grab
+// only the first file in a multi-part archive. Sometimes there are multiple archives, so
+// if the archive does not have "part" followed by a number in the name, then it will be
+// considered an independent archive. Some packagers seem to use different naming schemes,
+// so this will need to be updated as time progresses. So far it's working well.
 func FindCompressedFiles(path string) []string {
 	fileList, err := ioutil.ReadDir(path)
 	if err != nil {
@@ -61,7 +61,7 @@ func FindCompressedFiles(path string) []string {
 	files := []string{}
 
 	// Check (save) if the current path has any rar files.
-	if r, err := filepath.Glob(filepath.Join(path, "*.rar")); err == nil && len(r) > 0 {
+	if r, _ := filepath.Glob(filepath.Join(path, "*.rar")); len(r) > 0 {
 		hasrar = true
 	}
 
@@ -99,15 +99,15 @@ func ExtractFile(path, destination string) (int64, []string, error) {
 		return ExtractRAR(path, destination)
 	case strings.HasSuffix(s, ".zip"):
 		return ExtractZIP(path, destination)
+	default:
+		return 0, nil, fmt.Errorf("unknown filetype: %s", path)
 	}
-
-	return 0, nil, fmt.Errorf("unknown filetype: %s", path)
 }
 
 // MoveFiles relocates files then removes the folder they were in.
 // Returns the new file paths.
-func (e *Extractorr) MoveFiles(fromPath string, toPath string) ([]string, error) {
-	files := e.GetFileList(fromPath)
+func (x *Xtractr) MoveFiles(fromPath string, toPath string) ([]string, error) {
+	files := x.GetFileList(fromPath)
 
 	var keepErr error
 
@@ -115,16 +115,16 @@ func (e *Extractorr) MoveFiles(fromPath string, toPath string) ([]string, error)
 		newFile := filepath.Join(toPath, filepath.Base(file))
 		if err := os.Rename(file, newFile); err != nil {
 			keepErr = err
-			e.log("Error: Renaming Temp File: %v to %v: %v", file, newFile, err)
+			x.log("Error: Renaming Temp File: %v to %v: %v", file, newFile, err)
 			// keep trying.
 			continue
 		}
 
 		files[i] = newFile
-		e.debug("Renamed Temp File: %v -> %v", file, files[i])
+		x.debug("Renamed Temp File: %v -> %v", file, files[i])
 	}
 
-	e.DeleteFiles(fromPath)
+	x.deleteFiles(fromPath)
 
 	// Since this is the last step, we tried to rename all the files, bubble the
 	// os.Rename error up, so it gets flagged as failed. It may have worked, but
@@ -132,20 +132,20 @@ func (e *Extractorr) MoveFiles(fromPath string, toPath string) ([]string, error)
 	return files, keepErr
 }
 
-// DeleteFiles obliterates things and logs. Use with caution.
-func (e *Extractorr) DeleteFiles(files ...string) {
+// deleteFiles obliterates things and logs. Use with caution.
+func (x *Xtractr) deleteFiles(files ...string) {
 	for _, file := range files {
 		if err := os.RemoveAll(file); err != nil {
-			e.log("Error: Deleting %v: %v", file, err)
+			x.log("Error: Deleting %v: %v", file, err)
 			continue
 		}
 
-		e.log("Deleted (recursively): %s", file)
+		x.log("Deleted (recursively): %s", file)
 	}
 }
 
-// WriteNewFile writes a file from an io reader, making sure all parent directories exist.
-func WriteNewFile(fpath string, fdata io.Reader, fmode os.FileMode) (int64, error) {
+// writeFile writes a file from an io reader, making sure all parent directories exist.
+func writeFile(fpath string, fdata io.Reader, fmode os.FileMode) (int64, error) {
 	if err := os.MkdirAll(filepath.Dir(fpath), 0755); err != nil {
 		return 0, err
 	}

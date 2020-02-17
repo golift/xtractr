@@ -1,11 +1,10 @@
-package extractorr
+package xtractr
 
 import (
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 
 	"github.com/nwaples/rardecode"
@@ -29,9 +28,11 @@ func ExtractRAR(path string, to string) (int64, []string, error) {
 			break
 		}
 
-		rfile := filepath.Join(to, header.Name)
-		if strings.Contains(rfile, "../") || (runtime.GOOS == "windows" && strings.Contains(rfile, `..\`)) {
-			return size, files, fmt.Errorf("archived file contains invalid file path: %v", rfile)
+		rfile := filepath.Clean(filepath.Join(to, header.Name))
+		if !strings.HasPrefix(rfile, to) {
+			// The file being written is trying to write outside of our base path. Malicious archive?
+			return size, files, fmt.Errorf("archived file contains invalid file path: %s (from: %s)",
+				rfile, header.Name)
 		}
 
 		if header.IsDir {
@@ -46,7 +47,7 @@ func ExtractRAR(path string, to string) (int64, []string, error) {
 			return size, files, err
 		}
 
-		s, err := WriteNewFile(rfile, rr, header.Mode())
+		s, err := writeFile(rfile, rr, header.Mode())
 		if err != nil {
 			return size, files, err
 		}

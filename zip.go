@@ -1,11 +1,10 @@
-package extractorr
+package xtractr
 
 import (
 	"archive/zip"
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 )
 
@@ -34,12 +33,15 @@ func ExtractZIP(path string, to string) (int64, []string, error) {
 }
 
 func unzipFile(zf *zip.File, to string) (int64, error) {
-	if strings.Contains(zf.Name, "../") || (runtime.GOOS == "windows" && strings.Contains(zf.Name, `..\`)) {
-		return 0, fmt.Errorf("archived file contains invalid file path: %v", zf.Name)
+	rfile := filepath.Clean(filepath.Join(to, zf.Name))
+	if !strings.HasPrefix(rfile, to) {
+		// The file being written is trying to write outside of our base path. Malicious archive?
+		return 0, fmt.Errorf("archived file contains invalid path: %s (from: %s)",
+			rfile, zf.Name)
 	}
 
-	if strings.HasSuffix(zf.Name, "/") {
-		return 0, os.MkdirAll(filepath.Join(to, zf.Name), 0755)
+	if strings.HasSuffix(rfile, "/") {
+		return 0, os.MkdirAll(rfile, 0755)
 	}
 
 	rc, err := zf.Open()
@@ -48,5 +50,5 @@ func unzipFile(zf *zip.File, to string) (int64, error) {
 	}
 	defer rc.Close()
 
-	return WriteNewFile(filepath.Join(to, zf.Name), rc, zf.FileInfo().Mode())
+	return writeFile(rfile, rc, zf.FileInfo().Mode())
 }
