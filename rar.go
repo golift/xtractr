@@ -1,5 +1,7 @@
 package xtractr
 
+/* How to extract a RAR file. */
+
 import (
 	"fmt"
 	"io"
@@ -10,7 +12,7 @@ import (
 	"github.com/nwaples/rardecode"
 )
 
-// ExtractRAR extracts a rar file.. to a destination.
+// ExtractRAR extracts a rar file.. to a destination. Simple enough.
 func ExtractRAR(path string, to string) (int64, []string, error) {
 	rr, err := rardecode.OpenReader(path, "")
 	if err != nil {
@@ -20,9 +22,7 @@ func ExtractRAR(path string, to string) (int64, []string, error) {
 	files := []string{}
 	size := int64(0)
 
-	//sum := 1
 	for {
-		//sum += sum
 		header, err := rr.Next()
 		if err == io.EOF {
 			break
@@ -31,7 +31,7 @@ func ExtractRAR(path string, to string) (int64, []string, error) {
 		rfile := filepath.Clean(filepath.Join(to, header.Name))
 		if !strings.HasPrefix(rfile, to) {
 			// The file being written is trying to write outside of our base path. Malicious archive?
-			return size, files, fmt.Errorf("archived file contains invalid file path: %s (from: %s)",
+			return size, files, fmt.Errorf("archived file contains invalid path: %s (from: %s)",
 				rfile, header.Name)
 		}
 

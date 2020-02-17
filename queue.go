@@ -1,6 +1,6 @@
 package xtractr
 
-/* This file contains methods that supports the queuing system. */
+/* This file contains methods that support the extract queuing system. */
 
 import (
 	"fmt"
@@ -11,42 +11,55 @@ import (
 	"time"
 )
 
-// List of supported compression types. This isn't used.
+// ExtType represents a supported compression scheme. Use this to pick and
+// choose which types of files to find for extraction.
+type ExtType string
+
+// List of supported compression types. This isn't used (yet)
 const (
-	//	TGZ ExtType = "tgz"
-	//	GZP ExtType = "gz"
-	//	BZ2 ExtType = "bz2"
-	RAR ExtType = "rar"
-	ZIP ExtType = "zip"
+	//	TGZ ExtType = ".tgz"
+	//	GZP ExtType = ".gz"
+	//	BZ2 ExtType = ".bz2"
+	RAR ExtType = ".rar"
+	ZIP ExtType = ".zip"
 )
 
-// Xtract defines the data needed to extract a path.
+// Xtract defines the queue input data: data needed to extract files in a path.
+// Fill this out to create a queued extraction and pass it into Xtractr.Extract().
+// If a CBFunction is provided it runs when the queued extract begins w/ Response.Done=false.
+// The CBFunction is called again when the extraction finishes w/ Response.Done=true.
 type Xtract struct {
 	Name       string          // Unused here, but passed back into callback.
-	SearchPath string          // Place to find extractable items.
-	TempFolder bool            // Leave files in temporary folder?
-	DeleteOrig bool            // Delete Archives? Only works if TempFolder is true.
-	CBFunction func(*Response) // Callback Function, run in a go routine.
+	SearchPath string          // Path to folder where extractable items are located.
+	TempFolder bool            // Leave files in temporary folder? false=move files back to Searchpath
+	DeleteOrig bool            // Delete Archives after successful extraction? Be careful.
+	CBFunction func(*Response) // Callback Function, runs twice per queued item.
+	FindFileEx []ExtType       // UNUSED (yet). Archive types to find in SearchPath. nil=ALL TYPES
 }
 
-// Response is sent to the call-back function.
-// The data is not thread safe until Done=true.
+// Response is sent to the call-back function. The first CBFunction call is just
+// a notification that the extraction has started. You can determine it's the first
+// call by chcking Response.Done. false = started, true = finished. The data is
+// not thread safe until Done=true. When done=false the only other meaningful
+// data provided is the Response.Archives, Response.Output and Response.Queue.
 type Response struct {
-	Name     string        // Comes from *Extract.
+	Name     string        // Comes from *Xtract; use this to track your queued Xtract.
 	Done     bool          // Extract Started (false) or Finished (true).
 	Error    error         // Error encountered, only when done=true.
 	Size     int64         // Size of data written.
 	Output   string        // Temporary output folder.
 	Queued   int           // Items still in queue.
 	Started  time.Time     // When this extract began.
-	Elapsed  time.Duration // How long it took.
-	Extras   []string      // Extra archives extracted.
-	Archives []string      // Archives found and extracted.
+	Elapsed  time.Duration // Elapsed extraction duration. ie. How long it took.
+	Extras   []string      // Extra archives extracted from within an archive.
+	Archives []string      // Initial archives found and extracted.
 	NewFiles []string      // Files written to final path.
-	AllFiles []string      // Total files written (temp path).
+	AllFiles []string      // All (recursive) files written to the temp path.
 }
 
 // Extract is how external code begins an extraction process against a path.
+// To add an item to the extraction queue, create an Xtract struct with the
+// search path set and pass it to this method. The current queue size is returned.
 func (x *Xtractr) Extract(ex *Xtract) (int, error) {
 	if x.queue == nil {
 		return -1, fmt.Errorf("extractor queue stopped")
@@ -91,15 +104,23 @@ func (x *Xtractr) extract(ex *Xtract) {
 }
 
 func (x *Xtractr) finishExtract(ex *Xtract, re *Response, err error) {
-	if ex.CBFunction == nil {
-		// log something.
-		return
-	}
-
 	re.Error = err
 	re.Elapsed = time.Since(re.Started)
 	re.Done = true
 	re.Queued = len(x.queue)
+
+	if ex.CBFunction == nil {
+		if err == nil {
+			x.log("Finished Extracting: %s (%v elapsed, still in queue: %d items)",
+				ex.SearchPath, re.Elapsed, re.Queued) // log something better.
+		} else {
+			x.log("Error Extracting: %s (%v elapsed): %v",
+				ex.SearchPath, re.Elapsed, re.Error)
+		}
+
+		return
+	}
+
 	ex.CBFunction(re) // This lets the calling function know we've finished.
 }
 
@@ -147,8 +168,8 @@ func (x *Xtractr) decompressFiles(ex *Xtract, re *Response) error {
 	return nil
 }
 
-// Extract one archive at a time, then check if it contained any more archives.
-// Returns list of extra files extracted, size of data written, files written.
+// processArchives extractx one archive at a time, then checks if it extracted more archives.
+// Returns list of extra files extracted, size of data written and files written.
 func (x *Xtractr) processArchives(tmpPath string, archives []string) ([]string, int64, []string, error) {
 	files, extras := []string{}, []string{}
 	size := int64(0)

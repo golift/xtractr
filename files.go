@@ -51,6 +51,7 @@ func Difference(slice1 []string, slice2 []string) (diff []string) {
 // if the archive does not have "part" followed by a number in the name, then it will be
 // considered an independent archive. Some packagers seem to use different naming schemes,
 // so this will need to be updated as time progresses. So far it's working well.
+// TODO: make this support an archive in the path variable, it currently only supports a directory.
 func FindCompressedFiles(path string) []string {
 	fileList, err := ioutil.ReadDir(path)
 	if err != nil {

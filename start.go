@@ -13,25 +13,24 @@ const DefaultSuffix = "_xtractr"
 // ie. How many jobs can be queued before things get slow.
 const BufferSize = 1000
 
-// ExtType represents a supported compression scheme.
-type ExtType string
-
-// Config is the input data to confiure this library for use.
+// Config is the input data to configure the Xtract queue. Fill this out and
+// pass it into NewQueue() to create a queue for archive extractions.
 type Config struct {
-	Parallel int
-	ExtTypes []ExtType
-	Logger   *log.Logger
-	Debug    bool
-	Suffix   string
+	Parallel int         // Number of concurrent extractions.
+	Logger   *log.Logger // Logs are sent to this Logger.
+	Debug    bool        // If true, debug logs are also output.
+	Suffix   string      // The suffix used for temporary folders.
 }
 
-// Xtractr is what you get from New(). This is the main app struct.
+// Xtractr is what you get from NewQueue(). This is the main app struct.
+// Use this struct to call Xtractr.Extract() to queue an extraction.
 type Xtractr struct {
 	*Config
 	queue chan *Xtract
 }
 
-// NewQueue returns a new Xtractr Queue you can send jobs into.
+// NewQueue returns a new Xtractr Queue you can send Xtract jobs into.
+// This is where to start if you're creating an extractor queue.
 func NewQueue(config *Config) *Xtractr {
 	x := parseConfig(config)
 
@@ -62,7 +61,8 @@ func parseConfig(config *Config) *Xtractr {
 	}
 }
 
-// Stop shuts down the extractor routines.
+// Stop shuts down the extractor routines. Call this to shut things down. There
+// is no re-starting. Once you stop, you need to call NewQueue() to start again.
 func (x *Xtractr) Stop() {
 	if x.queue == nil {
 		return
@@ -72,7 +72,7 @@ func (x *Xtractr) Stop() {
 	x.queue = nil
 }
 
-// log writes a log message.
+// log writes a log message. Use sparingly and necesarilly.
 func (x *Xtractr) log(msg string, v ...interface{}) {
 	x.Logger.Printf(msg, v...)
 }

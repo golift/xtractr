@@ -8,7 +8,9 @@ import (
 	"strings"
 )
 
-// ExtractZIP extracts a zip file.. to a destination.
+/* How to extract a ZIP file. */
+
+// ExtractZIP extracts a zip file.. to a destination. Simple enough.
 func ExtractZIP(path string, to string) (int64, []string, error) {
 	r, err := zip.OpenReader(path)
 	if err != nil {
