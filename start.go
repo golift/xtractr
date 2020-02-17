@@ -3,23 +3,21 @@ package xtractr
 import (
 	"io/ioutil"
 	"log"
+	"reflect"
 )
 
-// DefaultSuffix is used if no suffix is provided.
-// The suffix is used for temporary folders and files.
-const DefaultSuffix = "_xtractr"
-
-// BufferSize is the size of the extraction buffer.
+// DefaultBufferSize is the size of the extraction buffer.
 // ie. How many jobs can be queued before things get slow.
-const BufferSize = 1000
+const DefaultBufferSize = 1000
 
 // Config is the input data to configure the Xtract queue. Fill this out and
 // pass it into NewQueue() to create a queue for archive extractions.
 type Config struct {
-	Parallel int         // Number of concurrent extractions.
-	Logger   *log.Logger // Logs are sent to this Logger.
 	Debug    bool        // If true, debug logs are also output.
+	BuffSize int         // Size of the extraction channel buffer. Default=1000.
+	Parallel int         // Number of concurrent extractions.
 	Suffix   string      // The suffix used for temporary folders.
+	Logger   *log.Logger // Logs are sent to this Logger.
 }
 
 // Xtractr is what you get from NewQueue(). This is the main app struct.
@@ -47,8 +45,12 @@ func parseConfig(config *Config) *Xtractr {
 		config.Parallel = 1
 	}
 
+	if config.BuffSize < 1 {
+		config.BuffSize = DefaultBufferSize
+	}
+
 	if config.Suffix == "" {
-		config.Suffix = DefaultSuffix
+		config.Suffix = "_" + reflect.TypeOf(Config{}).PkgPath() // xtractr
 	}
 
 	if config.Logger == nil {
@@ -57,7 +59,7 @@ func parseConfig(config *Config) *Xtractr {
 
 	return &Xtractr{
 		Config: config,
-		queue:  make(chan *Xtract, BufferSize),
+		queue:  make(chan *Xtract, config.BuffSize),
 	}
 }
 
