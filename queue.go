@@ -29,7 +29,7 @@ const (
 // If a CBFunction is provided it runs when the queued extract begins w/ Response.Done=false.
 // The CBFunction is called again when the extraction finishes w/ Response.Done=true.
 type Xtract struct {
-	Name       string          // Unused here, but passed back into callback.
+	Name       string          // Unused in this app; exposed for calling library.
 	SearchPath string          // Folder path where extractable items are located.
 	TempFolder bool            // Leave files in temporary folder? false=move files back to Searchpath
 	DeleteOrig bool            // Delete Archives after successful extraction? Be careful.
@@ -43,9 +43,7 @@ type Xtract struct {
 // not thread safe until Done=true. When done=false the only other meaningful
 // data provided is the Response.Archives, Response.Output and Response.Queue.
 type Response struct {
-	Name     string        // Comes from *Xtract; use this to track your queued Xtract.
 	Done     bool          // Extract Started (false) or Finished (true).
-	Error    error         // Error encountered, only when done=true.
 	Size     int64         // Size of data written.
 	Output   string        // Temporary output folder.
 	Queued   int           // Items still in queue.
@@ -55,6 +53,8 @@ type Response struct {
 	Archives []string      // Initial archives found and extracted.
 	NewFiles []string      // Files written to final path.
 	AllFiles []string      // All (recursive) files written to the temp path.
+	Error    error         // Error encountered, only when done=true.
+	X        *Xtract       // Copied from input data.
 }
 
 // Extract is how external code begins an extraction process against a path.
@@ -82,7 +82,7 @@ func (x *Xtractr) processQueue() {
 // This is fired off from processQueue() in a go routine.
 func (x *Xtractr) extract(ex *Xtract) {
 	re := &Response{
-		Name:    ex.Name,
+		X:       ex,
 		Started: time.Now(),
 		Output:  filepath.Join(ex.SearchPath, x.Suffix),
 	}
@@ -90,7 +90,7 @@ func (x *Xtractr) extract(ex *Xtract) {
 	re.Archives = FindCompressedFiles(ex.SearchPath)
 
 	if len(re.Archives) < 1 {
-		x.finishExtract(ex, re, fmt.Errorf("no compressed files found"))
+		x.finishExtract(re, fmt.Errorf("no compressed files found"))
 		return
 	}
 
@@ -100,32 +100,32 @@ func (x *Xtractr) extract(ex *Xtract) {
 	}
 
 	// e.log("Starting: %d archives - %v", len(resp.Archives), ex.SearchPath)
-	x.finishExtract(ex, re, x.decompressFiles(ex, re))
+	x.finishExtract(re, x.decompressFiles(re))
 }
 
-func (x *Xtractr) finishExtract(ex *Xtract, re *Response, err error) {
+func (x *Xtractr) finishExtract(re *Response, err error) {
 	re.Error = err
 	re.Elapsed = time.Since(re.Started)
 	re.Done = true
 	re.Queued = len(x.queue)
 
-	if ex.CBFunction == nil {
+	if re.X.CBFunction == nil {
 		if err == nil {
 			x.log("Finished Extracting: %s (%v elapsed, still in queue: %d items)",
-				ex.SearchPath, re.Elapsed, re.Queued) // log something better.
+				re.X.SearchPath, re.Elapsed, re.Queued) // log something better.
 		} else {
 			x.log("Error Extracting: %s (%v elapsed): %v",
-				ex.SearchPath, re.Elapsed, re.Error)
+				re.X.SearchPath, re.Elapsed, re.Error)
 		}
 
 		return
 	}
 
-	ex.CBFunction(re) // This lets the calling function know we've finished.
+	re.X.CBFunction(re) // This lets the calling function know we've finished.
 }
 
 // decompressFiles runs after we find and verify archives exist.
-func (x *Xtractr) decompressFiles(ex *Xtract, re *Response) error {
+func (x *Xtractr) decompressFiles(re *Response) error {
 	err := os.MkdirAll(re.Output, 0755)
 	if err != nil {
 		return err
@@ -141,21 +141,21 @@ func (x *Xtractr) decompressFiles(ex *Xtract, re *Response) error {
 
 	msg := fmt.Sprintf("# %s - this file is removed with the extracted data\n---\n"+
 		"from_path:%s\ntemp_path:%s\nrelocated:%v\ntime:%v\nfiles:\n  - %v\n", x.Suffix,
-		ex.SearchPath, re.Output, !ex.TempFolder, time.Now(), strings.Join(re.NewFiles, "\n  - "))
+		re.X.SearchPath, re.Output, !re.X.TempFolder, time.Now(), strings.Join(re.NewFiles, "\n  - "))
 
 	if err := ioutil.WriteFile(tmpFile, []byte(msg), 0744); err != nil {
 		x.log("Error: Creating Temporary Tracking File: %v", err) // continue anyway.
 	}
 
-	if ex.DeleteOrig {
+	if re.X.DeleteOrig {
 		x.DeleteFiles(re.Archives...) // as requested
 	}
 
-	if !ex.TempFolder {
+	if !re.X.TempFolder {
 		// Move the extracted files back into their original folder.
-		re.NewFiles, err = x.MoveFiles(re.Output, ex.SearchPath)
+		re.NewFiles, err = x.MoveFiles(re.Output, re.X.SearchPath)
 		if err != nil {
-			if !ex.DeleteOrig {
+			if !re.X.DeleteOrig {
 				// cleanup the broken decompression, but only if we didn't delete the originals.
 				x.DeleteFiles(re.Output)
 			}
