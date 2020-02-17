@@ -6,10 +6,6 @@ import (
 	"reflect"
 )
 
-// DefaultBufferSize is the size of the extraction buffer.
-// ie. How many jobs can be queued before things get slow.
-const DefaultBufferSize = 1000
-
 // Config is the input data to configure the Xtract queue. Fill this out and
 // pass it into NewQueue() to create a queue for archive extractions.
 type Config struct {
@@ -38,6 +34,10 @@ func NewQueue(config *Config) *Xtractr {
 
 	return x
 }
+
+// DefaultBufferSize is the size of the extraction buffer.
+// ie. How many jobs can be queued before things get slow.
+const DefaultBufferSize = 1000
 
 // parseConfig verifies sane config data and returns the Xtractr struct.
 func parseConfig(config *Config) *Xtractr {

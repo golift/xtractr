@@ -11,11 +11,11 @@ import (
 	"time"
 )
 
-// ExtType represents a supported compression scheme. Use this to pick and
-// choose which types of files to find for extraction.
+// ExtType represents a supported compression scheme.
+// Use this to choose which types of files to find for extraction.
 type ExtType string
 
-// List of supported compression types. This isn't used (yet)
+// List of supported compression types. This isn't used (yet).
 const (
 	//	TGZ ExtType = ".tgz"
 	//	GZP ExtType = ".gz"
@@ -30,7 +30,7 @@ const (
 // The CBFunction is called again when the extraction finishes w/ Response.Done=true.
 type Xtract struct {
 	Name       string          // Unused here, but passed back into callback.
-	SearchPath string          // Path to folder where extractable items are located.
+	SearchPath string          // Folder path where extractable items are located.
 	TempFolder bool            // Leave files in temporary folder? false=move files back to Searchpath
 	DeleteOrig bool            // Delete Archives after successful extraction? Be careful.
 	CBFunction func(*Response) // Callback Function, runs twice per queued item.
@@ -79,7 +79,7 @@ func (x *Xtractr) processQueue() {
 }
 
 // extract is where the real work begins and files get extracted.
-// This is fired off from the queue.
+// This is fired off from processQueue() in a go routine.
 func (x *Xtractr) extract(ex *Xtract) {
 	re := &Response{
 		Name:    ex.Name,
@@ -131,25 +131,24 @@ func (x *Xtractr) decompressFiles(ex *Xtract, re *Response) error {
 		return err
 	}
 
-	re.Extras, re.Size, re.AllFiles, err = x.processArchives(re.Output, re.Archives)
+	re.Extras, re.Size, re.AllFiles, err = x.processArchives(re.Archives, re.Output)
 	if err != nil {
 		return err
 	}
 
 	tmpFile := filepath.Join(re.Output, x.Suffix)
-	msg := fmt.Sprintf("%s - this file is removed with the extracted data\n"+
-		"from: %s\npath: %s\ntime: %v\nfiles:\n%v\n%v\n", x.Suffix,
-		ex.SearchPath, re.Output, time.Now(), tmpFile, strings.Join(re.NewFiles, "\n"))
-
-	if err := ioutil.WriteFile(tmpFile, []byte(msg), 0744); err != nil {
-		x.log("Error: Creating Temporary Tracking File: %v", err)
-	}
-
-	// Add the file we just wrote to the list of files written.
 	re.NewFiles = append(x.GetFileList(re.Output), tmpFile)
 
+	msg := fmt.Sprintf("# %s - this file is removed with the extracted data\n---\n"+
+		"from_path:%s\ntemp_path:%s\nrelocated:%v\ntime:%v\nfiles:\n  - %v\n", x.Suffix,
+		ex.SearchPath, re.Output, !ex.TempFolder, time.Now(), strings.Join(re.NewFiles, "\n  - "))
+
+	if err := ioutil.WriteFile(tmpFile, []byte(msg), 0744); err != nil {
+		x.log("Error: Creating Temporary Tracking File: %v", err) // continue anyway.
+	}
+
 	if ex.DeleteOrig {
-		x.deleteFiles(re.Archives...) // as requested
+		x.DeleteFiles(re.Archives...) // as requested
 	}
 
 	if !ex.TempFolder {
@@ -158,7 +157,7 @@ func (x *Xtractr) decompressFiles(ex *Xtract, re *Response) error {
 		if err != nil {
 			if !ex.DeleteOrig {
 				// cleanup the broken decompression, but only if we didn't delete the originals.
-				x.deleteFiles(re.Output)
+				x.DeleteFiles(re.Output)
 			}
 
 			return err
@@ -170,32 +169,31 @@ func (x *Xtractr) decompressFiles(ex *Xtract, re *Response) error {
 
 // processArchives extractx one archive at a time, then checks if it extracted more archives.
 // Returns list of extra files extracted, size of data written and files written.
-func (x *Xtractr) processArchives(tmpPath string, archives []string) ([]string, int64, []string, error) {
+func (x *Xtractr) processArchives(archives []string, tmpPath string) ([]string, int64, []string, error) {
 	files, extras := []string{}, []string{}
 	size := int64(0)
 
 	for _, filename := range archives {
 		x.debug("Extracting File: %v", filename)
-		beforeFiles := x.GetFileList(tmpPath) // get the "before this extraction" file list
-		ss, ff, err := ExtractFile(filename, tmpPath)
-		files = append(files, ff...)
-		size += ss
+		beforeFiles := x.GetFileList(tmpPath)         // get the "before this extraction" file list
+		ss, ff, err := ExtractFile(filename, tmpPath) // extract the file.
+		files = append(files, ff...)                  // keep track of the files extract.
+		size += ss                                    // total the size of data written.
 
 		if err != nil {
-			x.deleteFiles(tmpPath)
+			x.DeleteFiles(tmpPath) // clean up the mess after an error and bail.
 			return extras, size, files, err
 		}
 
-		newFiles := Difference(beforeFiles, x.GetFileList(tmpPath))
-
 		// Check if we just extracted more archives.
+		newFiles := Difference(beforeFiles, x.GetFileList(tmpPath))
 		for _, filename := range newFiles {
 			if strings.HasSuffix(filename, ".rar") || strings.HasSuffix(filename, ".zip") {
 				// recurse and append data to tracking vars.
-				ee, ss, ff, err := x.processArchives(tmpPath, []string{filename})
-				extras = append(append(extras, ee...), filename)
-				files = append(files, ff...)
-				size += ss
+				ee, ss, ff, err := x.processArchives([]string{filename}, tmpPath)
+				extras = append(append(extras, ee...), filename) // MORE archives!
+				files = append(files, ff...)                     // keep track of the files extract.
+				size += ss                                       // total the size of data written.
 
 				if err != nil {
 					return extras, size, files, err

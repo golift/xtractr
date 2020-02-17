@@ -1,5 +1,7 @@
 package xtractr
 
+/* Code to find, write, move and delete files. */
+
 import (
 	"fmt"
 	"io"
@@ -12,6 +14,7 @@ import (
 
 // GetFileList returns all the files in a path.
 // This is non-resursive and only returns files _in_ the base path provided.
+// This is a helper method and only exposed for convenience. You do not have to call this.
 func (x *Xtractr) GetFileList(path string) (files []string) {
 	if fileList, err := ioutil.ReadDir(path); err == nil {
 		for _, file := range fileList {
@@ -26,6 +29,7 @@ func (x *Xtractr) GetFileList(path string) (files []string) {
 
 // Difference returns all the strings that are in slice2 but not in slice1.
 // Used to find new files in a file list from a path. ie. those we extracted.
+// This is a helper method and only exposed for convenience. You do not have to call this.
 func Difference(slice1 []string, slice2 []string) (diff []string) {
 	for _, s2 := range slice2 {
 		var found bool
@@ -37,8 +41,7 @@ func Difference(slice1 []string, slice2 []string) (diff []string) {
 			}
 		}
 
-		if !found {
-			// String not found.
+		if !found { // String not found, so it's a new string, add it to the diff.
 			diff = append(diff, s2)
 		}
 	}
@@ -53,6 +56,7 @@ func Difference(slice1 []string, slice2 []string) (diff []string) {
 // so this will need to be updated as time progresses. So far it's working well.
 // TODO: make this support an archive in the path variable, it currently only supports a directory.
 // TODO: make this support ExtType filter.
+// This is a helper method and only exposed for convenience. You do not have to call this.
 func FindCompressedFiles(path string) []string {
 	fileList, err := ioutil.ReadDir(path)
 	if err != nil {
@@ -108,6 +112,7 @@ func ExtractFile(path, destination string) (int64, []string, error) {
 
 // MoveFiles relocates files then removes the folder they were in.
 // Returns the new file paths.
+// This is a helper method and only exposed for convenience. You do not have to call this.
 func (x *Xtractr) MoveFiles(fromPath string, toPath string) ([]string, error) {
 	files := x.GetFileList(fromPath)
 
@@ -126,7 +131,7 @@ func (x *Xtractr) MoveFiles(fromPath string, toPath string) ([]string, error) {
 		x.debug("Renamed Temp File: %v -> %v", file, files[i])
 	}
 
-	x.deleteFiles(fromPath)
+	x.DeleteFiles(fromPath)
 
 	// Since this is the last step, we tried to rename all the files, bubble the
 	// os.Rename error up, so it gets flagged as failed. It may have worked, but
@@ -134,8 +139,8 @@ func (x *Xtractr) MoveFiles(fromPath string, toPath string) ([]string, error) {
 	return files, keepErr
 }
 
-// deleteFiles obliterates things and logs. Use with caution.
-func (x *Xtractr) deleteFiles(files ...string) {
+// DeleteFiles obliterates things and logs. Use with caution.
+func (x *Xtractr) DeleteFiles(files ...string) {
 	for _, file := range files {
 		if err := os.RemoveAll(file); err != nil {
 			x.log("Error: Deleting %v: %v", file, err)
