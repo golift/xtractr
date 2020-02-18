@@ -84,7 +84,7 @@ func (x *Xtractr) extract(ex *Xtract) {
 	re := &Response{
 		X:       ex,
 		Started: time.Now(),
-		Output:  strings.TrimSuffix(ex.SearchPath, "/") + x.Suffix, // tmp folder.
+		Output:  strings.TrimRight(ex.SearchPath, `/\`) + x.Suffix, // tmp folder.
 	}
 
 	re.Archives = FindCompressedFiles(ex.SearchPath)
