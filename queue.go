@@ -174,7 +174,7 @@ func (x *Xtractr) processArchives(archives []string, tmpPath string) ([]string, 
 	size := int64(0)
 
 	for _, filename := range archives {
-		x.debug("Extracting File: %v", filename)
+		x.debug("Extracting File: %v to %v", filename, tmpPath)
 		beforeFiles := x.GetFileList(tmpPath)         // get the "before this extraction" file list
 		ss, ff, err := ExtractFile(filename, tmpPath) // extract the file.
 		files = append(files, ff...)                  // keep track of the files extract.
