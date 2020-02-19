@@ -13,50 +13,50 @@ import (
 )
 
 // ExtractRAR extracts a rar file.. to a destination. Simple enough.
-func ExtractRAR(path string, to string) (int64, []string, error) {
-	rr, err := rardecode.OpenReader(path, "")
+func ExtractRAR(rarFilePath string, toDir string) (int64, []string, error) {
+	rarReader, err := rardecode.OpenReader(rarFilePath, "")
 	if err != nil {
-		return 0, nil, fmt.Errorf("creating reader: %v", err)
+		return 0, nil, err
 	}
 
 	files := []string{}
 	size := int64(0)
 
 	for {
-		header, err := rr.Next()
+		header, err := rarReader.Next()
 		if err == io.EOF {
 			break
 		} else if err != nil {
 			return size, files, err
 		} else if header == nil {
-			return size, files, fmt.Errorf("rar file contains invalid file header")
+			return size, files, fmt.Errorf("rar file '%s' contains invalid file header", rarFilePath)
 		}
 
-		rfile := filepath.Clean(filepath.Join(to, header.Name))
-		if !strings.HasPrefix(rfile, to) {
+		wfile := filepath.Clean(filepath.Join(toDir, header.Name))
+		if !strings.HasPrefix(wfile, toDir) {
 			// The file being written is trying to write outside of our base path. Malicious archive?
-			return size, files, fmt.Errorf("archived file contains invalid path: %s (from: %s)",
-				rfile, header.Name)
+			return size, files, fmt.Errorf("archived file '%s' contains invalid path: %s (from: %s)",
+				rarFilePath, wfile, header.Name)
 		}
 
 		if header.IsDir {
-			if err = os.MkdirAll(rfile, 0755); err != nil {
+			if err = os.MkdirAll(wfile, 0755); err != nil {
 				return size, files, err
 			}
 
 			continue
 		}
 
-		if err = os.MkdirAll(filepath.Dir(rfile), 0755); err != nil {
+		if err = os.MkdirAll(filepath.Dir(wfile), 0755); err != nil {
 			return size, files, err
 		}
 
-		s, err := writeFile(rfile, rr, header.Mode())
+		s, err := writeFile(wfile, rarReader, header.Mode())
 		if err != nil {
 			return size, files, err
 		}
 
-		files = append(files, rfile)
+		files = append(files, wfile)
 		size += s
 	}
 

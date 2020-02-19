@@ -11,46 +11,46 @@ import (
 /* How to extract a ZIP file. */
 
 // ExtractZIP extracts a zip file.. to a destination. Simple enough.
-func ExtractZIP(path string, to string) (int64, []string, error) {
-	r, err := zip.OpenReader(path)
+func ExtractZIP(zipFile string, toPath string) (int64, []string, error) {
+	zipReader, err := zip.OpenReader(zipFile)
 	if err != nil {
 		return 0, nil, err
 	}
-	defer r.Close()
+	defer zipReader.Close()
 
 	files := []string{}
 	size := int64(0)
 
-	for _, zf := range r.Reader.File {
-		s, err := unzipFile(zf, to)
+	for _, zf := range zipReader.Reader.File {
+		s, err := unzipFile(zf, toPath)
 		if err != nil {
 			return size, files, err
 		}
 
-		files = append(files, filepath.Join(to, zf.Name))
+		files = append(files, filepath.Join(toPath, zf.Name))
 		size += s
 	}
 
 	return size, files, nil
 }
 
-func unzipFile(zf *zip.File, to string) (int64, error) {
-	rfile := filepath.Clean(filepath.Join(to, zf.Name))
-	if !strings.HasPrefix(rfile, to) {
+func unzipFile(zipFile *zip.File, toPath string) (int64, error) {
+	rfile := filepath.Clean(filepath.Join(toPath, zipFile.Name))
+	if !strings.HasPrefix(rfile, toPath) {
 		// The file being written is trying to write outside of our base path. Malicious archive?
-		return 0, fmt.Errorf("archived file contains invalid path: %s (from: %s)",
-			rfile, zf.Name)
+		return 0, fmt.Errorf("archived file '%s' contains invalid path: %s (from: %s)",
+			zipFile.FileInfo().Name(), rfile, zipFile.Name)
 	}
 
 	if strings.HasSuffix(rfile, "/") {
 		return 0, os.MkdirAll(rfile, 0755)
 	}
 
-	rc, err := zf.Open()
+	rc, err := zipFile.Open()
 	if err != nil {
 		return 0, err
 	}
 	defer rc.Close()
 
-	return writeFile(rfile, rc, zf.FileInfo().Mode())
+	return writeFile(rfile, rc, zipFile.FileInfo().Mode())
 }
