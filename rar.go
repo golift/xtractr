@@ -28,6 +28,8 @@ func ExtractRAR(path string, to string) (int64, []string, error) {
 			break
 		} else if err != nil {
 			return size, files, err
+		} else if header == nil {
+			return size, files, fmt.Errorf("rar file contains invalid file header")
 		}
 
 		rfile := filepath.Clean(filepath.Join(to, header.Name))
