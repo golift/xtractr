@@ -26,6 +26,8 @@ func ExtractRAR(path string, to string) (int64, []string, error) {
 		header, err := rr.Next()
 		if err == io.EOF {
 			break
+		} else if err != nil {
+			return size, files, err
 		}
 
 		rfile := filepath.Clean(filepath.Join(to, header.Name))
