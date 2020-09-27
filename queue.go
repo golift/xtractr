@@ -11,19 +11,6 @@ import (
 	"time"
 )
 
-// ExtType represents a supported compression scheme.
-// Use this to choose which types of files to find for extraction.
-type ExtType string
-
-// List of supported compression types. This isn't used (yet).
-const (
-	//	TGZ ExtType = ".tgz"
-	//	GZP ExtType = ".gz"
-	//	BZ2 ExtType = ".bz2"
-	RAR ExtType = ".rar"
-	ZIP ExtType = ".zip"
-)
-
 // Xtract defines the queue input data: data needed to extract files in a path.
 // Fill this out to create a queued extraction and pass it into Xtractr.Extract().
 // If a CBFunction is provided it runs when the queued extract begins w/ Response.Done=false.
@@ -34,7 +21,6 @@ type Xtract struct {
 	TempFolder bool            // Leave files in temporary folder? false=move files back to Searchpath
 	DeleteOrig bool            // Delete Archives after successful extraction? Be careful.
 	CBFunction func(*Response) // Callback Function, runs twice per queued item.
-	FindFileEx []ExtType       // UNUSED (yet). Archive types to find in SearchPath. nil=ALL TYPES
 }
 
 // Response is sent to the call-back function. The first CBFunction call is just
@@ -153,7 +139,7 @@ func (x *Xtractr) decompressFiles(re *Response) error {
 
 	if !re.X.TempFolder {
 		// Move the extracted files back into their original folder.
-		re.NewFiles, err = x.MoveFiles(re.Output, re.X.SearchPath)
+		re.NewFiles, err = x.MoveFiles(re.Output, re.X.SearchPath, false)
 		if err != nil {
 			if !re.X.DeleteOrig {
 				// cleanup the broken decompression, but only if we didn't delete the originals.

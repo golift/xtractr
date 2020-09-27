@@ -54,11 +54,22 @@ func Difference(slice1 []string, slice2 []string) (diff []string) {
 // if the archive does not have "part" followed by a number in the name, then it will be
 // considered an independent archive. Some packagers seem to use different naming schemes,
 // so this will need to be updated as time progresses. So far it's working well.
-// TODO: make this support an archive in the path variable, it currently only supports a directory.
-// TODO: make this support ExtType filter.
 // This is a helper method and only exposed for convenience. You do not have to call this.
 func FindCompressedFiles(path string) []string {
-	fileList, err := ioutil.ReadDir(path)
+	dir, err := os.Open(path)
+	if err != nil {
+		return nil
+	}
+	defer dir.Close()
+
+	if info, err := dir.Stat(); err != nil {
+		return nil // unreadable folder?
+	} else if l := strings.ToLower(path); !info.IsDir() &&
+		(strings.HasSuffix(l, ".zip") || strings.HasSuffix(l, ".rar") || strings.HasSuffix(l, ".r00")) {
+		return []string{path} // passed in an archive file; send it back out.
+	}
+
+	fileList, err := dir.Readdir(-1)
 	if err != nil {
 		return nil
 	}
@@ -101,7 +112,7 @@ func FindCompressedFiles(path string) []string {
 // Returns size of extracted data, number of extracted files, and/or error.
 func ExtractFile(path, destination string) (int64, []string, error) {
 	switch s := strings.ToLower(path); {
-	case strings.HasSuffix(s, ".rar"):
+	case strings.HasSuffix(s, ".rar"), strings.HasSuffix(s, ".r00"):
 		return ExtractRAR(path, destination)
 	case strings.HasSuffix(s, ".zip"):
 		return ExtractZIP(path, destination)
@@ -113,22 +124,32 @@ func ExtractFile(path, destination string) (int64, []string, error) {
 // MoveFiles relocates files then removes the folder they were in.
 // Returns the new file paths.
 // This is a helper method and only exposed for convenience. You do not have to call this.
-func (x *Xtractr) MoveFiles(fromPath string, toPath string) ([]string, error) {
-	files := x.GetFileList(fromPath)
-
-	var keepErr error
+func (x *Xtractr) MoveFiles(fromPath string, toPath string, overwrite bool) ([]string, error) {
+	var (
+		files   = x.GetFileList(fromPath)
+		keepErr error
+	)
 
 	for i, file := range files {
 		newFile := filepath.Join(toPath, filepath.Base(file))
-		if err := os.Rename(file, newFile); err != nil {
+		_, err := os.Stat(newFile)
+		exists := !os.IsNotExist(err)
+
+		if exists && !overwrite {
+			x.log("Error: Renaming Temp File: %v to %v: (refusing to overwrite existing file)", file, newFile)
+			continue
+		} else if err := os.Rename(file, newFile); err != nil {
 			keepErr = err
 			x.log("Error: Renaming Temp File: %v to %v: %v", file, newFile, err)
 			// keep trying.
 			continue
+		} else if exists {
+			x.debug("Renamed Temp File: %v -> %v (overwrote existing file)", file, files[i])
+		} else {
+			x.debug("Renamed Temp File: %v -> %v", file, files[i])
 		}
 
 		files[i] = newFile
-		x.debug("Renamed Temp File: %v -> %v", file, files[i])
 	}
 
 	x.DeleteFiles(fromPath)
