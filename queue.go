@@ -29,18 +29,18 @@ type Xtract struct {
 // not thread safe until Done=true. When done=false the only other meaningful
 // data provided is the Response.Archives, Response.Output and Response.Queue.
 type Response struct {
-	Done     bool          `json:"done"`               // Extract Started (false) or Finished (true).
-	Size     int64         `json:"bytes"`              // Size of data written.
-	Output   string        `json:"tmp_folder"`         // Temporary output folder.
-	Queued   int           `json:"queue_size"`         // Items still in queue.
-	Started  time.Time     `json:"start"`              // When this extract began.
-	Elapsed  time.Duration `json:"elapsed"`            // Elapsed extraction duration. ie. How long it took.
-	Extras   []string      `json:"extract_archives"`   // Extra archives extracted from within an archive.
-	Archives []string      `json:"archives_extracted"` // Initial archives found and extracted.
-	NewFiles []string      `json:"new_files"`          // Files written to final path.
-	AllFiles []string      `json:"all_files"`          // All (recursive) files written to the temp path.
-	Error    error         `json:"error"`              // Error encountered, only when done=true.
-	X        *Xtract       `json:"input"`              // Copied from input data.
+	Done     bool          `json:"done"`       // Extract Started (false) or Finished (true).
+	Size     int64         `json:"bytes"`      // Size of data written.
+	Output   string        `json:"tmp_folder"` // Temporary output folder.
+	Queued   int           `json:"queue_size"` // Items still in queue.
+	Started  time.Time     `json:"start"`      // When this extract began.
+	Elapsed  time.Duration `json:"elapsed"`    // Elapsed extraction duration. ie. How long it took.
+	Extras   []string      `json:"extras"`     // Extra archives extracted from within an archive.
+	Archives []string      `json:"archives"`   // Initial archives found and extracted.
+	NewFiles []string      `json:"new_files"`  // Files written to final path.
+	AllFiles []string      `json:"all_files"`  // All (recursive) files written to the temp path.
+	Error    error         `json:"error"`      // Error encountered, only when done=true.
+	X        *Xtract       `json:"input"`      // Copied from input data.
 }
 
 var (
