@@ -12,6 +12,16 @@ import (
 	"strings"
 )
 
+// XFile defines the data needed to extract an archive.
+type XFile struct {
+	FilePath  string      // Path to archive being extracted.
+	OutputDir string      // Folder to extract archive into.
+	FileMode  os.FileMode // Write files with this mode.
+	DirMode   os.FileMode // Write folders wiuth this mode.
+}
+
+var ErrUnknownArchiveType = fmt.Errorf("unknown archive file type")
+
 // GetFileList returns all the files in a path.
 // This is non-resursive and only returns files _in_ the base path provided.
 // This is a helper method and only exposed for convenience. You do not have to call this.
@@ -37,6 +47,7 @@ func Difference(slice1 []string, slice2 []string) (diff []string) {
 		for _, s1 := range slice1 {
 			if s1 == s2 {
 				found = true
+
 				break
 			}
 		}
@@ -110,14 +121,14 @@ func FindCompressedFiles(path string) []string {
 
 // ExtractFile calls the correct procedure for the type of file being extracted.
 // Returns size of extracted data, number of extracted files, and/or error.
-func ExtractFile(path, destination string) (int64, []string, error) {
-	switch s := strings.ToLower(path); {
+func ExtractFile(x *XFile) (int64, []string, error) {
+	switch s := strings.ToLower(x.FilePath); {
 	case strings.HasSuffix(s, ".rar"), strings.HasSuffix(s, ".r00"):
-		return ExtractRAR(path, destination)
+		return ExtractRAR(x)
 	case strings.HasSuffix(s, ".zip"):
-		return ExtractZIP(path, destination)
+		return ExtractZIP(x)
 	default:
-		return 0, nil, fmt.Errorf("unknown filetype: %s", path)
+		return 0, nil, fmt.Errorf("%w: %s", ErrUnknownArchiveType, x.FilePath)
 	}
 }
 
@@ -137,15 +148,19 @@ func (x *Xtractr) MoveFiles(fromPath string, toPath string, overwrite bool) ([]s
 
 		if exists && !overwrite {
 			x.log("Error: Renaming Temp File: %v to %v: (refusing to overwrite existing file)", file, newFile)
+
 			continue
-		} else if err := os.Rename(file, newFile); err != nil {
+		}
+
+		switch err := os.Rename(file, newFile); {
+		case err != nil:
 			keepErr = err
 			x.log("Error: Renaming Temp File: %v to %v: %v", file, newFile, err)
 			// keep trying.
 			continue
-		} else if exists {
+		case exists:
 			x.debug("Renamed Temp File: %v -> %v (overwrote existing file)", file, files[i])
-		} else {
+		default:
 			x.debug("Renamed Temp File: %v -> %v", file, files[i])
 		}
 
@@ -165,6 +180,7 @@ func (x *Xtractr) DeleteFiles(files ...string) {
 	for _, file := range files {
 		if err := os.RemoveAll(file); err != nil {
 			x.log("Error: Deleting %v: %v", file, err)
+
 			continue
 		}
 
@@ -173,20 +189,20 @@ func (x *Xtractr) DeleteFiles(files ...string) {
 }
 
 // writeFile writes a file from an io reader, making sure all parent directories exist.
-func writeFile(fpath string, fdata io.Reader, fmode os.FileMode) (int64, error) {
-	if err := os.MkdirAll(filepath.Dir(fpath), 0755); err != nil {
-		return 0, err
+func writeFile(fpath string, fdata io.Reader, fm, dm os.FileMode) (int64, error) {
+	if err := os.MkdirAll(filepath.Dir(fpath), dm); err != nil {
+		return 0, fmt.Errorf("os.MkdirAll: %w", err)
 	}
 
 	fout, err := os.Create(fpath)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("os.Create: %w", err)
 	}
 	defer fout.Close()
 
 	if runtime.GOOS != "windows" {
-		if err = fout.Chmod(fmode); err != nil {
-			return 0, err
+		if err = fout.Chmod(fm); err != nil {
+			return 0, fmt.Errorf("chmod: %w", err)
 		}
 	}
 

@@ -3,6 +3,7 @@ package xtractr
 import (
 	"io/ioutil"
 	"log"
+	"os"
 	"reflect"
 )
 
@@ -14,6 +15,8 @@ type Config struct {
 	Parallel int         // Number of concurrent extractions.
 	Suffix   string      // The suffix used for temporary folders.
 	Logger   *log.Logger // Logs are sent to this Logger.
+	FileMode os.FileMode // Filemode used when writing files.
+	DirMode  os.FileMode // Filemode used when writing folders.
 }
 
 // Xtractr is what you get from NewQueue(). This is the main app struct.
