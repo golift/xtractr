@@ -17,7 +17,7 @@ type XFile struct {
 	FilePath  string      // Path to archive being extracted.
 	OutputDir string      // Folder to extract archive into.
 	FileMode  os.FileMode // Write files with this mode.
-	DirMode   os.FileMode // Write folders wiuth this mode.
+	DirMode   os.FileMode // Write folders with this mode.
 }
 
 var ErrUnknownArchiveType = fmt.Errorf("unknown archive file type")

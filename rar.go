@@ -15,7 +15,7 @@ import (
 
 var (
 	ErrInvalidPath = fmt.Errorf("archived file contains invalid path")
-	ErrInvalidHead = fmt.Errorf("archived file contains invalid header file ")
+	ErrInvalidHead = fmt.Errorf("archived file contains invalid header file")
 )
 
 // ExtractRAR extracts a rar file.. to a destination. Simple enough.
