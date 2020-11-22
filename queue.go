@@ -25,9 +25,8 @@ type Xtract struct {
 
 // Response is sent to the call-back function. The first CBFunction call is just
 // a notification that the extraction has started. You can determine it's the first
-// call by chcking Response.Done. false = started, true = finished. The data is
-// not thread safe until Done=true. When done=false the only other meaningful
-// data provided is the Response.Archives, Response.Output and Response.Queue.
+// call by chcking Response.Done. false = started, true = finished. When done=false
+// the only other meaningful data provided is the re.Archives, re.Output and re.Queue.
 type Response struct {
 	Done     bool          `json:"done"`       // Extract Started (false) or Finished (true).
 	Size     int64         `json:"bytes"`      // Size of data written.
@@ -73,24 +72,25 @@ func (x *Xtractr) processQueue() {
 // This is fired off from processQueue() in a go routine.
 func (x *Xtractr) extract(ex *Xtract) {
 	re := &Response{
-		X:       ex,
-		Started: time.Now(),
-		Output:  strings.TrimRight(ex.SearchPath, `/\`) + x.Suffix, // tmp folder.
+		X:        ex,
+		Started:  time.Now(),
+		Output:   strings.TrimRight(ex.SearchPath, `/\`) + x.Suffix, // tmp folder.
+		Archives: FindCompressedFiles(ex.SearchPath),
+		Queued:   len(x.queue),
 	}
 
-	re.Archives = FindCompressedFiles(ex.SearchPath)
-
-	if len(re.Archives) < 1 {
+	if len(re.Archives) < 1 { // no archives to xtract, bail out.
 		x.finishExtract(re, ErrNoCompressedFiles)
 
 		return
 	}
 
 	if ex.CBFunction != nil {
-		re.Queued = len(x.queue)
 		ex.CBFunction(re) // This lets the calling function know we've started.
 	}
 
+	// Create another pointer to avoid race conditions in the callback function above.
+	re = &Response{X: ex, Started: re.Started, Output: re.Output, Archives: re.Archives}
 	// e.log("Starting: %d archives - %v", len(resp.Archives), ex.SearchPath)
 	x.finishExtract(re, x.decompressFiles(re))
 }
@@ -101,19 +101,20 @@ func (x *Xtractr) finishExtract(re *Response, err error) {
 	re.Done = true
 	re.Queued = len(x.queue)
 
-	if re.X.CBFunction == nil {
-		if err == nil {
-			x.log("Finished Extracting: %s (%v elapsed, still in queue: %d items)",
-				re.X.SearchPath, re.Elapsed, re.Queued) // log something better.
-		} else {
-			x.log("Error Extracting: %s (%v elapsed): %v",
-				re.X.SearchPath, re.Elapsed, re.Error)
-		}
+	if re.X.CBFunction != nil {
+		re.X.CBFunction(re) // This lets the calling function know we've finished.
 
 		return
 	}
 
-	re.X.CBFunction(re) // This lets the calling function know we've finished.
+	// Only print a message if there is no callback function. Allows apps to print their own messages.
+	if err != nil {
+		x.log("Error Extracting: %s (%v elapsed): %v", re.X.SearchPath, re.Elapsed, err)
+
+		return
+	}
+
+	x.log("Finished Extracting: %s (%v elapsed, queue size: %d)", re.X.SearchPath, re.Elapsed, re.Queued)
 }
 
 // decompressFiles runs after we find and verify archives exist.
