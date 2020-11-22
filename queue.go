@@ -15,12 +15,14 @@ import (
 // Fill this out to create a queued extraction and pass it into Xtractr.Extract().
 // If a CBFunction is provided it runs when the queued extract begins w/ Response.Done=false.
 // The CBFunction is called again when the extraction finishes w/ Response.Done=true.
+// The CBFunction channel works the exact same way, except it's a channel instead of a blocking function.
 type Xtract struct {
 	Name       string          `json:"name"`        // Unused in this app; exposed for calling library.
 	SearchPath string          `json:"search_path"` // Folder path where extractable items are located.
 	TempFolder bool            `json:"temp_folder"` // Leave files in temporary folder? false=move files back to Searchpath
 	DeleteOrig bool            `json:"delete_orig"` // Delete Archives after successful extraction? Be careful.
 	CBFunction func(*Response) `json:"-"`           // Callback Function, runs twice per queued item.
+	CBChannel  chan *Response  `json:"-"`           // Callback Channel, msg sent twice per queued item.
 }
 
 // Response is sent to the call-back function. The first CBFunction call is just
@@ -89,6 +91,9 @@ func (x *Xtractr) extract(ex *Xtract) {
 		ex.CBFunction(re) // This lets the calling function know we've started.
 	}
 
+	if ex.CBChannel != nil {
+		ex.CBChannel <- re // This lets the calling function know we've started.
+	}
 	// Create another pointer to avoid race conditions in the callback function above.
 	re = &Response{X: ex, Started: re.Started, Output: re.Output, Archives: re.Archives}
 	// e.log("Starting: %d archives - %v", len(resp.Archives), ex.SearchPath)
@@ -103,7 +108,13 @@ func (x *Xtractr) finishExtract(re *Response, err error) {
 
 	if re.X.CBFunction != nil {
 		re.X.CBFunction(re) // This lets the calling function know we've finished.
+	}
 
+	if re.X.CBChannel != nil {
+		re.X.CBChannel <- re // This lets the calling function know we've finished.
+	}
+
+	if re.X.CBChannel != nil || re.X.CBFunction != nil {
 		return
 	}
 
