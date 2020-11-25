@@ -1,8 +1,6 @@
 package xtractr
 
 import (
-	"io/ioutil"
-	"log"
 	"os"
 	"reflect"
 )
@@ -10,13 +8,19 @@ import (
 // Config is the input data to configure the Xtract queue. Fill this out and
 // pass it into NewQueue() to create a queue for archive extractions.
 type Config struct {
-	Debug    bool        // If true, debug logs are also output.
 	BuffSize int         // Size of the extraction channel buffer. Default=1000.
 	Parallel int         // Number of concurrent extractions.
 	Suffix   string      // The suffix used for temporary folders.
-	Logger   *log.Logger // Logs are sent to this Logger.
+	Logger   Logger      // Logs are sent to this Logger.
 	FileMode os.FileMode // Filemode used when writing files.
 	DirMode  os.FileMode // Filemode used when writing folders.
+}
+
+// Logger allows this library to write logs.
+// Use this to capture them in your own flow.
+type Logger interface {
+	Printf(string, ...interface{})
+	Debugf(string, ...interface{})
 }
 
 // Xtractr is what you get from NewQueue(). This is the main app struct.
@@ -56,10 +60,6 @@ func parseConfig(config *Config) *Xtractr {
 		config.Suffix = "_" + reflect.TypeOf(Config{}).PkgPath() // xtractr
 	}
 
-	if config.Logger == nil {
-		config.Logger = log.New(ioutil.Discard, "", 0)
-	}
-
 	return &Xtractr{
 		Config: config,
 		queue:  make(chan *Xtract, config.BuffSize),
@@ -79,12 +79,18 @@ func (x *Xtractr) Stop() {
 
 // log writes a log message. Use sparingly and necesarilly.
 func (x *Xtractr) log(msg string, v ...interface{}) {
+	if x.Logger == nil {
+		return
+	}
+
 	x.Logger.Printf(msg, v...)
 }
 
 // debug writes a debug log message.
 func (x *Xtractr) debug(msg string, v ...interface{}) {
-	if x.Debug {
-		x.Logger.Printf("[DEBUG] "+msg, v...)
+	if x.Logger == nil {
+		return
 	}
+
+	x.Logger.Debugf(msg, v...)
 }
