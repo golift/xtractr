@@ -162,7 +162,7 @@ func (x *Xtractr) MoveFiles(fromPath string, toPath string, overwrite bool) ([]s
 			x.Debugf("Renamed Temp File: %v -> %v", file, newFile)
 		}
 
-		files[i] = newFile
+		files[i] = newFile // overwrite the slice location of the file we just moved.
 	}
 
 	// Since this is the last step, we tried to rename all the files, bubble the
