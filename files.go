@@ -159,9 +159,9 @@ func (x *Xtractr) MoveFiles(fromPath string, toPath string, overwrite bool) ([]s
 			// keep trying.
 			continue
 		case exists:
-			x.debug("Renamed Temp File: %v -> %v (overwrote existing file)", file, files[i])
+			x.debug("Renamed Temp File: %v -> %v (overwrote existing file)", file, newFile)
 		default:
-			x.debug("Renamed Temp File: %v -> %v", file, files[i])
+			x.debug("Renamed Temp File: %v -> %v", file, newFile)
 		}
 
 		files[i] = newFile
