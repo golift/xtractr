@@ -17,12 +17,12 @@ import (
 // The CBFunction is called again when the extraction finishes w/ Response.Done=true.
 // The CBFunction channel works the exact same way, except it's a channel instead of a blocking function.
 type Xtract struct {
-	Name       string          `json:"name"`        // Unused in this app; exposed for calling library.
-	SearchPath string          `json:"search_path"` // Folder path where extractable items are located.
-	TempFolder bool            `json:"temp_folder"` // Leave files in temporary folder? false=move files back to Searchpath
-	DeleteOrig bool            `json:"delete_orig"` // Delete Archives after successful extraction? Be careful.
-	CBFunction func(*Response) `json:"-"`           // Callback Function, runs twice per queued item.
-	CBChannel  chan *Response  `json:"-"`           // Callback Channel, msg sent twice per queued item.
+	Name       string          // Unused in this app; exposed for calling library.
+	SearchPath string          // Folder path where extractable items are located.
+	TempFolder bool            // Leave files in temporary folder? false=move files back to Searchpath
+	DeleteOrig bool            // Delete Archives after successful extraction? Be careful.
+	CBFunction func(*Response) // Callback Function, runs twice per queued item.
+	CBChannel  chan *Response  // Callback Channel, msg sent twice per queued item.
 }
 
 // Response is sent to the call-back function. The first CBFunction call is just
@@ -30,24 +30,18 @@ type Xtract struct {
 // call by chcking Response.Done. false = started, true = finished. When done=false
 // the only other meaningful data provided is the re.Archives, re.Output and re.Queue.
 type Response struct {
-	Done     bool          `json:"done"`       // Extract Started (false) or Finished (true).
-	Size     int64         `json:"bytes"`      // Size of data written.
-	Output   string        `json:"tmp_folder"` // Temporary output folder.
-	Queued   int           `json:"queue_size"` // Items still in queue.
-	Started  time.Time     `json:"start"`      // When this extract began.
-	Elapsed  time.Duration `json:"elapsed"`    // Elapsed extraction duration. ie. How long it took.
-	Extras   []string      `json:"extras"`     // Extra archives extracted from within an archive.
-	Archives []string      `json:"archives"`   // Initial archives found and extracted.
-	NewFiles []string      `json:"new_files"`  // Files written to final path.
-	AllFiles []string      `json:"all_files"`  // All (recursive) files written to the temp path.
-	Error    error         `json:"error"`      // Error encountered, only when done=true.
-	X        *Xtract       `json:"input"`      // Copied from input data.
+	Done     bool          // Extract Started (false) or Finished (true).
+	Size     int64         // Size of data written.
+	Output   string        // Temporary output folder.
+	Queued   int           // Items still in queue.
+	Started  time.Time     // When this extract began.
+	Elapsed  time.Duration // Elapsed extraction duration. ie. How long it took.
+	Extras   []string      // Extra archives extracted from within an archive.
+	Archives []string      // Initial archives found and extracted.
+	NewFiles []string      // Files written to final path.
+	Error    error         // Error encountered, only when done=true.
+	X        *Xtract       // Copied from input data.
 }
-
-var (
-	ErrQueueStopped      = fmt.Errorf("extractor queue stopped")
-	ErrNoCompressedFiles = fmt.Errorf("no compressed files found")
-)
 
 // Extract is how external code begins an extraction process against a path.
 // To add an item to the extraction queue, create an Xtract struct with the
@@ -120,12 +114,12 @@ func (x *Xtractr) finishExtract(re *Response, err error) {
 
 	// Only print a message if there is no callback function. Allows apps to print their own messages.
 	if err != nil {
-		x.log("Error Extracting: %s (%v elapsed): %v", re.X.SearchPath, re.Elapsed, err)
+		x.Printf("Error Extracting: %s (%v elapsed): %v", re.X.SearchPath, re.Elapsed, err)
 
 		return
 	}
 
-	x.log("Finished Extracting: %s (%v elapsed, queue size: %d)", re.X.SearchPath, re.Elapsed, re.Queued)
+	x.Printf("Finished Extracting: %s (%v elapsed, queue size: %d)", re.X.SearchPath, re.Elapsed, re.Queued)
 }
 
 // decompressFiles runs after we find and verify archives exist.
@@ -156,7 +150,6 @@ func (x *Xtractr) decompressFiles(re *Response) error {
 		}
 
 		o.Output, o.X = re.Output, re.X
-
 		err = x.cleanupProcessedArchive(o, archive)
 
 		if len(o.NewFiles) > 0 {
@@ -181,7 +174,7 @@ func (x *Xtractr) cleanupProcessedArchive(re *Response, archive string) error {
 
 	err := ioutil.WriteFile(tmpFile, []byte(msg), x.FileMode)
 	if err != nil {
-		x.log("Error: Creating Temporary Tracking File: %v", err) // continue anyway.
+		x.Printf("Error: Creating Temporary Tracking File: %v", err) // continue anyway.
 	}
 
 	if re.X.DeleteOrig {
@@ -194,7 +187,7 @@ func (x *Xtractr) cleanupProcessedArchive(re *Response, archive string) error {
 		if err != nil {
 			if !re.X.DeleteOrig {
 				// cleanup the broken decompression, but only if we didn't delete the originals.
-				x.DeleteFiles(re.Output)
+				x.DeleteFiles(re.NewFiles...)
 			}
 
 			return err
@@ -209,16 +202,16 @@ func (x *Xtractr) cleanupProcessedArchive(re *Response, archive string) error {
 func (x *Xtractr) processArchive(filename string, tmpPath string) (*Response, error) {
 	output := &Response{NewFiles: []string{}, Extras: []string{}}
 
-	x.debug("Extracting File: %v to %v", filename, tmpPath)
-	beforeFiles := x.GetFileList(tmpPath) // get the "before this extraction" file list
-	ss, ff, err := ExtractFile(&XFile{    // extract the file.
+	x.Debugf("Extracting File: %v to %v", filename, tmpPath)
+	beforeFiles := x.GetFileList(tmpPath)    // get the "before this extraction" file list
+	bytes, files, err := ExtractFile(&XFile{ // extract the file.
 		FilePath:  filename,
 		OutputDir: tmpPath,
 		FileMode:  x.FileMode,
 		DirMode:   x.DirMode,
 	})
-	output.NewFiles = append(output.NewFiles, ff...) // keep track of the files extracted.
-	output.Size += ss                                // total the size of data written.
+	output.NewFiles = append(output.NewFiles, files...) // keep track of the files extracted.
+	output.Size += bytes                                // total the size of data written.
 
 	if err != nil {
 		x.DeleteFiles(tmpPath) // clean up the mess after an error and bail.
@@ -233,7 +226,7 @@ func (x *Xtractr) processArchive(filename string, tmpPath string) (*Response, er
 			// recurse and append data to tracking vars.
 			o, err := x.processArchive(filename, tmpPath)
 			output.Extras = append(append(output.Extras, o.Extras...), filename) // MORE archives!
-			output.NewFiles = append(output.NewFiles, o.NewFiles...)             // keep track of the files extract.
+			output.NewFiles = append(output.NewFiles, o.NewFiles...)             // keep track of the files extracted.
 			output.Size += o.Size                                                // total the size of data written.
 
 			if err != nil {

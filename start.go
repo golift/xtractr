@@ -1,6 +1,7 @@
 package xtractr
 
 import (
+	"fmt"
 	"os"
 	"reflect"
 )
@@ -10,10 +11,10 @@ import (
 type Config struct {
 	BuffSize int         // Size of the extraction channel buffer. Default=1000.
 	Parallel int         // Number of concurrent extractions.
-	Suffix   string      // The suffix used for temporary folders.
-	Logger   Logger      // Logs are sent to this Logger.
 	FileMode os.FileMode // Filemode used when writing files.
 	DirMode  os.FileMode // Filemode used when writing folders.
+	Suffix   string      // The suffix used for temporary folders.
+	Logger               // Logs are sent to this Logger.
 }
 
 // Logger allows this library to write logs.
@@ -30,10 +31,23 @@ type Xtractr struct {
 	queue chan *Xtract
 }
 
+// Custom errors returned by this module.
+var (
+	ErrQueueStopped       = fmt.Errorf("extractor queue stopped")
+	ErrNoCompressedFiles  = fmt.Errorf("no compressed files found")
+	ErrUnknownArchiveType = fmt.Errorf("unknown archive file type")
+	ErrInvalidPath        = fmt.Errorf("archived file contains invalid path")
+	ErrInvalidHead        = fmt.Errorf("archived file contains invalid header file")
+)
+
 // NewQueue returns a new Xtractr Queue you can send Xtract jobs into.
 // This is where to start if you're creating an extractor queue.
 func NewQueue(config *Config) *Xtractr {
 	x := parseConfig(config)
+
+	if config.Logger == nil {
+		panic("xtractr.Config.Logger must be non-nil")
+	}
 
 	for i := 0; i < x.Parallel; i++ {
 		go x.processQueue()
@@ -75,22 +89,4 @@ func (x *Xtractr) Stop() {
 
 	close(x.queue)
 	x.queue = nil
-}
-
-// log writes a log message. Use sparingly and necesarilly.
-func (x *Xtractr) log(msg string, v ...interface{}) {
-	if x.Logger == nil {
-		return
-	}
-
-	x.Logger.Printf(msg, v...)
-}
-
-// debug writes a debug log message.
-func (x *Xtractr) debug(msg string, v ...interface{}) {
-	if x.Logger == nil {
-		return
-	}
-
-	x.Logger.Debugf(msg, v...)
 }

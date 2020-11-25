@@ -13,11 +13,6 @@ import (
 	"github.com/nwaples/rardecode"
 )
 
-var (
-	ErrInvalidPath = fmt.Errorf("archived file contains invalid path")
-	ErrInvalidHead = fmt.Errorf("archived file contains invalid header file")
-)
-
 // ExtractRAR extracts a rar file.. to a destination. Simple enough.
 func ExtractRAR(x *XFile) (int64, []string, error) {
 	rarReader, err := rardecode.OpenReader(x.FilePath, "")
