@@ -59,7 +59,7 @@ func (x *Xtractr) Extract(ex *Xtract) (int, error) {
 // processQueue runs in a go routine, 'e.Parallel' times,
 // and watches for things to extract.
 func (x *Xtractr) processQueue() {
-	for ex := range x.queue {
+	for ex := range x.queue { // extractions come from Extract()
 		x.extract(ex)
 	}
 }
@@ -88,7 +88,7 @@ func (x *Xtractr) extract(ex *Xtract) {
 	if ex.CBChannel != nil {
 		ex.CBChannel <- re // This lets the calling function know we've started.
 	}
-	// Create another pointer to avoid race conditions in the callback function above.
+	// Create another pointer to avoid race conditions in the callbacks above.
 	re = &Response{X: ex, Started: re.Started, Output: re.Output, Archives: re.Archives}
 	// e.log("Starting: %d archives - %v", len(resp.Archives), ex.SearchPath)
 	x.finishExtract(re, x.decompressFiles(re))
@@ -168,11 +168,13 @@ func (x *Xtractr) decompressFiles(re *Response) error {
 func (x *Xtractr) cleanupProcessedArchive(re *Response, archive string) error {
 	tmpFile := filepath.Join(re.Output, x.Suffix)
 	re.NewFiles = append(x.GetFileList(re.Output), tmpFile)
-	msg := fmt.Sprintf("# %s - this file is removed with the extracted data\n---\n"+
-		"archive:%s\nextras:%v\nfrom_path:%s\ntemp_path:%s\nrelocated:%v\ntime:%v\nfiles:\n  - %v\n",
-		x.Suffix, archive, re.Extras, re.X.SearchPath, re.Output, !re.X.TempFolder, time.Now(), strings.Join(re.NewFiles, "\n  - "))
 
-	err := ioutil.WriteFile(tmpFile, []byte(msg), x.FileMode)
+	msg := []byte(fmt.Sprintf("# %s - this file is removed with the extracted data\n---\n"+
+		"archive:%s\nextras:%v\nfrom_path:%s\ntemp_path:%s\nrelocated:%v\ntime:%v\nfiles:\n  - %v\n",
+		x.Suffix, archive, re.Extras, re.X.SearchPath, re.Output, !re.X.TempFolder, time.Now(),
+		strings.Join(re.NewFiles, "\n  - ")))
+
+	err := ioutil.WriteFile(tmpFile, msg, x.FileMode)
 	if err != nil {
 		x.Printf("Error: Creating Temporary Tracking File: %v", err) // continue anyway.
 	}
@@ -183,7 +185,7 @@ func (x *Xtractr) cleanupProcessedArchive(re *Response, archive string) error {
 
 	if !re.X.TempFolder {
 		// Move the extracted files back into the same folder as the archive.
-		re.NewFiles, err = x.MoveFiles(re.Output, filepath.Base(archive), false)
+		re.NewFiles, err = x.MoveFiles(re.Output, filepath.Dir(archive), false)
 		if err != nil {
 			if !re.X.DeleteOrig {
 				// cleanup the broken decompression, but only if we didn't delete the originals.
