@@ -64,7 +64,7 @@ func Difference(slice1 []string, slice2 []string) (diff []string) {
 // considered an independent archive. Some packagers seem to use different naming schemes,
 // so this will need to be updated as time progresses. So far it's working well.
 // This is a helper method and only exposed for convenience. You do not have to call this.
-func FindCompressedFiles(path string) []string {
+func (x *Xtractr) FindCompressedFiles(path string) []string {
 	dir, err := os.Open(path)
 	if err != nil {
 		return nil
@@ -93,8 +93,8 @@ func FindCompressedFiles(path string) []string {
 
 	for _, file := range fileList {
 		switch lowerName := strings.ToLower(file.Name()); {
-		case file.IsDir(): // Recurse.
-			files = append(files, FindCompressedFiles(filepath.Join(path, file.Name()))...)
+		case file.IsDir() && !strings.HasSuffix(file.Name(), x.Config.Suffix): // Recurse.
+			files = append(files, x.FindCompressedFiles(filepath.Join(path, file.Name()))...)
 		case strings.HasSuffix(lowerName, ".zip"):
 			files = append(files, filepath.Join(path, file.Name()))
 		case strings.HasSuffix(lowerName, ".rar"):
