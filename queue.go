@@ -71,7 +71,7 @@ func (x *Xtractr) extract(ex *Xtract) {
 		X:        ex,
 		Started:  time.Now(),
 		Output:   strings.TrimRight(ex.SearchPath, `/\`) + x.Suffix, // tmp folder.
-		Archives: x.FindCompressedFiles(ex.SearchPath),
+		Archives: x.findCompressedFiles(ex.SearchPath),
 		Queued:   len(x.queue),
 	}
 
