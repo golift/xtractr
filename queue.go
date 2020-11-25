@@ -162,6 +162,10 @@ func (x *Xtractr) decompressFiles(re *Response) error {
 		}
 	}
 
+	if !re.X.TempFolder {
+		x.DeleteFiles(re.Output)
+	}
+
 	return nil
 }
 

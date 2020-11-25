@@ -165,8 +165,6 @@ func (x *Xtractr) MoveFiles(fromPath string, toPath string, overwrite bool) ([]s
 		files[i] = newFile
 	}
 
-	x.DeleteFiles(fromPath)
-
 	// Since this is the last step, we tried to rename all the files, bubble the
 	// os.Rename error up, so it gets flagged as failed. It may have worked, but
 	// it should get attention.
