@@ -135,42 +135,42 @@ func ExtractFile(x *XFile) (int64, []string, error) {
 // This is a helper method and only exposed for convenience. You do not have to call this.
 func (x *Xtractr) MoveFiles(fromPath string, toPath string, overwrite bool) ([]string, error) {
 	var (
-		files   = x.GetFileList(fromPath)
-		keepErr error
+		files    = x.GetFileList(fromPath)
+		newFiles = []string{}
+		keepErr  error
 	)
 
-	for i, file := range files {
-		newFile := filepath.Join(toPath, filepath.Base(file))
-		_, err := os.Stat(newFile)
-		exists := !os.IsNotExist(err)
+	for _, file := range files {
+		var (
+			newFile = filepath.Join(toPath, filepath.Base(file))
+			_, err  = os.Stat(newFile)
+			exists  = !os.IsNotExist(err)
+		)
 
 		if exists && !overwrite {
 			x.Printf("Error: Renaming Temp File: %v to %v: (refusing to overwrite existing file)", file, newFile)
-
+			// keep trying.
 			continue
 		}
 
-		switch err := os.Rename(file, newFile); {
+		switch err = os.Rename(file, newFile); {
 		case err != nil:
 			keepErr = err
 			x.Printf("Error: Renaming Temp File: %v to %v: %v", file, newFile, err)
-			// keep trying.
-			continue
 		case exists:
+			newFiles = append(newFiles, newFile)
 			x.Debugf("Renamed Temp File: %v -> %v (overwrote existing file)", file, newFile)
 		default:
+			newFiles = append(newFiles, newFile)
 			x.Debugf("Renamed Temp File: %v -> %v", file, newFile)
 		}
-
-		files[i] = newFile
 	}
 
 	x.DeleteFiles(fromPath)
-
 	// Since this is the last step, we tried to rename all the files, bubble the
 	// os.Rename error up, so it gets flagged as failed. It may have worked, but
 	// it should get attention.
-	return files, keepErr
+	return newFiles, keepErr
 }
 
 // DeleteFiles obliterates things and logs. Use with caution.

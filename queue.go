@@ -88,6 +88,7 @@ func (x *Xtractr) extract(ex *Xtract) {
 	if ex.CBChannel != nil {
 		ex.CBChannel <- re // This lets the calling function know we've started.
 	}
+
 	// Create another pointer to avoid race conditions in the callbacks above.
 	re = &Response{X: ex, Started: re.Started, Output: re.Output, Archives: re.Archives}
 	// e.log("Starting: %d archives - %v", len(resp.Archives), ex.SearchPath)
@@ -166,7 +167,7 @@ func (x *Xtractr) decompressFiles(re *Response) error {
 }
 
 func (x *Xtractr) cleanupProcessedArchive(re *Response, archive string) error {
-	tmpFile := filepath.Join(re.Output, x.Suffix)
+	tmpFile := filepath.Join(re.Output, x.Suffix+archive+".txt")
 	re.NewFiles = append(x.GetFileList(re.Output), tmpFile)
 
 	msg := []byte(fmt.Sprintf("# %s - this file is removed with the extracted data\n---\n"+
@@ -174,8 +175,7 @@ func (x *Xtractr) cleanupProcessedArchive(re *Response, archive string) error {
 		x.Suffix, archive, re.Extras, re.X.SearchPath, re.Output, !re.X.TempFolder, time.Now(),
 		strings.Join(re.NewFiles, "\n  - ")))
 
-	err := ioutil.WriteFile(tmpFile, msg, x.FileMode)
-	if err != nil {
+	if err := ioutil.WriteFile(tmpFile, msg, x.FileMode); err != nil {
 		x.Printf("Error: Creating Temporary Tracking File: %v", err) // continue anyway.
 	}
 
@@ -183,20 +183,14 @@ func (x *Xtractr) cleanupProcessedArchive(re *Response, archive string) error {
 		x.DeleteFiles(archive) // as requested
 	}
 
-	if !re.X.TempFolder {
+	var err error
+	// Only move back the files if the archive wasn't extracted from the temp path.
+	if archiveDir := filepath.Dir(archive); !re.X.TempFolder && re.Output != archiveDir {
 		// Move the extracted files back into the same folder as the archive.
-		re.NewFiles, err = x.MoveFiles(re.Output, filepath.Dir(archive), false)
-		if err != nil {
-			if !re.X.DeleteOrig {
-				// cleanup the broken decompression, but only if we didn't delete the originals.
-				x.DeleteFiles(re.NewFiles...)
-			}
-
-			return err
-		}
+		re.NewFiles, err = x.MoveFiles(re.Output, archiveDir, false)
 	}
 
-	return nil
+	return err
 }
 
 // processArchives extracts one archive at a time, then checks if it extracted more archives.
