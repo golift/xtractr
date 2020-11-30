@@ -166,13 +166,13 @@ func (x *Xtractr) decompressFiles(re *Response) error {
 	return nil
 }
 
-func (x *Xtractr) cleanupProcessedArchive(re *Response, archive string) error {
-	tmpFile := filepath.Join(re.Output, x.Suffix+archive+".txt")
+func (x *Xtractr) cleanupProcessedArchive(re *Response, archivePath string) error {
+	tmpFile := filepath.Join(re.Output, x.Suffix+filepath.Base(archivePath)+".txt")
 	re.NewFiles = append(x.GetFileList(re.Output), tmpFile)
 
 	msg := []byte(fmt.Sprintf("# %s - this file is removed with the extracted data\n---\n"+
 		"archive:%s\nextras:%v\nfrom_path:%s\ntemp_path:%s\nrelocated:%v\ntime:%v\nfiles:\n  - %v\n",
-		x.Suffix, archive, re.Extras, re.X.SearchPath, re.Output, !re.X.TempFolder, time.Now(),
+		x.Suffix, archivePath, re.Extras, re.X.SearchPath, re.Output, !re.X.TempFolder, time.Now(),
 		strings.Join(re.NewFiles, "\n  - ")))
 
 	if err := ioutil.WriteFile(tmpFile, msg, x.FileMode); err != nil {
@@ -180,12 +180,12 @@ func (x *Xtractr) cleanupProcessedArchive(re *Response, archive string) error {
 	}
 
 	if re.X.DeleteOrig {
-		x.DeleteFiles(archive) // as requested
+		x.DeleteFiles(archivePath) // as requested
 	}
 
 	var err error
 	// Only move back the files if the archive wasn't extracted from the temp path.
-	if archiveDir := filepath.Dir(archive); !re.X.TempFolder && re.Output != archiveDir {
+	if archiveDir := filepath.Dir(archivePath); !re.X.TempFolder && re.Output != archiveDir {
 		// Move the extracted files back into the same folder as the archive.
 		re.NewFiles, err = x.MoveFiles(re.Output, archiveDir, false)
 	}
