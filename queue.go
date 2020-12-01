@@ -167,7 +167,7 @@ func (x *Xtractr) decompressFiles(re *Response) error {
 }
 
 func (x *Xtractr) cleanupProcessedArchive(re *Response, archivePath string) error {
-	tmpFile := filepath.Join(re.Output, x.Suffix+filepath.Base(archivePath)+".txt")
+	tmpFile := filepath.Join(re.Output, x.Suffix+"."+filepath.Base(archivePath)+".txt")
 	re.NewFiles = append(x.GetFileList(re.Output), tmpFile)
 
 	msg := []byte(fmt.Sprintf("# %s - this file is removed with the extracted data\n---\n"+
