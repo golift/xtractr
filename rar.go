@@ -19,6 +19,7 @@ func ExtractRAR(x *XFile) (int64, []string, error) {
 	if err != nil {
 		return 0, nil, fmt.Errorf("rardecode.OpenReader: %w", err)
 	}
+	defer rarReader.Close()
 
 	files := []string{}
 	size := int64(0)
