@@ -125,11 +125,6 @@ func (x *Xtractr) finishExtract(re *Response, err error) {
 
 // decompressFiles runs after we find and verify archives exist.
 func (x *Xtractr) decompressFiles(re *Response) error {
-	err := os.MkdirAll(re.Output, x.DirMode)
-	if err != nil {
-		return fmt.Errorf("os.MkdirAll: %w", err)
-	}
-
 	for _, archive := range re.Archives {
 		// 'o' is the response for _this_ archive file, 're' is the whole batch.
 		o, err := x.processArchive(archive, re.Output)
@@ -197,6 +192,10 @@ func (x *Xtractr) cleanupProcessedArchive(re *Response, archivePath string) erro
 // Returns list of extra files extracted, size of data written and files written.
 func (x *Xtractr) processArchive(filename string, tmpPath string) (*Response, error) {
 	output := &Response{NewFiles: []string{}, Extras: []string{}}
+
+	if err := os.MkdirAll(tmpPath, x.DirMode); err != nil {
+		return output, fmt.Errorf("os.MkdirAll: %w", err)
+	}
 
 	x.Debugf("Extracting File: %v to %v", filename, tmpPath)
 	beforeFiles := x.GetFileList(tmpPath)    // get the "before this extraction" file list
