@@ -153,7 +153,7 @@ func (x *Xtractr) MoveFiles(fromPath string, toPath string, overwrite bool) ([]s
 			continue
 		}
 
-		switch err = os.Rename(file, newFile); {
+		switch err = x.Rename(file, newFile); {
 		case err != nil:
 			keepErr = err
 			x.Printf("Error: Renaming Temp File: %v to %v: %v", file, newFile, err)
@@ -205,4 +205,36 @@ func writeFile(fpath string, fdata io.Reader, fm, dm os.FileMode) (int64, error)
 	}
 
 	return io.Copy(fout, fdata)
+}
+
+// Rename is an attempt to deal with "invalid cross link device" on weird file systems.
+func (x *Xtractr) Rename(oldpath, newpath string) error {
+	if err := os.Rename(oldpath, newpath); err == nil {
+		return nil
+	}
+
+	/* Rename failed, try copy. */
+
+	oldFile, err := os.Open(oldpath) // do not forget to close this!
+	if err != nil {
+		return fmt.Errorf("os.Open(): %w", err)
+	}
+
+	newFile, err := os.OpenFile(newpath, os.O_TRUNC|os.O_CREATE|os.O_WRONLY, x.FileMode)
+	if err != nil {
+		oldFile.Close()
+		return fmt.Errorf("os.OpenFile(): %w", err)
+	}
+	defer newFile.Close()
+
+	_, err = io.Copy(newFile, oldFile)
+	oldFile.Close()
+	if err != nil {
+		return fmt.Errorf("io.Copy(): %w", err)
+	}
+
+	// The copy was successful, so now delete the original file
+	_ = os.Remove(oldpath)
+
+	return nil
 }
