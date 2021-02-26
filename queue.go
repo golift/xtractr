@@ -18,6 +18,7 @@ import (
 // The CBFunction channel works the exact same way, except it's a channel instead of a blocking function.
 type Xtract struct {
 	Name       string          // Unused in this app; exposed for calling library.
+	Password   string          // Archive password. Only supported with RAR files.
 	SearchPath string          // Folder path where extractable items are located.
 	TempFolder bool            // Leave files in temporary folder? false=move files back to Searchpath
 	DeleteOrig bool            // Delete Archives after successful extraction? Be careful.
@@ -127,7 +128,7 @@ func (x *Xtractr) finishExtract(re *Response, err error) {
 func (x *Xtractr) decompressFiles(re *Response) error {
 	for _, archive := range re.Archives {
 		// 'o' is the response for _this_ archive file, 're' is the whole batch.
-		o, err := x.processArchive(archive, re.Output)
+		o, err := x.processArchive(archive, re.Output, re.X.Password)
 
 		if len(o.Extras) > 0 {
 			re.Extras = append(re.Extras, o.Extras...)
@@ -190,7 +191,7 @@ func (x *Xtractr) cleanupProcessedArchive(re *Response, archivePath string) erro
 
 // processArchives extracts one archive at a time, then checks if it extracted more archives.
 // Returns list of extra files extracted, size of data written and files written.
-func (x *Xtractr) processArchive(filename string, tmpPath string) (*Response, error) {
+func (x *Xtractr) processArchive(filename, tmpPath, password string) (*Response, error) {
 	output := &Response{NewFiles: []string{}, Extras: []string{}}
 
 	if err := os.MkdirAll(tmpPath, x.DirMode); err != nil {
@@ -204,6 +205,7 @@ func (x *Xtractr) processArchive(filename string, tmpPath string) (*Response, er
 		OutputDir: tmpPath,
 		FileMode:  x.FileMode,
 		DirMode:   x.DirMode,
+		Password:  password,
 	})
 	output.NewFiles = append(output.NewFiles, files...) // keep track of the files extracted.
 	output.Size += bytes                                // total the size of data written.
@@ -219,7 +221,7 @@ func (x *Xtractr) processArchive(filename string, tmpPath string) (*Response, er
 	for _, filename := range newFiles {
 		if strings.HasSuffix(filename, ".rar") || strings.HasSuffix(filename, ".zip") {
 			// recurse and append data to tracking vars.
-			o, err := x.processArchive(filename, tmpPath)
+			o, err := x.processArchive(filename, tmpPath, password)
 			output.Extras = append(append(output.Extras, o.Extras...), filename) // MORE archives!
 			output.NewFiles = append(output.NewFiles, o.NewFiles...)             // keep track of the files extracted.
 			output.Size += o.Size                                                // total the size of data written.

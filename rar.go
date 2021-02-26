@@ -15,7 +15,7 @@ import (
 
 // ExtractRAR extracts a rar file.. to a destination. Simple enough.
 func ExtractRAR(x *XFile) (int64, []string, error) {
-	rarReader, err := rardecode.OpenReader(x.FilePath, "")
+	rarReader, err := rardecode.OpenReader(x.FilePath, x.Password)
 	if err != nil {
 		return 0, nil, fmt.Errorf("rardecode.OpenReader: %w", err)
 	}
