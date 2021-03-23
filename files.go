@@ -205,7 +205,12 @@ func writeFile(fpath string, fdata io.Reader, fm, dm os.FileMode) (int64, error)
 		}
 	}
 
-	return io.Copy(fout, fdata)
+	s, err := io.Copy(fout, fdata)
+	if err != nil {
+		return s, fmt.Errorf("copying io: %w", err)
+	}
+
+	return s, nil
 }
 
 // Rename is an attempt to deal with "invalid cross link device" on weird file systems.

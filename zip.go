@@ -41,8 +41,12 @@ func unzipFile(zipFile *zip.File, toPath string, fm, dm os.FileMode) (int64, err
 		return 0, fmt.Errorf("%s: %w: %s (from: %s)", zipFile.FileInfo().Name(), ErrInvalidPath, rfile, zipFile.Name)
 	}
 
-	if strings.HasSuffix(rfile, "/") {
-		return 0, os.MkdirAll(rfile, dm)
+	if strings.HasSuffix(rfile, "/") || zipFile.FileInfo().IsDir() {
+		if err := os.MkdirAll(rfile, dm); err != nil {
+			return 0, fmt.Errorf("making zipFile dir: %w", err)
+		}
+
+		return 0, nil
 	}
 
 	rc, err := zipFile.Open()
@@ -51,5 +55,10 @@ func unzipFile(zipFile *zip.File, toPath string, fm, dm os.FileMode) (int64, err
 	}
 	defer rc.Close()
 
-	return writeFile(rfile, rc, fm, dm)
+	s, err := writeFile(rfile, rc, fm, dm)
+	if err != nil {
+		return s, fmt.Errorf("%s: %w: %s (from: %s)", zipFile.FileInfo().Name(), err, rfile, zipFile.Name)
+	}
+
+	return s, nil
 }
