@@ -20,6 +20,7 @@ type Xtract struct {
 	Name       string          // Unused in this app; exposed for calling library.
 	Password   string          // Archive password. Only supported with RAR files.
 	SearchPath string          // Folder path where extractable items are located.
+	ExtractTo  string          // Default is same level as SearchPath with a suffix.
 	TempFolder bool            // Leave files in temporary folder? false=move files back to Searchpath
 	DeleteOrig bool            // Delete Archives after successful extraction? Be careful.
 	CBFunction func(*Response) // Callback Function, runs twice per queued item.
@@ -74,6 +75,10 @@ func (x *Xtractr) extract(ex *Xtract) {
 		Output:   strings.TrimRight(ex.SearchPath, `/\`) + x.Suffix, // tmp folder.
 		Archives: FindCompressedFiles(ex.SearchPath),
 		Queued:   len(x.queue),
+	}
+
+	if ex.ExtractTo != "" {
+		re.Output = filepath.Join(ex.ExtractTo, filepath.Base(re.Output))
 	}
 
 	if len(re.Archives) < 1 { // no archives to xtract, bail out.
