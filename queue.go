@@ -69,16 +69,16 @@ func (x *Xtractr) processQueue() {
 // extract is where the real work begins and files get extracted.
 // This is fired off from processQueue() in a go routine.
 func (x *Xtractr) extract(ex *Xtract) {
-	if ex.ExtractTo == "" {
-		ex.ExtractTo = ex.SearchPath
-	}
-
 	re := &Response{
 		X:        ex,
 		Started:  time.Now(),
-		Output:   strings.TrimRight(ex.ExtractTo, `/\`) + x.Suffix, // tmp folder.
+		Output:   strings.TrimRight(ex.SearchPath, `/\`) + x.Suffix, // tmp folder.
 		Archives: FindCompressedFiles(ex.SearchPath),
 		Queued:   len(x.queue),
+	}
+
+	if ex.ExtractTo != "" {
+		re.Output = filepath.Join(ex.ExtractTo, filepath.Base(re.Output))
 	}
 
 	if len(re.Archives) < 1 { // no archives to xtract, bail out.
