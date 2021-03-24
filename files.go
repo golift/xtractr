@@ -31,7 +31,7 @@ func (x *Xtractr) GetFileList(path string) (files []string) {
 			files = append(files, filepath.Join(path, file.Name()))
 		}
 	} else {
-		x.Printf("Error: Reading path '%s': %v", path, err)
+		x.config.Printf("Error: Reading path '%s': %v", path, err)
 	}
 
 	return
@@ -169,7 +169,7 @@ func (x *Xtractr) MoveFiles(fromPath string, toPath string, overwrite bool) ([]s
 		)
 
 		if exists && !overwrite {
-			x.Printf("Error: Renaming Temp File: %v to %v: (refusing to overwrite existing file)", file, newFile)
+			x.config.Printf("Error: Renaming Temp File: %v to %v: (refusing to overwrite existing file)", file, newFile)
 			// keep trying.
 			continue
 		}
@@ -177,13 +177,13 @@ func (x *Xtractr) MoveFiles(fromPath string, toPath string, overwrite bool) ([]s
 		switch err = x.Rename(file, newFile); {
 		case err != nil:
 			keepErr = err
-			x.Printf("Error: Renaming Temp File: %v to %v: %v", file, newFile, err)
+			x.config.Printf("Error: Renaming Temp File: %v to %v: %v", file, newFile, err)
 		case exists:
 			newFiles = append(newFiles, newFile)
-			x.Debugf("Renamed Temp File: %v -> %v (overwrote existing file)", file, newFile)
+			x.config.Debugf("Renamed Temp File: %v -> %v (overwrote existing file)", file, newFile)
 		default:
 			newFiles = append(newFiles, newFile)
-			x.Debugf("Renamed Temp File: %v -> %v", file, newFile)
+			x.config.Debugf("Renamed Temp File: %v -> %v", file, newFile)
 		}
 	}
 
@@ -198,12 +198,12 @@ func (x *Xtractr) MoveFiles(fromPath string, toPath string, overwrite bool) ([]s
 func (x *Xtractr) DeleteFiles(files ...string) {
 	for _, file := range files {
 		if err := os.RemoveAll(file); err != nil {
-			x.Printf("Error: Deleting %v: %v", file, err)
+			x.config.Printf("Error: Deleting %v: %v", file, err)
 
 			continue
 		}
 
-		x.Printf("Deleted (recursively): %s", file)
+		x.config.Printf("Deleted (recursively): %s", file)
 	}
 }
 
@@ -246,7 +246,7 @@ func (x *Xtractr) Rename(oldpath, newpath string) error {
 		return fmt.Errorf("os.Open(): %w", err)
 	}
 
-	newFile, err := os.OpenFile(newpath, os.O_TRUNC|os.O_CREATE|os.O_WRONLY, x.FileMode)
+	newFile, err := os.OpenFile(newpath, os.O_TRUNC|os.O_CREATE|os.O_WRONLY, x.config.FileMode)
 	if err != nil {
 		oldFile.Close()
 		return fmt.Errorf("os.OpenFile(): %w", err)

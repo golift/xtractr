@@ -22,15 +22,15 @@ import (
 )
 
 // Logger satisfies the xtractr.Logger interface.
-// Provides two log streams for errors and debug.
 type Logger struct {
-	error *log.Logger
-	debug *log.Logger
+	xtractr *log.Logger
+	debug   *log.Logger
+	info    *log.Logger
 }
 
 // Printf satisfies the xtractr.Logger interface.
 func (l *Logger) Printf(msg string, v ...interface{}) {
-	l.error.Printf(msg, v...)
+	l.xtractr.Printf(msg, v...)
 }
 
 // Debug satisfies the xtractr.Logger interface.
@@ -38,13 +38,20 @@ func (l *Logger) Debugf(msg string, v ...interface{}) {
 	l.debug.Printf(msg, v...)
 }
 
+// Infof printf an info line.
+func (l *Logger) Infof(msg string, v ...interface{}) {
+	l.info.Printf(msg, v...)
+}
+
 func main() {
+	log := &Logger{
+		xtractr: log.New(os.Stdout, "[XTRACTR] ", 0),
+		debug:   log.New(os.Stdout, "[DEBUG] ", 0),
+		info:    log.New(os.Stdout, "[INFO] ", 0),
+	}
 	q := xtractr.NewQueue(&xtractr.Config{
-		Suffix: "_xtractd",
-		Logger: &Logger{
-			error: log.New(os.Stdout, "[XTRACTR] ", 0),
-			debug: log.New(os.Stdout, "[DEBUG] ", 0),
-		},
+		Suffix:   "_xtractd",
+		Logger:   log,
 		Parallel: 1,
 		FileMode: 0644, // ignored for tar files.
 		DirMode:  0755,
@@ -60,20 +67,18 @@ func main() {
 		CBChannel:  response,        // queue responses are sent here.
 	})
 
-	log.SetPrefix("[INFO] ")
-
 	// Queue always sends two responses. 1 on start and again when finished (error or not)
 	resp := <-response
-	log.Println("Extraction started:", strings.Join(resp.Archives, ", "))
+	log.Infof("Extraction started: %s", strings.Join(resp.Archives, ", "))
 
 	resp = <-response
 	if resp.Error != nil {
 		// There is possibly more data in the response that is useful even on error.
 		// ie you may want to cleanup any partial extraction.
-		q.Logger.Printf("Error: %v", resp.Error) // You can use the same logger if you want.
+		log.Printf("Error: %v", resp.Error)
 	}
 
-	log.Println("Extracted Files:\n", "-", strings.Join(resp.NewFiles, "\n - "))
+	log.Infof("Extracted Files:\n - %s", strings.Join(resp.NewFiles, "\n - "))
 }
 ```
 

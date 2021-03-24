@@ -27,8 +27,8 @@ type Logger interface {
 // Xtractr is what you get from NewQueue(). This is the main app struct.
 // Use this struct to call Xtractr.Extract() to queue an extraction.
 type Xtractr struct {
-	*Config
-	queue chan *Xtract
+	config *Config
+	queue  chan *Xtract
 }
 
 // Custom errors returned by this module.
@@ -49,7 +49,7 @@ func NewQueue(config *Config) *Xtractr {
 		panic("xtractr.Config.Logger must be non-nil")
 	}
 
-	for i := 0; i < x.Parallel; i++ {
+	for i := 0; i < x.config.Parallel; i++ {
 		go x.processQueue()
 	}
 
@@ -75,7 +75,7 @@ func parseConfig(config *Config) *Xtractr {
 	}
 
 	return &Xtractr{
-		Config: config,
+		config: config,
 		queue:  make(chan *Xtract, config.BuffSize),
 	}
 }
