@@ -9,6 +9,7 @@ import (
 // Config is the input data to configure the Xtract queue. Fill this out and
 // pass it into NewQueue() to create a queue for archive extractions.
 type Config struct {
+	// Use -1 for unbuffered channel. Not recommend.
 	BuffSize int         // Size of the extraction channel buffer. Default=1000.
 	Parallel int         // Number of concurrent extractions.
 	FileMode os.FileMode // Filemode used when writing files, tar ignores this.
@@ -66,8 +67,10 @@ func parseConfig(config *Config) *Xtractr {
 		config.Parallel = 1
 	}
 
-	if config.BuffSize < 1 {
+	if config.BuffSize == 0 {
 		config.BuffSize = DefaultBufferSize
+	} else if config.BuffSize < 0 {
+		config.BuffSize = 0
 	}
 
 	if config.Suffix == "" {
