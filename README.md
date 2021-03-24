@@ -105,8 +105,8 @@ import (
 
 func main() {
 	x := &xtractr.XFile{
-		FilePath:  "/tmp/myfie.zip",
-		OutputDir: "/tmp/myfile",
+		FilePath:  "/tmp/myfile.zip",
+		OutputDir: "/tmp/myfile", // do not forget this.
 	}
 
 	// size is how many bytes were written.
@@ -116,7 +116,7 @@ func main() {
 		log.Fatal(size, files, err)
 	}
 
-	log.Println("Bytes written:", size, "Files Written:\n", strings.Join(files, "\n"))
+	log.Println("Bytes written:", size, "Files Extracted:\n -", strings.Join(files, "\n -"))
 }
 ```
 

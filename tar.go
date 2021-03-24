@@ -32,7 +32,8 @@ func ExtractBzip(x *XFile) (int64, []string, error) {
 	defer compressedFile.Close()
 
 	zipReader := bzip2.NewReader(compressedFile)
-	wfile := filepath.Clean(filepath.Join(x.OutputDir, filepath.Base(x.FilePath)))
+	fileName := strings.TrimSuffix(strings.TrimSuffix(filepath.Base(x.FilePath), ".bz"), ".bz2")
+	wfile := filepath.Clean(filepath.Join(x.OutputDir, fileName))
 
 	s, err := writeFile(wfile, zipReader, x.FileMode, x.DirMode)
 	if err != nil {
@@ -55,7 +56,8 @@ func ExtractGzip(x *XFile) (int64, []string, error) {
 		return 0, nil, fmt.Errorf("gzip.NewReader: %w", err)
 	}
 
-	wfile := filepath.Clean(filepath.Join(x.OutputDir, filepath.Base(x.FilePath)))
+	fileName := strings.TrimSuffix(filepath.Base(x.FilePath), ".gz")
+	wfile := filepath.Clean(filepath.Join(x.OutputDir, fileName))
 
 	s, err := writeFile(wfile, zipReader, x.FileMode, x.DirMode)
 	if err != nil {
