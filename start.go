@@ -11,8 +11,8 @@ import (
 type Config struct {
 	BuffSize int         // Size of the extraction channel buffer. Default=1000.
 	Parallel int         // Number of concurrent extractions.
-	FileMode os.FileMode // Filemode used when writing files.
-	DirMode  os.FileMode // Filemode used when writing folders.
+	FileMode os.FileMode // Filemode used when writing files, tar ignores this.
+	DirMode  os.FileMode // Filemode used when writing folders, tar ignores this.
 	Suffix   string      // The suffix used for temporary folders.
 	Logger               // Logs are sent to this Logger.
 }

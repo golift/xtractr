@@ -5,6 +5,7 @@ package xtractr
 import (
 	"fmt"
 	"io"
+	"io/fs"
 	"io/ioutil"
 	"os"
 	"path/filepath"
@@ -84,19 +85,27 @@ func FindCompressedFiles(path string) []string {
 		return nil
 	}
 
-	hasrar := false
-	files := []string{}
-
 	// Check (save) if the current path has any rar files.
+	// So we can ignore r01 if it does.
 	if r, _ := filepath.Glob(filepath.Join(path, "*.rar")); len(r) > 0 {
-		hasrar = true
+		return getCompressedFiles(true, path, fileList)
 	}
+
+	return getCompressedFiles(false, path, fileList)
+}
+
+// getCompressedFiles checks file suffixes to fine the archives to decompress.
+// This pays special attention to the widely accepted variance of rar formats.
+func getCompressedFiles(hasrar bool, path string, fileList []fs.FileInfo) []string {
+	files := []string{}
 
 	for _, file := range fileList {
 		switch lowerName := strings.ToLower(file.Name()); {
 		case file.IsDir(): // Recurse.
 			files = append(files, FindCompressedFiles(filepath.Join(path, file.Name()))...)
-		case strings.HasSuffix(lowerName, ".zip"):
+		case strings.HasSuffix(lowerName, ".zip") || strings.HasSuffix(lowerName, ".tar") ||
+			strings.HasSuffix(lowerName, ".tgz") || strings.HasSuffix(lowerName, ".gz") ||
+			strings.HasSuffix(lowerName, ".bz2"):
 			files = append(files, filepath.Join(path, file.Name()))
 		case strings.HasSuffix(lowerName, ".rar"):
 			// Some archives are named poorly. Only return part01 or part001, not all.
@@ -126,6 +135,17 @@ func ExtractFile(x *XFile) (int64, []string, error) {
 		return ExtractRAR(x)
 	case strings.HasSuffix(s, ".zip"):
 		return ExtractZIP(x)
+	case strings.HasSuffix(s, ".tar.gz") || strings.HasSuffix(s, ".tgz"):
+		return ExtractTarGzip(x)
+	case strings.HasSuffix(s, ".tar.bz2") || strings.HasSuffix(s, ".tbz2") ||
+		strings.HasSuffix(s, ".tbz") || strings.HasSuffix(s, ".tar.bz"):
+		return ExtractTarBzip(x)
+	case strings.HasSuffix(s, ".bz") || strings.HasSuffix(s, ".bz2"):
+		return ExtractBzip(x)
+	case strings.HasSuffix(s, ".gz"):
+		return ExtractGzip(x)
+	case strings.HasSuffix(s, ".tar"):
+		return ExtractTar(x)
 	default:
 		return 0, nil, fmt.Errorf("%w: %s", ErrUnknownArchiveType, x.FilePath)
 	}
