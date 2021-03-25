@@ -101,6 +101,8 @@ func getCompressedFiles(hasrar bool, path string, fileList []fs.FileInfo) []stri
 
 	for _, file := range fileList {
 		switch lowerName := strings.ToLower(file.Name()); {
+		case lowerName == "" || lowerName[0] == '.':
+			continue // ignore empty names and dot files/folders.
 		case file.IsDir(): // Recurse.
 			files = append(files, FindCompressedFiles(filepath.Join(path, file.Name()))...)
 		case strings.HasSuffix(lowerName, ".zip") || strings.HasSuffix(lowerName, ".tar") ||
@@ -127,28 +129,42 @@ func getCompressedFiles(hasrar bool, path string, fileList []fs.FileInfo) []stri
 	return files
 }
 
+// Extract calls the correct procedure for the type of file being extracted.
+// Returns size of extracted data, list of extracted files, and/or error.
+func (x *XFile) Extract() (int64, []string, []string, error) {
+	return ExtractFile(x)
+}
+
 // ExtractFile calls the correct procedure for the type of file being extracted.
-// Returns size of extracted data, number of extracted files, and/or error.
-func ExtractFile(x *XFile) (int64, []string, error) {
+// Returns size of extracted data, list of extracted files, list of archives processed, and/or error.
+func ExtractFile(x *XFile) (int64, []string, []string, error) {
+	var (
+		size  int64
+		files []string
+		err   error
+	)
+
 	switch s := strings.ToLower(x.FilePath); {
 	case strings.HasSuffix(s, ".rar"), strings.HasSuffix(s, ".r00"):
 		return ExtractRAR(x)
 	case strings.HasSuffix(s, ".zip"):
-		return ExtractZIP(x)
+		size, files, err = ExtractZIP(x)
 	case strings.HasSuffix(s, ".tar.gz") || strings.HasSuffix(s, ".tgz"):
-		return ExtractTarGzip(x)
+		size, files, err = ExtractTarGzip(x)
 	case strings.HasSuffix(s, ".tar.bz2") || strings.HasSuffix(s, ".tbz2") ||
 		strings.HasSuffix(s, ".tbz") || strings.HasSuffix(s, ".tar.bz"):
-		return ExtractTarBzip(x)
+		size, files, err = ExtractTarBzip(x)
 	case strings.HasSuffix(s, ".bz") || strings.HasSuffix(s, ".bz2"):
-		return ExtractBzip(x)
+		size, files, err = ExtractBzip(x)
 	case strings.HasSuffix(s, ".gz"):
-		return ExtractGzip(x)
+		size, files, err = ExtractGzip(x)
 	case strings.HasSuffix(s, ".tar"):
-		return ExtractTar(x)
+		size, files, err = ExtractTar(x)
 	default:
-		return 0, nil, fmt.Errorf("%w: %s", ErrUnknownArchiveType, x.FilePath)
+		return 0, nil, nil, fmt.Errorf("%w: %s", ErrUnknownArchiveType, x.FilePath)
 	}
+
+	return size, files, []string{x.FilePath}, err
 }
 
 // MoveFiles relocates files then removes the folder they were in.
@@ -160,6 +176,10 @@ func (x *Xtractr) MoveFiles(fromPath string, toPath string, overwrite bool) ([]s
 		newFiles = []string{}
 		keepErr  error
 	)
+
+	if err := os.MkdirAll(toPath, x.config.DirMode); err != nil {
+		return nil, fmt.Errorf("os.MkDirAll: %w", err)
+	}
 
 	for _, file := range files {
 		var (
@@ -263,4 +283,17 @@ func (x *Xtractr) Rename(oldpath, newpath string) error {
 	_ = os.Remove(oldpath)
 
 	return nil
+}
+
+// clean returns an absolute path for a file inside the OutputDir.
+// If trim length is > 0, then the suffixes are trimmed, and filepath removed.
+func (x *XFile) clean(filePath string, trim ...string) string {
+	if len(trim) != 0 {
+		filePath = filepath.Base(filePath)
+		for _, suffix := range trim {
+			filePath = strings.TrimSuffix(filePath, suffix)
+		}
+	}
+
+	return filepath.Clean(filepath.Join(x.OutputDir, filePath))
 }

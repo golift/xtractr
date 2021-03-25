@@ -22,7 +22,7 @@ func ExtractZIP(x *XFile) (int64, []string, error) {
 	size := int64(0)
 
 	for _, zf := range zipReader.Reader.File {
-		s, err := unzipFile(zf, x.OutputDir, x.FileMode, x.DirMode)
+		s, err := x.unzip(zf)
 		if err != nil {
 			return size, files, err
 		}
@@ -34,15 +34,15 @@ func ExtractZIP(x *XFile) (int64, []string, error) {
 	return size, files, nil
 }
 
-func unzipFile(zipFile *zip.File, toPath string, fm, dm os.FileMode) (int64, error) {
-	rfile := filepath.Clean(filepath.Join(toPath, zipFile.Name)) // nolint: gosec
-	if !strings.HasPrefix(rfile, toPath) {
+func (x *XFile) unzip(zipFile *zip.File) (int64, error) {
+	wfile := x.clean(zipFile.Name)
+	if !strings.HasPrefix(wfile, x.OutputDir) {
 		// The file being written is trying to write outside of our base path. Malicious archive?
-		return 0, fmt.Errorf("%s: %w: %s (from: %s)", zipFile.FileInfo().Name(), ErrInvalidPath, rfile, zipFile.Name)
+		return 0, fmt.Errorf("%s: %w: %s (from: %s)", zipFile.FileInfo().Name(), ErrInvalidPath, wfile, zipFile.Name)
 	}
 
-	if strings.HasSuffix(rfile, "/") || zipFile.FileInfo().IsDir() {
-		if err := os.MkdirAll(rfile, dm); err != nil {
+	if strings.HasSuffix(wfile, "/") || zipFile.FileInfo().IsDir() {
+		if err := os.MkdirAll(wfile, x.DirMode); err != nil {
 			return 0, fmt.Errorf("making zipFile dir: %w", err)
 		}
 
@@ -55,9 +55,9 @@ func unzipFile(zipFile *zip.File, toPath string, fm, dm os.FileMode) (int64, err
 	}
 	defer rc.Close()
 
-	s, err := writeFile(rfile, rc, fm, dm)
+	s, err := writeFile(wfile, rc, x.FileMode, x.DirMode)
 	if err != nil {
-		return s, fmt.Errorf("%s: %w: %s (from: %s)", zipFile.FileInfo().Name(), err, rfile, zipFile.Name)
+		return s, fmt.Errorf("%s: %w: %s (from: %s)", zipFile.FileInfo().Name(), err, wfile, zipFile.Name)
 	}
 
 	return s, nil
