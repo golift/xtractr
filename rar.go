@@ -21,10 +21,9 @@ func ExtractRAR(x *XFile) (int64, []string, []string, error) {
 	}
 	defer rarReader.Close()
 
-	s, f, err := x.unrar(rarReader)
-	v := rarReader.Volumes()
+	size, files, err := x.unrar(rarReader)
 
-	return s, f, v, err
+	return size, files, rarReader.Volumes(), err
 }
 
 func (x *XFile) unrar(rarReader *rardecode.ReadCloser) (int64, []string, error) {

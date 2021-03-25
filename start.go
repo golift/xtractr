@@ -59,9 +59,7 @@ var (
 // You must provide a Logger in the config, everything else is optional.
 func NewQueue(config *Config) *Xtractr {
 	x := parseConfig(config)
-
-	err := x.Start()
-	if err != nil {
+	if err := x.Start(); err != nil {
 		panic(err)
 	}
 

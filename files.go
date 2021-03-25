@@ -96,7 +96,7 @@ func FindCompressedFiles(path string) []string {
 
 // getCompressedFiles checks file suffixes to fine the archives to decompress.
 // This pays special attention to the widely accepted variance of rar formats.
-func getCompressedFiles(hasrar bool, path string, fileList []fs.FileInfo) []string {
+func getCompressedFiles(hasrar bool, path string, fileList []fs.FileInfo) []string { //nolint:cyclop
 	files := []string{}
 
 	for _, file := range fileList {
@@ -137,7 +137,7 @@ func (x *XFile) Extract() (int64, []string, []string, error) {
 
 // ExtractFile calls the correct procedure for the type of file being extracted.
 // Returns size of extracted data, list of extracted files, list of archives processed, and/or error.
-func ExtractFile(x *XFile) (int64, []string, []string, error) {
+func ExtractFile(x *XFile) (int64, []string, []string, error) { //nolint:cyclop
 	var (
 		size  int64
 		files []string
@@ -275,6 +275,7 @@ func (x *Xtractr) Rename(oldpath, newpath string) error {
 
 	_, err = io.Copy(newFile, oldFile)
 	oldFile.Close()
+
 	if err != nil {
 		return fmt.Errorf("io.Copy(): %w", err)
 	}

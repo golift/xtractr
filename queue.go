@@ -195,6 +195,7 @@ func (x *Xtractr) processArchive(filename, tmpPath, password string) (int64, []s
 	}
 
 	x.config.Debugf("Extracting File: %v to %v", filename, tmpPath)
+
 	bytes, files, archives, err := ExtractFile(&XFile{ // extract the file.
 		FilePath:  filename,
 		OutputDir: tmpPath,
@@ -202,7 +203,6 @@ func (x *Xtractr) processArchive(filename, tmpPath, password string) (int64, []s
 		DirMode:   x.config.DirMode,
 		Password:  password,
 	})
-
 	if err != nil {
 		x.DeleteFiles(tmpPath) // clean up the mess after an error and bail.
 	}
@@ -226,6 +226,7 @@ func (x *Xtractr) cleanupProcessedArchives(re *Response) error {
 
 	if re.X.DeleteOrig {
 		x.DeleteFiles(re.Archives...) // as requested
+
 		if len(re.Extras) != 0 {
 			x.DeleteFiles(re.Extras...) // these got extracted too
 		}
