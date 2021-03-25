@@ -3,7 +3,16 @@ package xtractr
 import (
 	"fmt"
 	"os"
-	"reflect"
+)
+
+// Sane defaults.
+const (
+	DefaultDirMode  = 0755
+	DefaultFileMode = 0644
+	DefaultSuffix   = "_xtractr"
+	// DefaultBufferSize is the size of the extraction buffer.
+	// ie. How many jobs can be queued before things get slow.
+	DefaultBufferSize = 1000
 )
 
 // Config is the input data to configure the Xtract queue. Fill this out and
@@ -35,18 +44,19 @@ type Xtractr struct {
 
 // Custom errors returned by this module.
 var (
-	ErrQueueStopped       = fmt.Errorf("extractor queue stopped")
+	ErrQueueStopped       = fmt.Errorf("extractor queue stopped, cannot extract")
 	ErrNoCompressedFiles  = fmt.Errorf("no compressed files found")
 	ErrUnknownArchiveType = fmt.Errorf("unknown archive file type")
 	ErrInvalidPath        = fmt.Errorf("archived file contains invalid path")
 	ErrInvalidHead        = fmt.Errorf("archived file contains invalid header file")
-	ErrQueueRunning       = fmt.Errorf("queue is running, cannot start")
+	ErrQueueRunning       = fmt.Errorf("extractor queue running, cannot start")
 	ErrNoConfig           = fmt.Errorf("call NewQueue() to initialize a queue")
 	ErrNoLogger           = fmt.Errorf("xtractr.Config.Logger must be non-nil")
 )
 
 // NewQueue returns a new Xtractr Queue you can send Xtract jobs into.
 // This is where to start if you're creating an extractor queue.
+// You must provide a Logger in the config, everything else is optional.
 func NewQueue(config *Config) *Xtractr {
 	x := parseConfig(config)
 
@@ -61,14 +71,17 @@ func NewQueue(config *Config) *Xtractr {
 // Start restarts the queue. This can be called only after you call Stop().
 func (x *Xtractr) Start() error {
 	if x.queue != nil {
+		// This happens if you call Start() without calling Stop() first.
 		return ErrQueueRunning
 	}
 
 	if x.config == nil {
+		// This happens if you call Start() on an *Xtractr without NewQueue().
 		return ErrNoConfig
 	}
 
 	if x.config.Logger == nil {
+		// This happens if you forget a *Logger.
 		return ErrNoLogger
 	}
 
@@ -81,12 +94,16 @@ func (x *Xtractr) Start() error {
 	return nil
 }
 
-// DefaultBufferSize is the size of the extraction buffer.
-// ie. How many jobs can be queued before things get slow.
-const DefaultBufferSize = 1000
-
 // parseConfig verifies sane config data and returns the Xtractr struct.
 func parseConfig(config *Config) *Xtractr {
+	if config.FileMode == 0 {
+		config.FileMode = DefaultFileMode
+	}
+
+	if config.DirMode == 0 {
+		config.DirMode = DefaultDirMode
+	}
+
 	if config.Parallel < 1 {
 		config.Parallel = 1
 	}
@@ -98,7 +115,7 @@ func parseConfig(config *Config) *Xtractr {
 	}
 
 	if config.Suffix == "" {
-		config.Suffix = "_" + reflect.TypeOf(Config{}).PkgPath() // xtractr
+		config.Suffix = DefaultSuffix
 	}
 
 	return &Xtractr{
