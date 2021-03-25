@@ -30,6 +30,7 @@ type Logger interface {
 type Xtractr struct {
 	config *Config
 	queue  chan *Xtract
+	done   chan struct{}
 }
 
 // Custom errors returned by this module.
@@ -39,6 +40,9 @@ var (
 	ErrUnknownArchiveType = fmt.Errorf("unknown archive file type")
 	ErrInvalidPath        = fmt.Errorf("archived file contains invalid path")
 	ErrInvalidHead        = fmt.Errorf("archived file contains invalid header file")
+	ErrQueueRunning       = fmt.Errorf("queue is running, cannot start")
+	ErrNoConfig           = fmt.Errorf("call NewQueue() to initialize a queue")
+	ErrNoLogger           = fmt.Errorf("xtractr.Config.Logger must be non-nil")
 )
 
 // NewQueue returns a new Xtractr Queue you can send Xtract jobs into.
@@ -46,15 +50,35 @@ var (
 func NewQueue(config *Config) *Xtractr {
 	x := parseConfig(config)
 
-	if config.Logger == nil {
-		panic("xtractr.Config.Logger must be non-nil")
+	err := x.Start()
+	if err != nil {
+		panic(err)
 	}
+
+	return x
+}
+
+// Start restarts the queue. This can be called only after you call Stop().
+func (x *Xtractr) Start() error {
+	if x.queue != nil {
+		return ErrQueueRunning
+	}
+
+	if x.config == nil {
+		return ErrNoConfig
+	}
+
+	if x.config.Logger == nil {
+		return ErrNoLogger
+	}
+
+	x.queue = make(chan *Xtract, x.config.BuffSize)
 
 	for i := 0; i < x.config.Parallel; i++ {
 		go x.processQueue()
 	}
 
-	return x
+	return nil
 }
 
 // DefaultBufferSize is the size of the extraction buffer.
@@ -79,17 +103,22 @@ func parseConfig(config *Config) *Xtractr {
 
 	return &Xtractr{
 		config: config,
-		queue:  make(chan *Xtract, config.BuffSize),
+		done:   make(chan struct{}),
 	}
 }
 
-// Stop shuts down the extractor routines. Call this to shut things down. There
-// is no re-starting. Once you stop, you need to call NewQueue() to start again.
+// Stop shuts down the extractor routines. Call this to shut things down.
 func (x *Xtractr) Stop() {
 	if x.queue == nil {
 		return
 	}
 
 	close(x.queue)
+
+	// Wait until all running extractions are done.
+	for i := 0; i < x.config.Parallel; i++ {
+		<-x.done
+	}
+
 	x.queue = nil
 }

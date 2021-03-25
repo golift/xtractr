@@ -64,6 +64,8 @@ func (x *Xtractr) processQueue() {
 	for ex := range x.queue { // extractions come from Extract()
 		x.extract(ex)
 	}
+
+	x.done <- struct{}{}
 }
 
 // extract is where the real work begins and files get extracted.
