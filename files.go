@@ -5,7 +5,6 @@ package xtractr
 import (
 	"fmt"
 	"io"
-	"io/fs"
 	"io/ioutil"
 	"os"
 	"path/filepath"
@@ -96,7 +95,7 @@ func FindCompressedFiles(path string) []string {
 
 // getCompressedFiles checks file suffixes to fine the archives to decompress.
 // This pays special attention to the widely accepted variance of rar formats.
-func getCompressedFiles(hasrar bool, path string, fileList []fs.FileInfo) []string { //nolint:cyclop
+func getCompressedFiles(hasrar bool, path string, fileList []os.FileInfo) []string { //nolint:cyclop
 	files := []string{}
 
 	for _, file := range fileList {
