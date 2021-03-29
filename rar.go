@@ -14,13 +14,19 @@ import (
 )
 
 // ExtractRAR extracts a rar file.. to a destination. Simple enough.
-func ExtractRAR(x *XFile) (int64, []string, error) {
+func ExtractRAR(x *XFile) (int64, []string, []string, error) {
 	rarReader, err := rardecode.OpenReader(x.FilePath, x.Password)
 	if err != nil {
-		return 0, nil, fmt.Errorf("rardecode.OpenReader: %w", err)
+		return 0, nil, nil, fmt.Errorf("rardecode.OpenReader: %w", err)
 	}
 	defer rarReader.Close()
 
+	size, files, err := x.unrar(rarReader)
+
+	return size, files, rarReader.Volumes(), err
+}
+
+func (x *XFile) unrar(rarReader *rardecode.ReadCloser) (int64, []string, error) {
 	files := []string{}
 	size := int64(0)
 
@@ -36,7 +42,7 @@ func ExtractRAR(x *XFile) (int64, []string, error) {
 			return size, files, fmt.Errorf("%w: %s", ErrInvalidHead, x.FilePath)
 		}
 
-		wfile := filepath.Clean(filepath.Join(x.OutputDir, header.Name))
+		wfile := x.clean(header.Name)
 		if !strings.HasPrefix(wfile, x.OutputDir) {
 			// The file being written is trying to write outside of our base path. Malicious archive?
 			return size, files, fmt.Errorf("%s: %w: %s (from: %s)", x.FilePath, ErrInvalidPath, wfile, header.Name)

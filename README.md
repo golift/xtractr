@@ -56,10 +56,9 @@ func main() {
 		FileMode: 0644, // ignored for tar files.
 		DirMode:  0755,
 	})
-	defer q.Stop()
+	defer q.Stop() // Stop() waits until all extractions finish.
 
 	response := make(chan *xtractr.Response)
-
 	// This sends an item into the extraction queue (buffered channel).
 	q.Extract(&xtractr.Xtract{
 		Name:       "my archive",    // name is not import to this library.

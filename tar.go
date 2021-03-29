@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
 )
 
@@ -20,7 +19,7 @@ func ExtractTar(x *XFile) (int64, []string, error) {
 	}
 	defer tarFile.Close()
 
-	return extractTarFile(x, tar.NewReader(tarFile))
+	return x.untar(tar.NewReader(tarFile))
 }
 
 // ExtractBzip extracts a bzip2-compressed file. That is, a single file.
@@ -32,8 +31,7 @@ func ExtractBzip(x *XFile) (int64, []string, error) {
 	defer compressedFile.Close()
 
 	// Get the absolute path of the file were writing.
-	wfile := strings.TrimSuffix(strings.TrimSuffix(filepath.Base(x.FilePath), ".bz"), ".bz2")
-	wfile = filepath.Clean(filepath.Join(x.OutputDir, wfile))
+	wfile := x.clean(x.FilePath, ".bz", ".bz2")
 
 	s, err := writeFile(wfile, bzip2.NewReader(compressedFile), x.FileMode, x.DirMode)
 	if err != nil {
@@ -57,8 +55,7 @@ func ExtractGzip(x *XFile) (int64, []string, error) {
 	}
 
 	// Get the absolute path of the file were writing.
-	wfile := strings.TrimSuffix(filepath.Base(x.FilePath), ".gz")
-	wfile = filepath.Clean(filepath.Join(x.OutputDir, wfile))
+	wfile := x.clean(x.FilePath, ".gz")
 
 	s, err := writeFile(wfile, zipReader, x.FileMode, x.DirMode)
 	if err != nil {
@@ -76,7 +73,7 @@ func ExtractTarBzip(x *XFile) (int64, []string, error) {
 	}
 	defer compressedFile.Close()
 
-	return extractTarFile(x, tar.NewReader(bzip2.NewReader(compressedFile)))
+	return x.untar(tar.NewReader(bzip2.NewReader(compressedFile)))
 }
 
 // ExtractTarGzip extracts a gzip-compressed tar archive.
@@ -93,10 +90,10 @@ func ExtractTarGzip(x *XFile) (int64, []string, error) {
 	}
 	defer gzipstream.Close()
 
-	return extractTarFile(x, tar.NewReader(gzipstream))
+	return x.untar(tar.NewReader(gzipstream))
 }
 
-func extractTarFile(x *XFile, tarReader *tar.Reader) (int64, []string, error) {
+func (x *XFile) untar(tarReader *tar.Reader) (int64, []string, error) {
 	files := []string{}
 	size := int64(0)
 
@@ -112,7 +109,7 @@ func extractTarFile(x *XFile, tarReader *tar.Reader) (int64, []string, error) {
 			return size, files, fmt.Errorf("%w: %s", ErrInvalidHead, x.FilePath)
 		}
 
-		wfile := filepath.Clean(filepath.Join(x.OutputDir, header.Name)) //nolint:gosec
+		wfile := x.clean(header.Name)
 		if !strings.HasPrefix(wfile, x.OutputDir) {
 			// The file being written is trying to write outside of our base path. Malicious archive?
 			return size, files, fmt.Errorf("%s: %w: %s (from: %s)", x.FilePath, ErrInvalidPath, wfile, header.Name)
