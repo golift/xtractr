@@ -4,6 +4,8 @@ Go Library for Queuing and Extracting ZIP, RAR, GZ, BZ2, TAR, TGZ, TBZ2, 7Z file
 Can also be used ad-hoc for direct decompression and extraction. See docs.
 
 -   [GoDoc](https://pkg.go.dev/golift.io/xtractr)
+-   Works on Linux, Windows, FreeBSD and macOS **without Cgo**.
+-   Supports 32 and 64 bit architectures.
 
 # Examples
 
