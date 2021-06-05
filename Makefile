@@ -5,6 +5,7 @@ test: lint
 	go test -race -covermode=atomic ./...
 	# Test 32 bit OSes.
 	GOOS=linux GOARCH=386 go build .
+	GOOS=windows GOARCH=386 go build .
 	GOOS=freebsd GOARCH=386 go build .
 
 lint:

@@ -10,7 +10,7 @@ import (
 	"github.com/saracen/go7z"
 )
 
-// Extract7z extracts a 7zip archive.
+// Extract7z extracts a 7zip archive. This wraps https://github.com/saracen/go7z.
 func Extract7z(x *XFile) (int64, []string, error) {
 	sz, err := go7z.OpenReader(x.FilePath)
 	if err != nil {
@@ -43,6 +43,7 @@ func (x *XFile) un7zip(szreader *go7z.ReadCloser) (int64, []string, error) {
 			return size, files, fmt.Errorf("%s: %w: %s (from: %s)", x.FilePath, ErrInvalidPath, wfile, header.Name)
 		}
 
+		// https://github.com/saracen/go7z/blob/9c09b6bd7fda869ef48ff6f693744a65f477816b/README.md#usage
 		if header.IsEmptyStream && !header.IsEmptyFile {
 			if err = os.MkdirAll(wfile, x.DirMode); err != nil {
 				return size, files, fmt.Errorf("os.MkdirAll: %w", err)
