@@ -1,0 +1,13 @@
+*~
+*.zip
+*.rar
+*.r00
+*.r01
+*.7z
+*.tar
+*.gz
+*.tgz
+*.bz2
+*.tbz2
+/cmd/xt/xt
+/xt

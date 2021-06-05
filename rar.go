@@ -13,7 +13,7 @@ import (
 	"github.com/nwaples/rardecode"
 )
 
-// ExtractRAR extracts a rar file.. to a destination. Simple enough.
+// ExtractRAR extracts a rar file. to a destination. This wraps github.com/nwaples/rardecode.
 func ExtractRAR(x *XFile) (int64, []string, []string, error) {
 	rarReader, err := rardecode.OpenReader(x.FilePath, x.Password)
 	if err != nil {
