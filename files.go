@@ -8,6 +8,7 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 )
@@ -109,14 +110,10 @@ func getCompressedFiles(hasrar bool, path string, fileList []os.FileInfo) []stri
 			strings.HasSuffix(lowerName, ".bz2") || strings.HasSuffix(lowerName, ".7z"):
 			files = append(files, filepath.Join(path, file.Name()))
 		case strings.HasSuffix(lowerName, ".rar"):
+			hasParts := regexp.MustCompile(`.*\.part[0-9]+\.rar$`)
+			partOne := regexp.MustCompile(`.*\.part0*1\.rar$`)
 			// Some archives are named poorly. Only return part01 or part001, not all.
-			m, _ := filepath.Match("*.part[0-9]*.rar", lowerName)
-			// This if statements says:
-			// If the current file does not have "part0-9" in the name, add it to our list (all .rar files).
-			// If it does have "part0-9" in the name, then make sure it's part 1.
-			if !m || strings.HasSuffix(lowerName, ".part01.rar") ||
-				strings.HasSuffix(lowerName, ".part001.rar") ||
-				strings.HasSuffix(lowerName, ".part1.rar") {
+			if !hasParts.Match([]byte(lowerName)) || partOne.Match([]byte(lowerName)) {
 				files = append(files, filepath.Join(path, file.Name()))
 			}
 		case !hasrar && strings.HasSuffix(lowerName, ".r00"):
