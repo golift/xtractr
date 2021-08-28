@@ -33,8 +33,12 @@ func processInput(paths []string, output string) {
 	log.Printf("==> Output Path: %s", output)
 
 	archives := getArchives(paths)
+	if len(archives) == 0 {
+		log.Println("==> No archives found in:", paths)
+	}
+
 	for i, f := range archives {
-		log.Printf("==> Extracting Archive (%d/%d): %s", i, len(archives), f)
+		log.Printf("==> Extracting Archive (%d/%d): %s", i+1, len(archives), f)
 
 		start := time.Now()
 
