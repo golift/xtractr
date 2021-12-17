@@ -12,38 +12,38 @@ import (
 )
 
 // ExtractTar extracts a raw (non-compressed) tar archive.
-func ExtractTar(x *XFile) (int64, []string, error) {
-	tarFile, err := os.Open(x.FilePath)
+func ExtractTar(xFile *XFile) (int64, []string, error) {
+	tarFile, err := os.Open(xFile.FilePath)
 	if err != nil {
 		return 0, nil, fmt.Errorf("os.Open: %w", err)
 	}
 	defer tarFile.Close()
 
-	return x.untar(tar.NewReader(tarFile))
+	return xFile.untar(tar.NewReader(tarFile))
 }
 
 // ExtractBzip extracts a bzip2-compressed file. That is, a single file.
-func ExtractBzip(x *XFile) (int64, []string, error) {
-	compressedFile, err := os.Open(x.FilePath)
+func ExtractBzip(xFile *XFile) (int64, []string, error) {
+	compressedFile, err := os.Open(xFile.FilePath)
 	if err != nil {
 		return 0, nil, fmt.Errorf("os.Open: %w", err)
 	}
 	defer compressedFile.Close()
 
 	// Get the absolute path of the file were writing.
-	wfile := x.clean(x.FilePath, ".bz", ".bz2")
+	wfile := xFile.clean(xFile.FilePath, ".bz", ".bz2")
 
-	s, err := writeFile(wfile, bzip2.NewReader(compressedFile), x.FileMode, x.DirMode)
+	size, err := writeFile(wfile, bzip2.NewReader(compressedFile), xFile.FileMode, xFile.DirMode)
 	if err != nil {
-		return s, nil, err
+		return size, nil, err
 	}
 
-	return s, []string{wfile}, nil
+	return size, []string{wfile}, nil
 }
 
 // ExtractGzip extracts a gzip-compressed file. That is, a single file.
-func ExtractGzip(x *XFile) (int64, []string, error) {
-	compressedFile, err := os.Open(x.FilePath)
+func ExtractGzip(xFile *XFile) (int64, []string, error) {
+	compressedFile, err := os.Open(xFile.FilePath)
 	if err != nil {
 		return 0, nil, fmt.Errorf("os.Open: %w", err)
 	}
@@ -55,30 +55,30 @@ func ExtractGzip(x *XFile) (int64, []string, error) {
 	}
 
 	// Get the absolute path of the file were writing.
-	wfile := x.clean(x.FilePath, ".gz")
+	wfile := xFile.clean(xFile.FilePath, ".gz")
 
-	s, err := writeFile(wfile, zipReader, x.FileMode, x.DirMode)
+	size, err := writeFile(wfile, zipReader, xFile.FileMode, xFile.DirMode)
 	if err != nil {
-		return s, nil, err
+		return size, nil, err
 	}
 
-	return s, []string{wfile}, nil
+	return size, []string{wfile}, nil
 }
 
 // ExtractTarBzip extracts a bzip2-compressed tar archive.
-func ExtractTarBzip(x *XFile) (int64, []string, error) {
-	compressedFile, err := os.Open(x.FilePath)
+func ExtractTarBzip(xFile *XFile) (int64, []string, error) {
+	compressedFile, err := os.Open(xFile.FilePath)
 	if err != nil {
 		return 0, nil, fmt.Errorf("os.Open: %w", err)
 	}
 	defer compressedFile.Close()
 
-	return x.untar(tar.NewReader(bzip2.NewReader(compressedFile)))
+	return xFile.untar(tar.NewReader(bzip2.NewReader(compressedFile)))
 }
 
 // ExtractTarGzip extracts a gzip-compressed tar archive.
-func ExtractTarGzip(x *XFile) (int64, []string, error) {
-	compressedFile, err := os.Open(x.FilePath)
+func ExtractTarGzip(xFile *XFile) (int64, []string, error) {
+	compressedFile, err := os.Open(xFile.FilePath)
 	if err != nil {
 		return 0, nil, fmt.Errorf("os.Open: %w", err)
 	}
@@ -90,7 +90,7 @@ func ExtractTarGzip(x *XFile) (int64, []string, error) {
 	}
 	defer gzipstream.Close()
 
-	return x.untar(tar.NewReader(gzipstream))
+	return xFile.untar(tar.NewReader(gzipstream))
 }
 
 func (x *XFile) untar(tarReader *tar.Reader) (int64, []string, error) {
@@ -123,12 +123,12 @@ func (x *XFile) untar(tarReader *tar.Reader) (int64, []string, error) {
 			continue
 		}
 
-		s, err := writeFile(wfile, tarReader, header.FileInfo().Mode(), x.DirMode)
+		fSize, err := writeFile(wfile, tarReader, header.FileInfo().Mode(), x.DirMode)
 		if err != nil {
 			return size, files, err
 		}
 
 		files = append(files, wfile)
-		size += s
+		size += fSize
 	}
 }

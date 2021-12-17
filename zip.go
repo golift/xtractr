@@ -11,8 +11,8 @@ import (
 /* How to extract a ZIP file. */
 
 // ExtractZIP extracts a zip file.. to a destination. Simple enough.
-func ExtractZIP(x *XFile) (int64, []string, error) {
-	zipReader, err := zip.OpenReader(x.FilePath)
+func ExtractZIP(xFile *XFile) (int64, []string, error) {
+	zipReader, err := zip.OpenReader(xFile.FilePath)
 	if err != nil {
 		return 0, nil, fmt.Errorf("zip.OpenReader: %w", err)
 	}
@@ -21,14 +21,14 @@ func ExtractZIP(x *XFile) (int64, []string, error) {
 	files := []string{}
 	size := int64(0)
 
-	for _, zf := range zipReader.Reader.File {
-		s, err := x.unzip(zf)
+	for _, zipFile := range zipReader.Reader.File {
+		fSize, err := xFile.unzip(zipFile)
 		if err != nil {
 			return size, files, err
 		}
 
-		files = append(files, filepath.Join(x.OutputDir, zf.Name)) // nolint: gosec
-		size += s
+		files = append(files, filepath.Join(xFile.OutputDir, zipFile.Name)) // nolint: gosec
+		size += fSize
 	}
 
 	return size, files, nil
@@ -49,13 +49,13 @@ func (x *XFile) unzip(zipFile *zip.File) (int64, error) {
 		return 0, nil
 	}
 
-	rc, err := zipFile.Open()
+	zFile, err := zipFile.Open()
 	if err != nil {
 		return 0, fmt.Errorf("zipFile.Open: %w", err)
 	}
-	defer rc.Close()
+	defer zFile.Close()
 
-	s, err := writeFile(wfile, rc, x.FileMode, x.DirMode)
+	s, err := writeFile(wfile, zFile, x.FileMode, x.DirMode)
 	if err != nil {
 		return s, fmt.Errorf("%s: %w: %s (from: %s)", zipFile.FileInfo().Name(), err, wfile, zipFile.Name)
 	}

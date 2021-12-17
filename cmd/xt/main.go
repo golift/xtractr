@@ -37,25 +37,25 @@ func processInput(paths []string, output string) {
 		log.Println("==> No archives found in:", paths)
 	}
 
-	for i, f := range archives {
-		log.Printf("==> Extracting Archive (%d/%d): %s", i+1, len(archives), f)
+	for i, fileName := range archives {
+		log.Printf("==> Extracting Archive (%d/%d): %s", i+1, len(archives), fileName)
 
 		start := time.Now()
 
 		size, files, _, err := xtractr.ExtractFile(&xtractr.XFile{
-			FilePath:  f,      // Path to archive being extracted.
-			OutputDir: output, // Folder to extract archive into.
-			FileMode:  0644,   // nolint:gomnd // Write files with this mode.
-			DirMode:   0755,   // nolint:gomnd // Write folders with this mode.
-			Password:  "",     // (RAR) Archive password. Blank for none.
+			FilePath:  fileName, // Path to archive being extracted.
+			OutputDir: output,   // Folder to extract archive into.
+			FileMode:  0o644,    // nolint:gomnd // Write files with this mode.
+			DirMode:   0o755,    // nolint:gomnd // Write folders with this mode.
+			Password:  "",       // (RAR) Archive password. Blank for none.
 		})
 		if err != nil {
-			log.Printf("[ERROR] Archive: %s: %v", f, err)
+			log.Printf("[ERROR] Archive: %s: %v", fileName, err)
 			continue
 		}
 
 		elapsed := time.Since(start).Round(time.Millisecond)
-		log.Printf("==> Extracted Archive %s in %v: bytes: %d, files: %d", f, elapsed, size, len(files))
+		log.Printf("==> Extracted Archive %s in %v: bytes: %d, files: %d", fileName, elapsed, size, len(files))
 		log.Printf("==> Files:\n - %s", strings.Join(files, "\n - "))
 	}
 }
@@ -63,14 +63,14 @@ func processInput(paths []string, output string) {
 func getArchives(paths []string) []string {
 	archives := []string{}
 
-	for _, f := range paths {
-		switch fileInfo, err := os.Stat(f); {
+	for _, fileName := range paths {
+		switch fileInfo, err := os.Stat(fileName); {
 		case err != nil:
-			log.Fatalf("[ERROR] Reading Path: %s: %s", f, err)
+			log.Fatalf("[ERROR] Reading Path: %s: %s", fileName, err)
 		case fileInfo.IsDir():
-			archives = append(archives, xtractr.FindCompressedFiles(f)...)
+			archives = append(archives, xtractr.FindCompressedFiles(fileName)...)
 		default:
-			archives = append(archives, f)
+			archives = append(archives, fileName)
 		}
 	}
 

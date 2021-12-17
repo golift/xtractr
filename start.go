@@ -7,8 +7,8 @@ import (
 
 // Sane defaults.
 const (
-	DefaultDirMode  = 0755
-	DefaultFileMode = 0644
+	DefaultDirMode  = 0o755
+	DefaultFileMode = 0o644
 	DefaultSuffix   = "_xtractr"
 	// DefaultBufferSize is the size of the extraction buffer.
 	// ie. How many jobs can be queued before things get slow.

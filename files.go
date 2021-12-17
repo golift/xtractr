@@ -41,11 +41,11 @@ func (x *Xtractr) GetFileList(path string) (files []string) {
 // Used to find new files in a file list from a path. ie. those we extracted.
 // This is a helper method and only exposed for convenience. You do not have to call this.
 func Difference(slice1 []string, slice2 []string) (diff []string) {
-	for _, s2 := range slice2 {
+	for _, s2p := range slice2 {
 		var found bool
 
 		for _, s1 := range slice1 {
-			if s1 == s2 {
+			if s1 == s2p {
 				found = true
 
 				break
@@ -53,7 +53,7 @@ func Difference(slice1 []string, slice2 []string) (diff []string) {
 		}
 
 		if !found { // String not found, so it's a new string, add it to the diff.
-			diff = append(diff, s2)
+			diff = append(diff, s2p)
 		}
 	}
 
@@ -86,15 +86,13 @@ func FindCompressedFiles(path string) []string {
 	}
 
 	// Check (save) if the current path has any rar files.
-	// So we can ignore r01 if it does.
-	if r, _ := filepath.Glob(filepath.Join(path, "*.rar")); len(r) > 0 {
-		return getCompressedFiles(true, path, fileList)
-	}
+	// So we can ignore r00 if it does.
+	r, _ := filepath.Glob(filepath.Join(path, "*.rar"))
 
-	return getCompressedFiles(false, path, fileList)
+	return getCompressedFiles(len(r) > 0, path, fileList)
 }
 
-// getCompressedFiles checks file suffixes to fine the archives to decompress.
+// getCompressedFiles checks file suffixes to find archives to decompress.
 // This pays special attention to the widely accepted variance of rar formats.
 func getCompressedFiles(hasrar bool, path string, fileList []os.FileInfo) []string { //nolint:cyclop
 	files := []string{}
@@ -133,36 +131,36 @@ func (x *XFile) Extract() (int64, []string, []string, error) {
 
 // ExtractFile calls the correct procedure for the type of file being extracted.
 // Returns size of extracted data, list of extracted files, list of archives processed, and/or error.
-func ExtractFile(x *XFile) (int64, []string, []string, error) { //nolint:cyclop
+func ExtractFile(xFile *XFile) (int64, []string, []string, error) {
 	var (
 		size  int64
 		files []string
 		err   error
 	)
 
-	switch s := strings.ToLower(x.FilePath); {
-	case strings.HasSuffix(s, ".rar"), strings.HasSuffix(s, ".r00"):
-		return ExtractRAR(x)
-	case strings.HasSuffix(s, ".7z"):
-		size, files, err = Extract7z(x)
-	case strings.HasSuffix(s, ".zip"):
-		size, files, err = ExtractZIP(x)
-	case strings.HasSuffix(s, ".tar.gz") || strings.HasSuffix(s, ".tgz"):
-		size, files, err = ExtractTarGzip(x)
-	case strings.HasSuffix(s, ".tar.bz2") || strings.HasSuffix(s, ".tbz2") ||
-		strings.HasSuffix(s, ".tbz") || strings.HasSuffix(s, ".tar.bz"):
-		size, files, err = ExtractTarBzip(x)
-	case strings.HasSuffix(s, ".bz") || strings.HasSuffix(s, ".bz2"):
-		size, files, err = ExtractBzip(x)
-	case strings.HasSuffix(s, ".gz"):
-		size, files, err = ExtractGzip(x)
-	case strings.HasSuffix(s, ".tar"):
-		size, files, err = ExtractTar(x)
+	switch sName := strings.ToLower(xFile.FilePath); {
+	case strings.HasSuffix(sName, ".rar"), strings.HasSuffix(sName, ".r00"):
+		return ExtractRAR(xFile)
+	case strings.HasSuffix(sName, ".7z"):
+		size, files, err = Extract7z(xFile)
+	case strings.HasSuffix(sName, ".zip"):
+		size, files, err = ExtractZIP(xFile)
+	case strings.HasSuffix(sName, ".tar.gz"), strings.HasSuffix(sName, ".tgz"):
+		size, files, err = ExtractTarGzip(xFile)
+	case strings.HasSuffix(sName, ".tar.bz2"), strings.HasSuffix(sName, ".tbz2"),
+		strings.HasSuffix(sName, ".tbz"), strings.HasSuffix(sName, ".tar.bz"):
+		size, files, err = ExtractTarBzip(xFile)
+	case strings.HasSuffix(sName, ".bz"), strings.HasSuffix(sName, ".bz2"):
+		size, files, err = ExtractBzip(xFile)
+	case strings.HasSuffix(sName, ".gz"):
+		size, files, err = ExtractGzip(xFile)
+	case strings.HasSuffix(sName, ".tar"):
+		size, files, err = ExtractTar(xFile)
 	default:
-		return 0, nil, nil, fmt.Errorf("%w: %s", ErrUnknownArchiveType, x.FilePath)
+		return 0, nil, nil, fmt.Errorf("%w: %s", ErrUnknownArchiveType, xFile.FilePath)
 	}
 
-	return size, files, []string{x.FilePath}, err
+	return size, files, []string{xFile.FilePath}, err
 }
 
 // MoveFiles relocates files then removes the folder they were in.
@@ -226,8 +224,8 @@ func (x *Xtractr) DeleteFiles(files ...string) {
 }
 
 // writeFile writes a file from an io reader, making sure all parent directories exist.
-func writeFile(fpath string, fdata io.Reader, fm, dm os.FileMode) (int64, error) {
-	if err := os.MkdirAll(filepath.Dir(fpath), dm); err != nil {
+func writeFile(fpath string, fdata io.Reader, fMode, dMode os.FileMode) (int64, error) {
+	if err := os.MkdirAll(filepath.Dir(fpath), dMode); err != nil {
 		return 0, fmt.Errorf("os.MkdirAll: %w", err)
 	}
 
@@ -238,7 +236,7 @@ func writeFile(fpath string, fdata io.Reader, fm, dm os.FileMode) (int64, error)
 	defer fout.Close()
 
 	if runtime.GOOS != "windows" {
-		if err = fout.Chmod(fm); err != nil {
+		if err = fout.Chmod(fMode); err != nil {
 			return 0, fmt.Errorf("chmod: %w", err)
 		}
 	}

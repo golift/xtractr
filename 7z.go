@@ -11,14 +11,14 @@ import (
 )
 
 // Extract7z extracts a 7zip archive. This wraps https://github.com/saracen/go7z.
-func Extract7z(x *XFile) (int64, []string, error) {
-	sz, err := go7z.OpenReader(x.FilePath)
+func Extract7z(xFile *XFile) (int64, []string, error) {
+	sevenZip, err := go7z.OpenReader(xFile.FilePath)
 	if err != nil {
 		return 0, nil, fmt.Errorf("os.Open: %w", err)
 	}
-	defer sz.Close()
+	defer sevenZip.Close()
 
-	return x.un7zip(sz)
+	return xFile.un7zip(sevenZip)
 }
 
 func (x *XFile) un7zip(szreader *go7z.ReadCloser) (int64, []string, error) {
@@ -52,12 +52,12 @@ func (x *XFile) un7zip(szreader *go7z.ReadCloser) (int64, []string, error) {
 			continue
 		}
 
-		s, err := writeFile(wfile, szreader, x.FileMode, x.DirMode)
+		fileSize, err := writeFile(wfile, szreader, x.FileMode, x.DirMode)
 		if err != nil {
 			return size, files, err
 		}
 
 		files = append(files, wfile)
-		size += s
+		size += fileSize
 	}
 }

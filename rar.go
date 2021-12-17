@@ -14,14 +14,14 @@ import (
 )
 
 // ExtractRAR extracts a rar file. to a destination. This wraps github.com/nwaples/rardecode.
-func ExtractRAR(x *XFile) (int64, []string, []string, error) {
-	rarReader, err := rardecode.OpenReader(x.FilePath, x.Password)
+func ExtractRAR(xFile *XFile) (int64, []string, []string, error) {
+	rarReader, err := rardecode.OpenReader(xFile.FilePath, xFile.Password)
 	if err != nil {
 		return 0, nil, nil, fmt.Errorf("rardecode.OpenReader: %w", err)
 	}
 	defer rarReader.Close()
 
-	size, files, err := x.unrar(rarReader)
+	size, files, err := xFile.unrar(rarReader)
 
 	return size, files, rarReader.Volumes(), err
 }
@@ -60,12 +60,12 @@ func (x *XFile) unrar(rarReader *rardecode.ReadCloser) (int64, []string, error) 
 			return size, files, fmt.Errorf("os.MkdirAll: %w", err)
 		}
 
-		s, err := writeFile(wfile, rarReader, x.FileMode, x.DirMode)
+		fSize, err := writeFile(wfile, rarReader, x.FileMode, x.DirMode)
 		if err != nil {
 			return size, files, err
 		}
 
 		files = append(files, wfile)
-		size += s
+		size += fSize
 	}
 }
