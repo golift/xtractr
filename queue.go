@@ -19,6 +19,7 @@ import (
 type Xtract struct {
 	Name       string          // Unused in this app; exposed for calling library.
 	Password   string          // Archive password. Only supported with RAR files.
+	Passwords  []string        // Archive passwords (try multiple). Only supported with RAR files.
 	SearchPath string          // Folder path where extractable items are located.
 	ExtractTo  string          // Default is same level as SearchPath with a suffix.
 	TempFolder bool            // Leave files in temporary folder? false=move files back to Searchpath
@@ -147,7 +148,10 @@ func (x *Xtractr) decompressFiles(resp *Response) error {
 	// Now do it again with the output folder.
 	resp.Extras = FindCompressedFiles(resp.Output)
 	nre := &Response{
-		X:        &Xtract{Password: resp.X.Password},
+		X: &Xtract{
+			Password:  resp.X.Password,
+			Passwords: resp.X.Passwords,
+		},
 		Started:  resp.Started,
 		Output:   resp.Output,
 		Archives: resp.Extras,
@@ -172,7 +176,7 @@ func (x *Xtractr) decompressArchives(resp *Response) error {
 	allArchives := []string{}
 
 	for _, archive := range resp.Archives {
-		bytes, files, archives, err := x.processArchive(archive, resp.Output, resp.X.Password)
+		bytes, files, archives, err := x.processArchive(archive, resp.Output, append(resp.X.Passwords, resp.X.Password)...)
 		// Make sure these get added even with an error.
 		if resp.Size += bytes; files != nil {
 			resp.NewFiles = append(resp.NewFiles, files...)
@@ -194,7 +198,7 @@ func (x *Xtractr) decompressArchives(resp *Response) error {
 
 // processArchives extracts one archive at a time.
 // Returns list of archive files extracted, size of data written and files written.
-func (x *Xtractr) processArchive(filename, tmpPath, password string) (int64, []string, []string, error) {
+func (x *Xtractr) processArchive(filename, tmpPath string, passwords ...string) (int64, []string, []string, error) {
 	if err := os.MkdirAll(tmpPath, x.config.DirMode); err != nil {
 		return 0, nil, nil, fmt.Errorf("os.MkdirAll: %w", err)
 	}
@@ -206,7 +210,7 @@ func (x *Xtractr) processArchive(filename, tmpPath, password string) (int64, []s
 		OutputDir: tmpPath,
 		FileMode:  x.config.FileMode,
 		DirMode:   x.config.DirMode,
-		Password:  password,
+		Passwords: passwords,
 	})
 	if err != nil {
 		x.DeleteFiles(tmpPath) // clean up the mess after an error and bail.

@@ -15,7 +15,7 @@ import (
 
 // ExtractRAR extracts a rar file. to a destination. This wraps github.com/nwaples/rardecode.
 func ExtractRAR(xFile *XFile) (int64, []string, []string, error) {
-	rarReader, err := rardecode.OpenReader(xFile.FilePath, xFile.Password)
+	rarReader, err := openRAR(xFile)
 	if err != nil {
 		return 0, nil, nil, fmt.Errorf("rardecode.OpenReader: %w", err)
 	}
@@ -24,6 +24,42 @@ func ExtractRAR(xFile *XFile) (int64, []string, []string, error) {
 	size, files, err := xFile.unrar(rarReader)
 
 	return size, files, rarReader.Volumes(), err
+}
+
+// openRAR tries multiple passwords.
+func openRAR(xFile *XFile) (*rardecode.ReadCloser, error) {
+	if len(xFile.Passwords) == 0 && xFile.Password == "" {
+		// No passwords provided.
+		rarReader, err := rardecode.OpenReader(xFile.FilePath, "")
+		if err != nil {
+			return rarReader, fmt.Errorf("rardecode.OpenReader: %w", err)
+		}
+
+		return rarReader, nil
+	}
+
+	// Try all the passwords.
+	for _, password := range append(xFile.Passwords, xFile.Password) {
+		rarReader, err := rardecode.OpenReader(xFile.FilePath, password)
+		if strings.Contains(err.Error(), "bad password") {
+			// https://github.com/nwaples/rardecode/issues/28
+			continue
+		}
+
+		if err != nil {
+			return rarReader, fmt.Errorf("rardecode.OpenReader: %w", err)
+		}
+
+		return rarReader, nil
+	}
+
+	// No password worked, try without a password.
+	rarReader, err := rardecode.OpenReader(xFile.FilePath, "")
+	if err != nil {
+		return rarReader, fmt.Errorf("rardecode.OpenReader: %w", err)
+	}
+
+	return rarReader, nil
 }
 
 func (x *XFile) unrar(rarReader *rardecode.ReadCloser) (int64, []string, error) {
