@@ -106,7 +106,42 @@ func (x *Xtractr) extract(ext *Xtract) {
 		Archives: resp.Archives,
 	}
 	// e.log("Starting: %d archives - %v", len(resp.Archives), ex.SearchPath)
-	x.finishExtract(resp, x.decompressFiles(resp))
+	x.finishExtract(resp, x.decompressFolders(resp))
+}
+
+// decompressFolders extracts each folder individually, os the extracted files may be copied back to where they were extracted from.
+// If the extracted data is not being coppied back, then the tempDir (output) paths match the input paths.
+func (x *Xtractr) decompressFolders(resp *Response) error {
+	for subDir := range resp.Archives {
+		subResp := &Response{
+			X: &Xtract{
+				SearchPath: subDir,
+				Name:       resp.X.Name,
+				Password:   resp.X.Password,
+				ExtractTo:  resp.X.ExtractTo,
+				DeleteOrig: resp.X.DeleteOrig,
+				TempFolder: resp.X.TempFolder,
+				LogFile:    resp.X.LogFile,
+			},
+			Started:  resp.Started,
+			Output:   filepath.Join(resp.Output, strings.TrimPrefix(resp.X.SearchPath, subDir)),
+			Archives: map[string][]string{subDir: resp.Archives[subDir]},
+		}
+
+		err := x.decompressFiles(subResp)
+		resp.NewFiles = append(resp.NewFiles, subResp.NewFiles...)
+		resp.Size += subResp.Size
+
+		if err != nil {
+			return err
+		}
+
+		for k, v := range subResp.Archives {
+			resp.Archives[k] = append(resp.Archives[k], v...)
+		}
+	}
+
+	return nil
 }
 
 func (x *Xtractr) finishExtract(resp *Response, err error) {
