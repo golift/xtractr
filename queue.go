@@ -109,7 +109,8 @@ func (x *Xtractr) extract(ext *Xtract) {
 	x.finishExtract(resp, x.decompressFolders(resp))
 }
 
-// decompressFolders extracts each folder individually, os the extracted files may be copied back to where they were extracted from.
+// decompressFolders extracts each folder individually,
+// or the extracted files may be copied back to where they were extracted from.
 // If the extracted data is not being coppied back, then the tempDir (output) paths match the input paths.
 func (x *Xtractr) decompressFolders(resp *Response) error {
 	for subDir := range resp.Archives {

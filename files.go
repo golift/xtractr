@@ -77,7 +77,7 @@ func FindCompressedFiles(path string) map[string][]string {
 		return nil // unreadable folder?
 	} else if l := strings.ToLower(path); !info.IsDir() &&
 		(strings.HasSuffix(l, ".zip") || strings.HasSuffix(l, ".rar") || strings.HasSuffix(l, ".r00")) {
-		return map[string][]string{path: []string{path}} // passed in an archive file; send it back out.
+		return map[string][]string{path: {path}} // passed in an archive file; send it back out.
 	}
 
 	fileList, err := dir.Readdir(-1)
