@@ -33,17 +33,17 @@ type Xtract struct {
 // call by chcking Response.Done. false = started, true = finished. When done=false
 // the only other meaningful data provided is the re.Archives, re.Output and re.Queue.
 type Response struct {
-	Done     bool          // Extract Started (false) or Finished (true).
-	Size     int64         // Size of data written.
-	Output   string        // Temporary output folder.
-	Queued   int           // Items still in queue.
-	Started  time.Time     // When this extract began.
-	Elapsed  time.Duration // Elapsed extraction duration. ie. How long it took.
-	Extras   []string      // Extra archives extracted from within an archive.
-	Archives []string      // Initial archives found and extracted.
-	NewFiles []string      // Files written to final path.
-	Error    error         // Error encountered, only when done=true.
-	X        *Xtract       // Copied from input data.
+	Done     bool                // Extract Started (false) or Finished (true).
+	Size     int64               // Size of data written.
+	Output   string              // Temporary output folder.
+	Queued   int                 // Items still in queue.
+	Started  time.Time           // When this extract began.
+	Elapsed  time.Duration       // Elapsed extraction duration. ie. How long it took.
+	Extras   map[string][]string // Extra archives extracted from within an archive.
+	Archives map[string][]string // Initial archives found and extracted.
+	NewFiles []string            // Files written to final path.
+	Error    error               // Error encountered, only when done=true.
+	X        *Xtract             // Copied from input data.
 }
 
 // Extract is how external code begins an extraction process against a path.
@@ -169,25 +169,27 @@ func (x *Xtractr) decompressFiles(resp *Response) error {
 }
 
 func (x *Xtractr) decompressArchives(resp *Response) error {
-	allArchives := []string{}
+	for parentDir, archives := range resp.Archives {
+		allArchives := []string{}
 
-	for _, archive := range resp.Archives {
-		bytes, files, archives, err := x.processArchive(archive, resp.Output, resp.X.Password)
-		// Make sure these get added even with an error.
-		if resp.Size += bytes; files != nil {
-			resp.NewFiles = append(resp.NewFiles, files...)
+		for _, archive := range archives {
+			bytes, files, archives, err := x.processArchive(archive, resp.Output, resp.X.Password)
+			// Make sure these get added even with an error.
+			if resp.Size += bytes; files != nil {
+				resp.NewFiles = append(resp.NewFiles, files...)
+			}
+
+			if len(archives) != 0 {
+				allArchives = append(allArchives, archives...)
+			}
+
+			if err != nil {
+				return err
+			}
 		}
 
-		if len(archives) != 0 {
-			allArchives = append(allArchives, archives...)
-		}
-
-		if err != nil {
-			return err
-		}
+		resp.Archives[parentDir] = allArchives
 	}
-
-	resp.Archives = allArchives
 
 	return nil
 }
@@ -231,10 +233,14 @@ func (x *Xtractr) cleanupProcessedArchives(resp *Response) error {
 	}
 
 	if resp.X.DeleteOrig {
-		x.DeleteFiles(resp.Archives...) // as requested
+		for _, archives := range resp.Archives {
+			x.DeleteFiles(archives...) // as requested
+		}
 
-		if len(resp.Extras) != 0 {
-			x.DeleteFiles(resp.Extras...) // these got extracted too
+		for _, archives := range resp.Extras {
+			if len(archives) != 0 {
+				x.DeleteFiles(archives...) // these got extracted too
+			}
 		}
 	}
 
