@@ -48,6 +48,8 @@ func TestWithTempFolder(t *testing.T) {
 	t.Parallel()
 
 	queue := xtractr.NewQueue(&xtractr.Config{Logger: &testLogger{t: t}})
+	defer queue.Stop()
+
 	xFile := &xtractr.Xtract{
 		Name:       "SomeItem",
 		SearchPath: testSetupTestDir(t),
@@ -84,6 +86,8 @@ func TestNoTempFolder(t *testing.T) {
 	t.Parallel()
 
 	queue := xtractr.NewQueue(&xtractr.Config{Logger: &testLogger{t: t}})
+	defer queue.Stop()
+
 	xFile := &xtractr.Xtract{
 		Name:       "SomeItem",
 		SearchPath: testSetupTestDir(t),

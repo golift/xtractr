@@ -99,14 +99,19 @@ func (x *Xtractr) extract(ext *Xtract) {
 	}
 
 	// Create another pointer to avoid race conditions in the callbacks above.
-	resp = &Response{
+	resp2 := &Response{
 		X:        ext,
 		Started:  resp.Started,
 		Output:   resp.Output,
-		Archives: resp.Archives,
+		Archives: make(map[string][]string),
 	}
+
+	for k, v := range resp.Archives {
+		resp2.Archives[k] = append(resp2.Archives[k], v...)
+	}
+
 	// e.log("Starting: %d archives - %v", len(resp.Archives), ex.SearchPath)
-	x.finishExtract(resp, x.decompressFolders(resp))
+	x.finishExtract(resp2, x.decompressFolders(resp2))
 }
 
 // decompressFolders extracts each folder individually,
