@@ -125,7 +125,7 @@ func (x *Xtractr) decompressFolders(resp *Response) error {
 				LogFile:    resp.X.LogFile,
 			},
 			Started:  resp.Started,
-			Output:   filepath.Join(resp.Output, strings.TrimPrefix(resp.X.SearchPath, subDir)),
+			Output:   filepath.Join(resp.Output, strings.TrimPrefix(subDir, resp.X.SearchPath)),
 			Archives: map[string][]string{subDir: resp.Archives[subDir]},
 		}
 
