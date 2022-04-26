@@ -153,6 +153,10 @@ func (x *Xtractr) decompressFolders(resp *Response) error {
 }
 
 func (x *Xtractr) finishExtract(resp *Response, err error) {
+	if resp.X.TempFolder {
+		x.cleanTempFolder(resp)
+	}
+
 	resp.Error = err
 	resp.Elapsed = time.Since(resp.Started)
 	resp.Done = true
@@ -265,40 +269,73 @@ func (x *Xtractr) processArchive(filename, tmpPath string, passwords ...string) 
 
 func (x *Xtractr) cleanupProcessedArchives(resp *Response) error {
 	if resp.X.LogFile {
-		tmpFile := filepath.Join(resp.Output, x.config.Suffix+"."+filepath.Base(resp.X.SearchPath)+".txt")
-		resp.NewFiles = append(resp.NewFiles, tmpFile)
-
-		msg := []byte(fmt.Sprintf("# %s - this file may be removed with the extracted data\n---\n"+
-			"archives:%s\nextras:%v\nfrom_path:%s\ntemp_path:%s\nrelocated:%v\ntime:%v\nfiles:\n  - %v\n",
-			x.config.Suffix, resp.Archives, resp.Extras, resp.X.SearchPath, resp.Output, !resp.X.TempFolder, time.Now(),
-			strings.Join(resp.NewFiles, "\n  - ")))
-
-		if err := ioutil.WriteFile(tmpFile, msg, x.config.FileMode); err != nil {
-			x.config.Printf("Error: Creating Temporary Tracking File: %v", err) // continue anyway.
-		}
+		x.createLogFile(resp)
 	}
 
 	if resp.X.DeleteOrig {
-		for _, archives := range resp.Archives {
-			x.DeleteFiles(archives...) // as requested
-		}
-
-		for _, archives := range resp.Extras {
-			if len(archives) != 0 {
-				x.DeleteFiles(archives...) // these got extracted too
-			}
-		}
+		// as requested
+		x.deleteOriginals(resp)
 	}
 
 	var err error
 
-	// If TempFolder is false then move the files back to the original location.
 	if !resp.X.TempFolder {
+		// If TempFolder is false then move the files back to the original location.
 		resp.NewFiles, err = x.MoveFiles(resp.Output, resp.X.SearchPath, false)
-	} else if len(x.GetFileList(resp.X.SearchPath)) == 0 {
+	}
+
+	if len(x.GetFileList(resp.X.SearchPath)) == 0 {
 		// If the original path is empty, delete it.
 		x.DeleteFiles(resp.X.SearchPath)
 	}
 
 	return err
+}
+
+func (x *Xtractr) createLogFile(resp *Response) {
+	tmpFile := filepath.Join(resp.Output, x.config.Suffix+"."+filepath.Base(resp.X.SearchPath)+".txt")
+	resp.NewFiles = append(resp.NewFiles, tmpFile)
+
+	msg := []byte(fmt.Sprintf("# %s - this file may be removed with the extracted data\n---\n"+
+		"archives:%s\nextras:%v\nfrom_path:%s\ntemp_path:%s\nrelocated:%v\ntime:%v\nfiles:\n  - %v\n",
+		x.config.Suffix, resp.Archives, resp.Extras, resp.X.SearchPath, resp.Output, !resp.X.TempFolder, time.Now(),
+		strings.Join(resp.NewFiles, "\n  - ")))
+
+	if err := ioutil.WriteFile(tmpFile, msg, x.config.FileMode); err != nil {
+		x.config.Printf("Error: Creating Temporary Tracking File: %v", err)
+	}
+}
+
+func (x *Xtractr) deleteOriginals(resp *Response) {
+	for _, archives := range resp.Archives {
+		x.DeleteFiles(archives...)
+	}
+	// these got extracted too
+	for _, archives := range resp.Extras {
+		if len(archives) != 0 {
+			x.DeleteFiles(archives...)
+		}
+	}
+}
+
+func (x *Xtractr) cleanTempFolder(resp *Response) {
+	noSuffix := strings.TrimSuffix(strings.TrimRight(resp.Output, `/\`), x.config.Suffix)
+	if _, err := os.Stat(noSuffix); err == nil {
+		return // it exists already?!
+	} else if _, err := os.Stat(resp.Output); err != nil {
+		return
+	}
+
+	if newFiles, err := x.MoveFiles(resp.Output, noSuffix, false); err != nil {
+		x.config.Printf("Error: Renaming Temporary Folder: %v", err)
+	} else {
+		x.config.Debugf("Renamed Temp Folder: %v -> %v", resp.Output, noSuffix)
+		resp.Output = noSuffix
+		resp.NewFiles = newFiles
+	}
+
+	if len(x.GetFileList(resp.X.SearchPath)) == 0 {
+		// If the original path is empty, delete it.
+		x.DeleteFiles(resp.X.SearchPath)
+	}
 }
