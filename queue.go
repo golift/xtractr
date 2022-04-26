@@ -55,8 +55,9 @@ func (x *Xtractr) Extract(ex *Xtract) (int, error) {
 	}
 
 	x.queue <- ex // goes to processQueue()
+	queueSize := len(x.queue) + 1
 
-	return len(x.queue), nil
+	return queueSize, nil
 }
 
 // processQueue runs in a go routine, 'e.Parallel' times,

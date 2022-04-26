@@ -61,7 +61,7 @@ func TestWithTempFolder(t *testing.T) {
 	}
 
 	depth, err := queue.Extract(xFile)
-	assert.Equal(t, 0, depth, "there should be 1 item queued now")
+	assert.Equal(t, 1, depth, "there should be 1 item queued now")
 	assert.NoError(t, err, "why is there an error?!")
 
 	for resp := range xFile.CBChannel {
@@ -69,7 +69,8 @@ func TestWithTempFolder(t *testing.T) {
 		assert.Equal(t, 4, len(resp.Archives), "four directories have archives in them")
 
 		if resp.Done {
-			assert.Equal(t, len(filesInTestArchive)*4+4, len(resp.NewFiles), "wrong count of files were extracted")
+			assert.Equal(t, len(filesInTestArchive)*4+4, len(resp.NewFiles),
+				"wrong count of files were extracted, log files must be written too!")
 			assert.Equal(t, testDataSize*4, resp.Size, "wrong amount of data was written")
 
 			break
@@ -99,7 +100,7 @@ func TestNoTempFolder(t *testing.T) {
 	}
 
 	depth, err := queue.Extract(xFile)
-	assert.Equal(t, 0, depth, "there should be 1 item queued now")
+	assert.Equal(t, 1, depth, "there should be 1 item queued now")
 	assert.NoError(t, err, "why is there an error?!")
 
 	for resp := range xFile.CBChannel {
@@ -135,7 +136,7 @@ func testSetupTestDir(t *testing.T) string {
 	}
 
 	for _, sub := range []string{"subDir1", "subDir2", "subDir3"} {
-		err = os.MkdirAll(filepath.Join(name, "subDirectory", sub), 0o755)
+		err = os.MkdirAll(filepath.Join(name, "subDirectory", sub), xtractr.DefaultDirMode)
 		if err != nil {
 			t.Fatalf("could not make temporary directory: %v", err)
 		}
