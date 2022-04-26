@@ -41,12 +41,12 @@ func openRAR(xFile *XFile) (*rardecode.ReadCloser, error) {
 	// Try all the passwords.
 	for _, password := range append(xFile.Passwords, xFile.Password) {
 		rarReader, err := rardecode.OpenReader(xFile.FilePath, password)
-		if strings.Contains(err.Error(), "bad password") {
-			// https://github.com/nwaples/rardecode/issues/28
-			continue
-		}
-
 		if err != nil {
+			// https://github.com/nwaples/rardecode/issues/28
+			if strings.Contains(err.Error(), "bad password") {
+				continue
+			}
+
 			return rarReader, fmt.Errorf("rardecode.OpenReader: %w", err)
 		}
 

@@ -19,7 +19,7 @@ type XFile struct {
 	OutputDir string      // Folder to extract archive into.
 	FileMode  os.FileMode // Write files with this mode.
 	DirMode   os.FileMode // Write folders with this mode.
-	Password  string      // (RAR) Archive password. Blank for none.
+	Password  string      // (RAR) Archive password. Blank for none. Gets appended to Passwords, below.
 	Passwords []string    // (RAR) Archive passwords (to try multiple).
 }
 
