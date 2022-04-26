@@ -49,13 +49,13 @@ type Response struct {
 // Extract is how external code begins an extraction process against a path.
 // To add an item to the extraction queue, create an Xtract struct with the
 // search path set and pass it to this method. The current queue size is returned.
-func (x *Xtractr) Extract(ex *Xtract) (int, error) {
+func (x *Xtractr) Extract(extract *Xtract) (int, error) {
 	if x.queue == nil {
 		return -1, ErrQueueStopped
 	}
 
-	x.queue <- ex // goes to processQueue()
 	queueSize := len(x.queue) + 1
+	x.queue <- extract // goes to processQueue()
 
 	return queueSize, nil
 }
