@@ -39,7 +39,9 @@ func openRAR(xFile *XFile) (*rardecode.ReadCloser, error) {
 	}
 
 	// Try all the passwords.
-	for _, password := range append(xFile.Passwords, xFile.Password) {
+	passwords := append(xFile.Passwords, xFile.Password)
+
+	for idx, password := range passwords {
 		rarReader, err := rardecode.OpenReader(xFile.FilePath, password)
 		if err != nil {
 			// https://github.com/nwaples/rardecode/issues/28
@@ -47,7 +49,7 @@ func openRAR(xFile *XFile) (*rardecode.ReadCloser, error) {
 				continue
 			}
 
-			return rarReader, fmt.Errorf("rardecode.OpenReader: %w", err)
+			return rarReader, fmt.Errorf("used password %d of %d, rardecode.OpenReader: %w", idx+1, len(passwords), err)
 		}
 
 		return rarReader, nil
@@ -56,7 +58,7 @@ func openRAR(xFile *XFile) (*rardecode.ReadCloser, error) {
 	// No password worked, try without a password.
 	rarReader, err := rardecode.OpenReader(xFile.FilePath, "")
 	if err != nil {
-		return rarReader, fmt.Errorf("rardecode.OpenReader: %w", err)
+		return rarReader, fmt.Errorf("after trying %d passwords, rardecode.OpenReader: %w", len(passwords), err)
 	}
 
 	return rarReader, nil
