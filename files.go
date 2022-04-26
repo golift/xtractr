@@ -66,7 +66,7 @@ func Difference(slice1 []string, slice2 []string) (diff []string) {
 // considered an independent archive. Some packagers seem to use different naming schemes,
 // so this will need to be updated as time progresses. So far it's working well.
 // This is a helper method and only exposed for convenience. You do not have to call this.
-func FindCompressedFiles(path string) []string {
+func FindCompressedFiles(path string) map[string][]string {
 	dir, err := os.Open(path)
 	if err != nil {
 		return nil
@@ -77,7 +77,7 @@ func FindCompressedFiles(path string) []string {
 		return nil // unreadable folder?
 	} else if l := strings.ToLower(path); !info.IsDir() &&
 		(strings.HasSuffix(l, ".zip") || strings.HasSuffix(l, ".rar") || strings.HasSuffix(l, ".r00")) {
-		return []string{path} // passed in an archive file; send it back out.
+		return map[string][]string{path: {path}} // passed in an archive file; send it back out.
 	}
 
 	fileList, err := dir.Readdir(-1)
@@ -94,29 +94,31 @@ func FindCompressedFiles(path string) []string {
 
 // getCompressedFiles checks file suffixes to find archives to decompress.
 // This pays special attention to the widely accepted variance of rar formats.
-func getCompressedFiles(hasrar bool, path string, fileList []os.FileInfo) []string { //nolint:cyclop
-	files := []string{}
+func getCompressedFiles(hasrar bool, path string, fileList []os.FileInfo) map[string][]string { //nolint:cyclop
+	files := map[string][]string{}
 
 	for _, file := range fileList {
 		switch lowerName := strings.ToLower(file.Name()); {
 		case lowerName == "" || lowerName[0] == '.':
 			continue // ignore empty names and dot files/folders.
 		case file.IsDir(): // Recurse.
-			files = append(files, FindCompressedFiles(filepath.Join(path, file.Name()))...)
+			for k, v := range FindCompressedFiles(filepath.Join(path, file.Name())) {
+				files[k] = v
+			}
 		case strings.HasSuffix(lowerName, ".zip") || strings.HasSuffix(lowerName, ".tar") ||
 			strings.HasSuffix(lowerName, ".tgz") || strings.HasSuffix(lowerName, ".gz") ||
 			strings.HasSuffix(lowerName, ".bz2") || strings.HasSuffix(lowerName, ".7z"):
-			files = append(files, filepath.Join(path, file.Name()))
+			files[path] = append(files[path], filepath.Join(path, file.Name()))
 		case strings.HasSuffix(lowerName, ".rar"):
 			hasParts := regexp.MustCompile(`.*\.part[0-9]+\.rar$`)
 			partOne := regexp.MustCompile(`.*\.part0*1\.rar$`)
 			// Some archives are named poorly. Only return part01 or part001, not all.
 			if !hasParts.Match([]byte(lowerName)) || partOne.Match([]byte(lowerName)) {
-				files = append(files, filepath.Join(path, file.Name()))
+				files[path] = append(files[path], filepath.Join(path, file.Name()))
 			}
 		case !hasrar && strings.HasSuffix(lowerName, ".r00"):
 			// Accept .r00 as the first archive file if no .rar files are present in the path.
-			files = append(files, filepath.Join(path, file.Name()))
+			files[path] = append(files[path], filepath.Join(path, file.Name()))
 		}
 	}
 
