@@ -13,8 +13,44 @@ import (
 	"github.com/nwaples/rardecode"
 )
 
-// ExtractRAR extracts a rar file. to a destination. This wraps github.com/nwaples/rardecode.
 func ExtractRAR(xFile *XFile) (int64, []string, []string, error) {
+	if len(xFile.Passwords) == 0 && xFile.Password == "" {
+		return extractRAR(xFile)
+	}
+
+	// Try all the passwords.
+	passwords := append(xFile.Passwords, xFile.Password) // nolint:gocritic
+	for idx, password := range passwords {
+		size, files, archives, err := extractRAR(&XFile{
+			FilePath:  xFile.FilePath,
+			OutputDir: xFile.OutputDir,
+			FileMode:  xFile.FileMode,
+			DirMode:   xFile.DirMode,
+			Password:  password,
+		})
+		if err == nil {
+			return size, files, archives, nil
+		}
+
+		// https://github.com/nwaples/rardecode/issues/28
+		if strings.Contains(err.Error(), "incorrect password") {
+			continue
+		}
+
+		return size, files, archives, fmt.Errorf("used password %d of %d: %w", idx+1, len(passwords), err)
+	}
+
+	// No password worked, try without a password.
+	return extractRAR(&XFile{
+		FilePath:  xFile.FilePath,
+		OutputDir: xFile.OutputDir,
+		FileMode:  xFile.FileMode,
+		DirMode:   xFile.DirMode,
+	})
+}
+
+// ExtractRAR extracts a rar file. to a destination. This wraps github.com/nwaples/rardecode.
+func extractRAR(xFile *XFile) (int64, []string, []string, error) {
 	rarReader, err := rardecode.OpenReader(xFile.FilePath, xFile.Password)
 	if err != nil {
 		return 0, nil, nil, fmt.Errorf("rardecode.OpenReader: %w", err)
@@ -43,9 +79,11 @@ func (x *XFile) unrar(rarReader *rardecode.ReadCloser) (int64, []string, error) 
 		}
 
 		wfile := x.clean(header.Name)
-		if !strings.HasPrefix(wfile, x.OutputDir) {
+		// nolint:gocritic // this 1-argument filepath.Join removes a ./ prefix should there be one.
+		if !strings.HasPrefix(wfile, filepath.Join(x.OutputDir)) {
 			// The file being written is trying to write outside of our base path. Malicious archive?
-			return size, files, fmt.Errorf("%s: %w: %s (from: %s)", x.FilePath, ErrInvalidPath, wfile, header.Name)
+			return size, files, fmt.Errorf("%s: %w: %s != %s (from: %s)",
+				x.FilePath, ErrInvalidPath, wfile, x.OutputDir, header.Name)
 		}
 
 		if header.IsDir {
