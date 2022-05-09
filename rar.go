@@ -19,7 +19,7 @@ func ExtractRAR(xFile *XFile) (int64, []string, []string, error) {
 	}
 
 	// Try all the passwords.
-	passwords := append(xFile.Passwords, xFile.Password) // nolint:gocritic
+	passwords := append([]string{xFile.Password}, xFile.Passwords...) // nolint:gocritic
 	for idx, password := range passwords {
 		size, files, archives, err := extractRAR(&XFile{
 			FilePath:  xFile.FilePath,
