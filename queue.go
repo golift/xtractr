@@ -126,6 +126,7 @@ func (x *Xtractr) decompressFolders(resp *Response) error {
 				SearchPath: subDir,
 				Name:       resp.X.Name,
 				Password:   resp.X.Password,
+				Passwords:  resp.X.Passwords,
 				ExtractTo:  resp.X.ExtractTo,
 				DeleteOrig: resp.X.DeleteOrig,
 				TempFolder: resp.X.TempFolder,
@@ -223,7 +224,7 @@ func (x *Xtractr) decompressArchives(resp *Response) error {
 		allArchives := []string{}
 
 		for _, archive := range archives {
-			bytes, files, archives, err := x.processArchive(archive, resp.Output, append(resp.X.Passwords, resp.X.Password)...)
+			bytes, files, archives, err := x.processArchive(archive, resp)
 			// Make sure these get added even with an error.
 			if resp.Size += bytes; files != nil {
 				resp.NewFiles = append(resp.NewFiles, files...)
@@ -246,22 +247,23 @@ func (x *Xtractr) decompressArchives(resp *Response) error {
 
 // processArchives extracts one archive at a time.
 // Returns list of archive files extracted, size of data written and files written.
-func (x *Xtractr) processArchive(filename, tmpPath string, passwords ...string) (int64, []string, []string, error) {
-	if err := os.MkdirAll(tmpPath, x.config.DirMode); err != nil {
+func (x *Xtractr) processArchive(filename string, resp *Response) (int64, []string, []string, error) {
+	if err := os.MkdirAll(resp.Output, x.config.DirMode); err != nil {
 		return 0, nil, nil, fmt.Errorf("os.MkdirAll: %w", err)
 	}
 
-	x.config.Debugf("Extracting File: %v to %v", filename, tmpPath)
+	x.config.Debugf("Extracting File: %v to %v", filename, resp.Output)
 
 	bytes, files, archives, err := ExtractFile(&XFile{ // extract the file.
 		FilePath:  filename,
-		OutputDir: tmpPath,
+		OutputDir: resp.Output,
 		FileMode:  x.config.FileMode,
 		DirMode:   x.config.DirMode,
-		Passwords: passwords,
+		Passwords: resp.X.Passwords,
+		Password:  resp.X.Password,
 	})
 	if err != nil {
-		x.DeleteFiles(tmpPath) // clean up the mess after an error and bail.
+		x.DeleteFiles(resp.Output) // clean up the mess after an error and bail.
 	}
 
 	return bytes, files, archives, err

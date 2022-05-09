@@ -22,7 +22,7 @@ func ExtractRAR(xFile *XFile) (int64, []string, []string, error) {
 	passwords := xFile.Passwords
 
 	if xFile.Password != "" { // If a single password is provided, try it first.
-		passwords = append([]string{xFile.Password}, xFile.Passwords...) // nolint:gocritic
+		passwords = append([]string{xFile.Password}, xFile.Passwords...)
 	}
 
 	for idx, password := range passwords {
