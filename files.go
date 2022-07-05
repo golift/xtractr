@@ -26,7 +26,9 @@ type XFile struct {
 // GetFileList returns all the files in a path.
 // This is non-resursive and only returns files _in_ the base path provided.
 // This is a helper method and only exposed for convenience. You do not have to call this.
-func (x *Xtractr) GetFileList(path string) (files []string) {
+func (x *Xtractr) GetFileList(path string) []string {
+	files := []string{}
+
 	if fileList, err := ioutil.ReadDir(path); err == nil {
 		for _, file := range fileList {
 			files = append(files, filepath.Join(path, file.Name()))
@@ -35,13 +37,15 @@ func (x *Xtractr) GetFileList(path string) (files []string) {
 		x.config.Printf("Error: Reading path '%s': %v", path, err)
 	}
 
-	return
+	return files
 }
 
 // Difference returns all the strings that are in slice2 but not in slice1.
 // Used to find new files in a file list from a path. ie. those we extracted.
 // This is a helper method and only exposed for convenience. You do not have to call this.
-func Difference(slice1 []string, slice2 []string) (diff []string) {
+func Difference(slice1 []string, slice2 []string) []string {
+	diff := []string{}
+
 	for _, s2p := range slice2 {
 		var found bool
 
