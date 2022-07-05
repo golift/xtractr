@@ -106,6 +106,7 @@ func (x *Xtractr) extract(ext *Xtract) {
 		Started:  resp.Started,
 		Output:   resp.Output,
 		Archives: make(map[string][]string),
+		Extras:   make(map[string][]string),
 	}
 
 	for k, v := range resp.Archives {
@@ -144,8 +145,8 @@ func (x *Xtractr) decompressFolders(resp *Response) error {
 			return err
 		}
 
-		for k, v := range subResp.Archives {
-			resp.Archives[k] = append(resp.Archives[k], v...)
+		for k, v := range subResp.Extras {
+			resp.Extras[k] = append(resp.Extras[k], v...)
 		}
 	}
 
