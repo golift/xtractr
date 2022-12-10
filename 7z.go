@@ -9,12 +9,55 @@ import (
 	"github.com/bodgit/sevenzip"
 )
 
-// Extract7z extracts a 7zip archive. This wraps https://github.com/saracen/go7z.
+// Extract7z extracts a 7zip archive.
+// Volumes: https://github.com/bodgit/sevenzip/issues/54
 func Extract7z(xFile *XFile) (int64, []string, error) {
-	sevenZip, err := sevenzip.OpenReader(xFile.FilePath)
+	if len(xFile.Passwords) == 0 && xFile.Password == "" {
+		return extract7z(xFile)
+	}
+
+	// Try all the passwords.
+	passwords := xFile.Passwords
+
+	if xFile.Password != "" { // If a single password is provided, try it first.
+		passwords = append([]string{xFile.Password}, xFile.Passwords...)
+	}
+
+	for idx, password := range passwords {
+		size, files, err := extract7z(&XFile{
+			FilePath:  xFile.FilePath,
+			OutputDir: xFile.OutputDir,
+			FileMode:  xFile.FileMode,
+			DirMode:   xFile.DirMode,
+			Password:  password,
+		})
+		if err != nil && idx == len(passwords)-1 {
+			return size, files, fmt.Errorf("used password %d of %d: %w", idx+1, len(passwords), err)
+		} else if err == nil {
+			return size, files, nil
+		}
+	}
+
+	// unreachable code
+	return 0, nil, nil
+}
+
+func extract7z(xFile *XFile) (int64, []string, error) {
+	var (
+		sevenZip *sevenzip.ReadCloser
+		err      error
+	)
+
+	if xFile.Password != "" {
+		sevenZip, err = sevenzip.OpenReaderWithPassword(xFile.FilePath, xFile.Password)
+	} else {
+		sevenZip, err = sevenzip.OpenReader(xFile.FilePath)
+	}
+
 	if err != nil {
 		return 0, nil, fmt.Errorf("os.Open: %w", err)
 	}
+
 	defer sevenZip.Close()
 
 	files := []string{}
