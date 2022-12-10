@@ -26,18 +26,18 @@ type XFile struct {
 // GetFileList returns all the files in a path.
 // This is non-resursive and only returns files _in_ the base path provided.
 // This is a helper method and only exposed for convenience. You do not have to call this.
-func (x *Xtractr) GetFileList(path string) []string {
-	files := []string{}
-
-	if fileList, err := ioutil.ReadDir(path); err == nil {
-		for _, file := range fileList {
-			files = append(files, filepath.Join(path, file.Name()))
-		}
-	} else {
-		x.config.Printf("Error: Reading path '%s': %v", path, err)
+func (x *Xtractr) GetFileList(path string) ([]string, error) {
+	fileList, err := ioutil.ReadDir(path)
+	if err != nil {
+		return nil, fmt.Errorf("reading path %s: %w", path, err)
 	}
 
-	return files
+	files := make([]string, len(fileList))
+	for idx, file := range fileList {
+		files[idx] = filepath.Join(path, file.Name())
+	}
+
+	return files, nil
 }
 
 // Difference returns all the strings that are in slice2 but not in slice1.
@@ -175,10 +175,14 @@ func ExtractFile(xFile *XFile) (int64, []string, []string, error) {
 // This is a helper method and only exposed for convenience. You do not have to call this.
 func (x *Xtractr) MoveFiles(fromPath string, toPath string, overwrite bool) ([]string, error) {
 	var (
-		files    = x.GetFileList(fromPath)
-		newFiles = []string{}
-		keepErr  error
+		files, err = x.GetFileList(fromPath)
+		newFiles   = []string{}
+		keepErr    error
 	)
+
+	if err != nil {
+		return nil, err
+	}
 
 	if err := os.MkdirAll(toPath, x.config.DirMode); err != nil {
 		return nil, fmt.Errorf("os.MkDirAll: %w", err)
