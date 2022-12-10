@@ -5,7 +5,6 @@ package xtractr
 import (
 	"fmt"
 	"io"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -29,7 +28,7 @@ type XFile struct {
 func (x *Xtractr) GetFileList(path string) []string {
 	files := []string{}
 
-	if fileList, err := ioutil.ReadDir(path); err == nil {
+	if fileList, err := os.ReadDir(path); err == nil {
 		for _, file := range fileList {
 			files = append(files, filepath.Join(path, file.Name()))
 		}

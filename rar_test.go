@@ -1,7 +1,6 @@
 package xtractr_test
 
 import (
-	"io/ioutil"
 	"os"
 	"testing"
 
@@ -12,7 +11,7 @@ import (
 func TestExtractRAR(t *testing.T) {
 	t.Parallel()
 
-	name, err := ioutil.TempDir(".", "xtractr_test_*_data")
+	name, err := os.MkdirTemp(".", "xtractr_test_*_data")
 	if err != nil {
 		t.Fatalf("could not make temporary directory: %v", err)
 	}

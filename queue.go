@@ -4,7 +4,6 @@ package xtractr
 
 import (
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strings"
@@ -304,7 +303,7 @@ func (x *Xtractr) createLogFile(resp *Response) {
 		x.config.Suffix, resp.Archives, resp.Extras, resp.X.SearchPath, resp.Output, !resp.X.TempFolder, time.Now(),
 		strings.Join(resp.NewFiles, "\n  - ")))
 
-	if err := ioutil.WriteFile(tmpFile, msg, x.config.FileMode); err != nil {
+	if err := os.WriteFile(tmpFile, msg, x.config.FileMode); err != nil {
 		x.config.Printf("Error: Creating Temporary Tracking File: %v", err)
 	}
 }
