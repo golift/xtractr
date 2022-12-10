@@ -10,7 +10,7 @@ test: lint
 
 lint:
 	golangci-lint --version
-	GOOS=linux golangci-lint run --enable-all -D nlreturn,exhaustivestruct,interfacer,golint,scopelint,maligned
-	GOOS=darwin golangci-lint run --enable-all -D nlreturn,exhaustivestruct,interfacer,golint,scopelint,maligned
-	GOOS=windows golangci-lint run --enable-all -D nlreturn,exhaustivestruct,interfacer,golint,scopelint,maligned
-	GOOS=freebsd golangci-lint run --enable-all -D nlreturn,exhaustivestruct,interfacer,golint,scopelint,maligned
+	GOOS=linux golangci-lint run
+	GOOS=darwin golangci-lint run
+	GOOS=windows golangci-lint run
+	GOOS=freebsd golangci-lint run
