@@ -285,12 +285,21 @@ func (x *Xtractr) cleanupProcessedArchives(resp *Response) error {
 		resp.NewFiles, err = x.MoveFiles(resp.Output, resp.X.SearchPath, false)
 	}
 
-	if len(x.GetFileList(resp.X.SearchPath)) == 0 {
+	if err != nil {
+		return err
+	}
+
+	files, err := x.GetFileList(resp.X.SearchPath)
+	if err != nil {
+		return err
+	}
+
+	if len(files) == 0 {
 		// If the original path is empty, delete it.
 		x.DeleteFiles(resp.X.SearchPath)
 	}
 
-	return err
+	return nil
 }
 
 func (x *Xtractr) createLogFile(resp *Response) {
@@ -335,7 +344,13 @@ func (x *Xtractr) cleanTempFolder(resp *Response) {
 		resp.NewFiles = newFiles
 	}
 
-	if len(x.GetFileList(resp.X.SearchPath)) == 0 {
+	files, err := x.GetFileList(resp.X.SearchPath)
+	if err != nil {
+		x.config.Printf("Error: Reading SearchPath: %v", err)
+		return
+	}
+
+	if len(files) == 0 {
 		// If the original path is empty, delete it.
 		x.DeleteFiles(resp.X.SearchPath)
 	}
