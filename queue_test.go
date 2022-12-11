@@ -51,7 +51,7 @@ func TestWithTempFolder(t *testing.T) {
 
 	xFile := &xtractr.Xtract{
 		Name:       "SomeItem",
-		SearchPath: testSetupTestDir(t),
+		Filter:     xtractr.Filter{Path: testSetupTestDir(t)},
 		TempFolder: true,
 		DeleteOrig: false,
 		Password:   "some_password",
@@ -78,8 +78,8 @@ func TestWithTempFolder(t *testing.T) {
 
 	// test written files here?
 	// each directory should have its own files.
-	os.RemoveAll(xFile.SearchPath)
-	os.RemoveAll(xFile.SearchPath + xtractr.DefaultSuffix)
+	os.RemoveAll(xFile.Path)
+	os.RemoveAll(xFile.Path + xtractr.DefaultSuffix)
 }
 
 func TestNoTempFolder(t *testing.T) {
@@ -90,7 +90,7 @@ func TestNoTempFolder(t *testing.T) {
 
 	xFile := &xtractr.Xtract{
 		Name:       "SomeItem",
-		SearchPath: testSetupTestDir(t),
+		Filter:     xtractr.Filter{Path: testSetupTestDir(t)},
 		TempFolder: false,
 		DeleteOrig: true,
 		Password:   "some_password",
@@ -116,8 +116,8 @@ func TestNoTempFolder(t *testing.T) {
 
 	// test written files here?
 	// each directory should have its own files.
-	os.RemoveAll(xFile.SearchPath)
-	os.RemoveAll(xFile.SearchPath + xtractr.DefaultSuffix)
+	os.RemoveAll(xFile.Path)
+	os.RemoveAll(xFile.Path + xtractr.DefaultSuffix)
 }
 
 // testSetupTestDir creates a temp directory with 4 copies of a rar archive in it.
