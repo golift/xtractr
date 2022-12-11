@@ -64,7 +64,12 @@ func extractRAR(xFile *XFile) (int64, []string, []string, error) {
 
 	size, files, err := xFile.unrar(rarReader)
 
-	return size, files, rarReader.Volumes(), err
+	lastFile := xFile.FilePath
+	if volumes := rarReader.Volumes(); len(volumes) > 0 {
+		lastFile = volumes[len(volumes)-1]
+	}
+
+	return size, files, rarReader.Volumes(), fmt.Errorf("%s: %w", lastFile, err)
 }
 
 func (x *XFile) unrar(rarReader *rardecode.ReadCloser) (int64, []string, error) {

@@ -104,7 +104,7 @@ func (x *XFile) untar(tarReader *tar.Reader) (int64, []string, error) {
 		case errors.Is(err, io.EOF):
 			return size, files, nil
 		case err != nil:
-			return size, files, fmt.Errorf("tarReader.Next: %w", err)
+			return size, files, fmt.Errorf("%s: tarReader.Next: %w", x.FilePath, err)
 		case header == nil:
 			return size, files, fmt.Errorf("%w: %s", ErrInvalidHead, x.FilePath)
 		}

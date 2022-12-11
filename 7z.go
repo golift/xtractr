@@ -55,7 +55,7 @@ func extract7z(xFile *XFile) (int64, []string, error) {
 	}
 
 	if err != nil {
-		return 0, nil, fmt.Errorf("os.Open: %w", err)
+		return 0, nil, fmt.Errorf("%s: os.Open: %w", xFile.FilePath, err)
 	}
 
 	defer sevenZip.Close()
@@ -66,7 +66,7 @@ func extract7z(xFile *XFile) (int64, []string, error) {
 	for _, zipFile := range sevenZip.File {
 		fSize, err := xFile.un7zip(zipFile)
 		if err != nil {
-			return size, files, err
+			return size, files, fmt.Errorf("%s: %w", xFile.FilePath, err)
 		}
 
 		files = append(files, filepath.Join(xFile.OutputDir, zipFile.Name)) // nolint: gosec
