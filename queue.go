@@ -22,11 +22,12 @@ type Xtract struct {
 	Password string
 	// Archive passwords (try multiple). Only supported with RAR and 7zip files.
 	Passwords []string
-	// Folder path and filters where extractable items are located.
+	// Folder path and filters describing where and how to find archives.
 	Filter
-	// Default is same level as SearchPath with a suffix.
+	// Folder to extract data. Default is same level as SearchPath with a suffix.
 	ExtractTo string
 	// Leave files in temporary folder? false=move files back to Searchpath
+	// Moving files back will cause the "extracted files" returned to only contain top-level items.
 	TempFolder bool
 	// Delete Archives after successful extraction? Be careful.
 	DeleteOrig bool
