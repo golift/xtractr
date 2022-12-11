@@ -48,7 +48,8 @@ func (x *Xtractr) GetFileList(path string) ([]string, error) {
 		return nil, fmt.Errorf("reading path %s: %w", path, err)
 	}
 
-	files := make([]string, len(fileList))
+
+  files := make([]string, len(fileList))
 	for idx, file := range fileList {
 		files[idx] = filepath.Join(path, file.Name())
 	}

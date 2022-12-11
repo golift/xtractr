@@ -6,6 +6,7 @@ Can also be used ad-hoc for direct decompression and extraction. See docs.
 -   [GoDoc](https://pkg.go.dev/golift.io/xtractr)
 -   Works on Linux, Windows, FreeBSD and macOS **without Cgo**.
 -   Supports 32 and 64 bit architectures.
+-   Decrypts RAR and 7-Zip archives with passwords.
 
 # Examples
 
@@ -134,6 +135,6 @@ type XFile struct {
 	OutputDir string      // Folder to extract archive into.
 	FileMode  os.FileMode // Write files with this mode.
 	DirMode   os.FileMode // Write folders with this mode.
-	Password  string      // (RAR) Archive password. Blank for none.
+	Password  string      // (RAR/7z) Archive password. Blank for none.
 }
 ```
