@@ -111,7 +111,7 @@ func getCompressedFiles(hasrar bool, path string, fileList []os.FileInfo) map[st
 			}
 		case strings.HasSuffix(lowerName, ".zip") || strings.HasSuffix(lowerName, ".tar") ||
 			strings.HasSuffix(lowerName, ".tgz") || strings.HasSuffix(lowerName, ".gz") ||
-			strings.HasSuffix(lowerName, ".bz2") || strings.HasSuffix(lowerName, ".7z"):
+			strings.HasSuffix(lowerName, ".bz2") || strings.HasSuffix(lowerName, ".7z") || strings.HasSuffix(lowerName, ".7z.001"):
 			files[path] = append(files[path], filepath.Join(path, file.Name()))
 		case strings.HasSuffix(lowerName, ".rar"):
 			hasParts := regexp.MustCompile(`.*\.part[0-9]+\.rar$`)
@@ -147,7 +147,7 @@ func ExtractFile(xFile *XFile) (int64, []string, []string, error) {
 	switch sName := strings.ToLower(xFile.FilePath); {
 	case strings.HasSuffix(sName, ".rar"), strings.HasSuffix(sName, ".r00"):
 		return ExtractRAR(xFile)
-	case strings.HasSuffix(sName, ".7z"):
+	case strings.HasSuffix(sName, ".7z"), strings.HasSuffix(sName, ".7z.001"):
 		size, files, err = Extract7z(xFile)
 	case strings.HasSuffix(sName, ".zip"):
 		size, files, err = ExtractZIP(xFile)
