@@ -63,13 +63,16 @@ func extractRAR(xFile *XFile) (int64, []string, []string, error) {
 	defer rarReader.Close()
 
 	size, files, err := xFile.unrar(rarReader)
+	if err != nil {
+		lastFile := xFile.FilePath
+		if volumes := rarReader.Volumes(); len(volumes) > 0 {
+			lastFile = volumes[len(volumes)-1]
+		}
 
-	lastFile := xFile.FilePath
-	if volumes := rarReader.Volumes(); len(volumes) > 0 {
-		lastFile = volumes[len(volumes)-1]
+		return size, files, rarReader.Volumes(), fmt.Errorf("%s: %w", lastFile, err)
 	}
 
-	return size, files, rarReader.Volumes(), fmt.Errorf("%s: %w", lastFile, err)
+	return size, files, rarReader.Volumes(), nil
 }
 
 func (x *XFile) unrar(rarReader *rardecode.ReadCloser) (int64, []string, error) {

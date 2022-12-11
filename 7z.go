@@ -66,7 +66,12 @@ func extract7z(xFile *XFile) (int64, []string, error) {
 	for _, zipFile := range sevenZip.File {
 		fSize, err := xFile.un7zip(zipFile)
 		if err != nil {
-			return size, files, fmt.Errorf("%s: %w", xFile.FilePath, err)
+			lastFile := xFile.FilePath
+			/* // https://github.com/bodgit/sevenzip/issues/54
+			if volumes := sevenZip.Volumes(); len(volumes) > 0 {
+				lastFile = volumes[len(volumes)-1]
+			} */
+			return size, files, fmt.Errorf("%s: %w", lastFile, err)
 		}
 
 		files = append(files, filepath.Join(xFile.OutputDir, zipFile.Name)) // nolint: gosec

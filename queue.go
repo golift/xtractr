@@ -60,7 +60,7 @@ func (x *Xtractr) Extract(extract *Xtract) (int, error) {
 	return queueSize, nil
 }
 
-// processQueue runs in a go routine, 'e.Parallel' times,
+// processQueue runs in a go routine, 'x.Parallel' times,
 // and watches for things to extract.
 func (x *Xtractr) processQueue() {
 	for ex := range x.queue { // extractions come from Extract()
@@ -120,6 +120,8 @@ func (x *Xtractr) extract(ext *Xtract) {
 // or the extracted files may be copied back to where they were extracted from.
 // If the extracted data is not being coppied back, then the tempDir (output) paths match the input paths.
 func (x *Xtractr) decompressFolders(resp *Response) error {
+	allArchives := make(map[string][]string)
+
 	for subDir := range resp.Archives {
 		subResp := &Response{
 			X: &Xtract{
@@ -150,9 +152,11 @@ func (x *Xtractr) decompressFolders(resp *Response) error {
 		}
 
 		for k, v := range subResp.Archives {
-			resp.Archives[k] = append(resp.Archives[k], v...)
+			allArchives[k] = append(allArchives[k], v...)
 		}
 	}
+
+	resp.Archives = allArchives
 
 	return nil
 }
