@@ -16,16 +16,27 @@ import (
 // The CBFunction is called again when the extraction finishes w/ Response.Done=true.
 // The CBFunction channel works the exact same way, except it's a channel instead of a blocking function.
 type Xtract struct {
-	Name       string          // Unused in this app; exposed for calling library.
-	Password   string          // Archive password. Only supported with RAR files.
-	Passwords  []string        // Archive passwords (try multiple). Only supported with RAR files.
-	SearchPath string          // Folder path where extractable items are located.
-	ExtractTo  string          // Default is same level as SearchPath with a suffix.
-	TempFolder bool            // Leave files in temporary folder? false=move files back to Searchpath
-	DeleteOrig bool            // Delete Archives after successful extraction? Be careful.
-	LogFile    bool            // Create a log (.txt) file of the extraction information.
-	CBFunction func(*Response) // Callback Function, runs twice per queued item.
-	CBChannel  chan *Response  // Callback Channel, msg sent twice per queued item.
+	// Unused in this app; exposed for calling library.
+	Name string
+	// Archive password. Only supported with RAR and 7zip files. Prepended to Passwords.
+	Password string
+	// Archive passwords (try multiple). Only supported with RAR and 7zip files.
+	Passwords []string
+	// Folder path and filters describing where and how to find archives.
+	Filter
+	// Folder to extract data. Default is same level as SearchPath with a suffix.
+	ExtractTo string
+	// Leave files in temporary folder? false=move files back to Searchpath
+	// Moving files back will cause the "extracted files" returned to only contain top-level items.
+	TempFolder bool
+	// Delete Archives after successful extraction? Be careful.
+	DeleteOrig bool
+	// Create a log (.txt) file of the extraction information.
+	LogFile bool
+	// Callback Function, runs twice per queued item.
+	CBFunction func(*Response)
+	// Callback Channel, msg sent twice per queued item.
+	CBChannel chan *Response
 }
 
 // Response is sent to the call-back function. The first CBFunction call is just
@@ -33,17 +44,28 @@ type Xtract struct {
 // call by chcking Response.Done. false = started, true = finished. When done=false
 // the only other meaningful data provided is the re.Archives, re.Output and re.Queue.
 type Response struct {
-	Done     bool                // Extract Started (false) or Finished (true).
-	Size     int64               // Size of data written.
-	Output   string              // Temporary output folder.
-	Queued   int                 // Items still in queue.
-	Started  time.Time           // When this extract began.
-	Elapsed  time.Duration       // Elapsed extraction duration. ie. How long it took.
-	Extras   map[string][]string // Extra archives extracted from within an archive.
-	Archives map[string][]string // Initial archives found and extracted.
-	NewFiles []string            // Files written to final path.
-	Error    error               // Error encountered, only when done=true.
-	X        *Xtract             // Copied from input data.
+	// Extract Started (false) or Finished (true).
+	Done bool
+	// Size of data written.
+	Size int64
+	// Temporary output folder.
+	Output string
+	// Items still in queue.
+	Queued int
+	// When this extract began.
+	Started time.Time
+	// Elapsed extraction duration. ie. How long it took.
+	Elapsed time.Duration
+	// Extra archives extracted from within an archive.
+	Extras map[string][]string
+	// Initial archives found and extracted.
+	Archives map[string][]string
+	// Files written to final path.
+	NewFiles []string
+	// Error encountered, only when done=true.
+	Error error
+	// Copied from input data.
+	X *Xtract
 }
 
 // Extract is how external code begins an extraction process against a path.
@@ -76,8 +98,8 @@ func (x *Xtractr) extract(ext *Xtract) {
 	resp := &Response{
 		X:        ext,
 		Started:  time.Now(),
-		Output:   strings.TrimRight(ext.SearchPath, `/\`) + x.config.Suffix, // tmp folder.
-		Archives: FindCompressedFiles(ext.SearchPath),
+		Output:   strings.TrimRight(ext.Filter.Path, `/\`) + x.config.Suffix, // tmp folder.
+		Archives: FindCompressedFiles(ext.Filter),
 		Queued:   len(x.queue),
 	}
 
@@ -125,7 +147,10 @@ func (x *Xtractr) decompressFolders(resp *Response) error {
 	for subDir := range resp.Archives {
 		subResp := &Response{
 			X: &Xtract{
-				SearchPath: subDir,
+				Filter: Filter{
+					Path:          subDir,
+					ExcludeSuffix: resp.X.Filter.ExcludeSuffix,
+				},
 				Name:       resp.X.Name,
 				Password:   resp.X.Password,
 				Passwords:  resp.X.Passwords,
@@ -135,7 +160,7 @@ func (x *Xtractr) decompressFolders(resp *Response) error {
 				LogFile:    resp.X.LogFile,
 			},
 			Started:  resp.Started,
-			Output:   filepath.Join(resp.Output, strings.TrimPrefix(subDir, resp.X.SearchPath)),
+			Output:   filepath.Join(resp.Output, strings.TrimPrefix(subDir, resp.X.Path)),
 			Archives: map[string][]string{subDir: resp.Archives[subDir]},
 		}
 
@@ -185,11 +210,11 @@ func (x *Xtractr) finishExtract(resp *Response, err error) {
 
 	// Only print a message if there is no callback function. Allows apps to print their own messages.
 	if err != nil {
-		x.config.Printf("Error Extracting: %s (%v elapsed): %v", resp.X.SearchPath, resp.Elapsed, err)
+		x.config.Printf("Error Extracting: %s (%v elapsed): %v", resp.X.Path, resp.Elapsed, err)
 		return
 	}
 
-	x.config.Printf("Finished Extracting: %s (%v elapsed, queue size: %d)", resp.X.SearchPath, resp.Elapsed, resp.Queued)
+	x.config.Printf("Finished Extracting: %s (%v elapsed, queue size: %d)", resp.X.Path, resp.Elapsed, resp.Queued)
 }
 
 // decompressFiles runs after we find and verify archives exist.
@@ -202,7 +227,10 @@ func (x *Xtractr) decompressFiles(resp *Response) error {
 	}
 
 	// Now do it again with the output folder.
-	resp.Extras = FindCompressedFiles(resp.Output)
+	resp.Extras = FindCompressedFiles(Filter{
+		Path:          resp.Output,
+		ExcludeSuffix: resp.X.ExcludeSuffix,
+	})
 	nre := &Response{
 		X: &Xtract{
 			Password:  resp.X.Password,
@@ -293,33 +321,33 @@ func (x *Xtractr) cleanupProcessedArchives(resp *Response) error {
 
 	if !resp.X.TempFolder {
 		// If TempFolder is false then move the files back to the original location.
-		resp.NewFiles, err = x.MoveFiles(resp.Output, resp.X.SearchPath, false)
+		resp.NewFiles, err = x.MoveFiles(resp.Output, resp.X.Path, false)
 	}
 
 	if err != nil {
 		return err
 	}
 
-	files, err := x.GetFileList(resp.X.SearchPath)
+	files, err := x.GetFileList(resp.X.Path)
 	if err != nil {
 		return err
 	}
 
 	if len(files) == 0 {
 		// If the original path is empty, delete it.
-		x.DeleteFiles(resp.X.SearchPath)
+		x.DeleteFiles(resp.X.Path)
 	}
 
 	return nil
 }
 
 func (x *Xtractr) createLogFile(resp *Response) {
-	tmpFile := filepath.Join(resp.Output, x.config.Suffix+"."+filepath.Base(resp.X.SearchPath)+".txt")
+	tmpFile := filepath.Join(resp.Output, x.config.Suffix+"."+filepath.Base(resp.X.Path)+".txt")
 	resp.NewFiles = append(resp.NewFiles, tmpFile)
 
 	msg := []byte(fmt.Sprintf("# %s - this file may be removed with the extracted data\n---\n"+
 		"archives:%s\nextras:%v\nfrom_path:%s\ntemp_path:%s\nrelocated:%v\ntime:%v\nfiles:\n  - %v\n",
-		x.config.Suffix, resp.Archives, resp.Extras, resp.X.SearchPath, resp.Output, !resp.X.TempFolder, time.Now(),
+		x.config.Suffix, resp.Archives, resp.Extras, resp.X.Path, resp.Output, !resp.X.TempFolder, time.Now(),
 		strings.Join(resp.NewFiles, "\n  - ")))
 
 	if err := os.WriteFile(tmpFile, msg, x.config.FileMode); err != nil {
@@ -355,7 +383,7 @@ func (x *Xtractr) cleanTempFolder(resp *Response) {
 		resp.NewFiles = newFiles
 	}
 
-	files, err := x.GetFileList(resp.X.SearchPath)
+	files, err := x.GetFileList(resp.X.Path)
 	if err != nil {
 		x.config.Printf("Error: Reading SearchPath: %v", err)
 		return
@@ -363,6 +391,6 @@ func (x *Xtractr) cleanTempFolder(resp *Response) {
 
 	if len(files) == 0 {
 		// If the original path is empty, delete it.
-		x.DeleteFiles(resp.X.SearchPath)
+		x.DeleteFiles(resp.X.Path)
 	}
 }

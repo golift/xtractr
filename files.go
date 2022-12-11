@@ -14,13 +14,30 @@ import (
 
 // XFile defines the data needed to extract an archive.
 type XFile struct {
-	FilePath  string      // Path to archive being extracted.
-	OutputDir string      // Folder to extract archive into.
-	FileMode  os.FileMode // Write files with this mode.
-	DirMode   os.FileMode // Write folders with this mode.
-	Password  string      // (RAR) Archive password. Blank for none. Gets appended to Passwords, below.
-	Passwords []string    // (RAR) Archive passwords (to try multiple).
+	// Path to archive being extracted.
+	FilePath string
+	// Folder to extract archive into.
+	OutputDir string
+	// Write files with this mode.
+	FileMode os.FileMode
+	// Write folders with this mode.
+	DirMode os.FileMode
+	// (RAR/7z) Archive password. Blank for none. Gets prepended to Passwords, below.
+	Password string
+	// (RAR/7z) Archive passwords (to try multiple).
+	Passwords []string
 }
+
+// Filter is the input to find comprressed files.
+type Filter struct {
+	// This is the path to search in for archives.
+	Path string
+	// Any files with this suffix are ignored. ie. ".7z" or ."iso"
+	ExcludeSuffix Exclude
+}
+
+// Exclude represents an exclusion list.
+type Exclude []string
 
 // GetFileList returns all the files in a path.
 // This is non-resursive and only returns files _in_ the base path provided.
@@ -31,8 +48,7 @@ func (x *Xtractr) GetFileList(path string) ([]string, error) {
 		return nil, fmt.Errorf("reading path %s: %w", path, err)
 	}
 
-
-  files := make([]string, len(fileList))
+	files := make([]string, len(fileList))
 	for idx, file := range fileList {
 		files[idx] = filepath.Join(path, file.Name())
 	}
@@ -65,14 +81,25 @@ func Difference(slice1 []string, slice2 []string) []string {
 	return diff
 }
 
+// Has returns true if the test has an excluded suffix.
+func (e Exclude) Has(test string) bool {
+	for _, exclude := range e {
+		if strings.HasSuffix(test, strings.ToLower(exclude)) {
+			return true
+		}
+	}
+
+	return false
+}
+
 // FindCompressedFiles returns all the rar and zip files in a path. This attempts to grab
 // only the first file in a multi-part archive. Sometimes there are multiple archives, so
 // if the archive does not have "part" followed by a number in the name, then it will be
 // considered an independent archive. Some packagers seem to use different naming schemes,
 // so this will need to be updated as time progresses. So far it's working well.
 // This is a helper method and only exposed for convenience. You do not have to call this.
-func FindCompressedFiles(path string) map[string][]string {
-	dir, err := os.Open(path)
+func FindCompressedFiles(filter Filter) map[string][]string {
+	dir, err := os.Open(filter.Path)
 	if err != nil {
 		return nil
 	}
@@ -80,9 +107,9 @@ func FindCompressedFiles(path string) map[string][]string {
 
 	if info, err := dir.Stat(); err != nil {
 		return nil // unreadable folder?
-	} else if l := strings.ToLower(path); !info.IsDir() &&
+	} else if l := strings.ToLower(filter.Path); !info.IsDir() &&
 		(strings.HasSuffix(l, ".zip") || strings.HasSuffix(l, ".rar") || strings.HasSuffix(l, ".r00")) {
-		return map[string][]string{path: {path}} // passed in an archive file; send it back out.
+		return map[string][]string{filter.Path: {filter.Path}} // passed in an archive file; send it back out.
 	}
 
 	fileList, err := dir.Readdir(-1)
@@ -92,27 +119,34 @@ func FindCompressedFiles(path string) map[string][]string {
 
 	// Check (save) if the current path has any rar files.
 	// So we can ignore r00 if it does.
-	r, _ := filepath.Glob(filepath.Join(path, "*.rar"))
+	r, _ := filepath.Glob(filepath.Join(filter.Path, "*.rar"))
 
-	return getCompressedFiles(len(r) > 0, path, fileList)
+	return getCompressedFiles(len(r) > 0, filter, fileList)
 }
 
 // getCompressedFiles checks file suffixes to find archives to decompress.
 // This pays special attention to the widely accepted variance of rar formats.
-func getCompressedFiles(hasrar bool, path string, fileList []os.FileInfo) map[string][]string { //nolint:cyclop
+func getCompressedFiles(hasrar bool, filter Filter, fileList []os.FileInfo) map[string][]string { //nolint:cyclop
 	files := map[string][]string{}
+	path := filter.Path
 
 	for _, file := range fileList {
 		switch lowerName := strings.ToLower(file.Name()); {
+		case !file.IsDir() && filter.ExcludeSuffix.Has(lowerName):
+			continue // file suffix is excluded.
 		case lowerName == "" || lowerName[0] == '.':
 			continue // ignore empty names and dot files/folders.
 		case file.IsDir(): // Recurse.
-			for k, v := range FindCompressedFiles(filepath.Join(path, file.Name())) {
+			for k, v := range FindCompressedFiles(Filter{
+				Path:          filepath.Join(path, file.Name()),
+				ExcludeSuffix: filter.ExcludeSuffix,
+			}) {
 				files[k] = v
 			}
 		case strings.HasSuffix(lowerName, ".zip") || strings.HasSuffix(lowerName, ".tar") ||
 			strings.HasSuffix(lowerName, ".tgz") || strings.HasSuffix(lowerName, ".gz") ||
-			strings.HasSuffix(lowerName, ".bz2") || strings.HasSuffix(lowerName, ".7z") || strings.HasSuffix(lowerName, ".7z.001"):
+			strings.HasSuffix(lowerName, ".bz2") || strings.HasSuffix(lowerName, ".7z") ||
+			strings.HasSuffix(lowerName, ".7z.001") || strings.HasSuffix(lowerName, ".iso"):
 			files[path] = append(files[path], filepath.Join(path, file.Name()))
 		case strings.HasSuffix(lowerName, ".rar"):
 			hasParts := regexp.MustCompile(`.*\.part[0-9]+\.rar$`)
@@ -121,6 +155,7 @@ func getCompressedFiles(hasrar bool, path string, fileList []os.FileInfo) map[st
 			if !hasParts.Match([]byte(lowerName)) || partOne.Match([]byte(lowerName)) {
 				files[path] = append(files[path], filepath.Join(path, file.Name()))
 			}
+
 		case !hasrar && strings.HasSuffix(lowerName, ".r00"):
 			// Accept .r00 as the first archive file if no .rar files are present in the path.
 			files[path] = append(files[path], filepath.Join(path, file.Name()))
@@ -161,6 +196,8 @@ func ExtractFile(xFile *XFile) (int64, []string, []string, error) {
 		size, files, err = ExtractBzip(xFile)
 	case strings.HasSuffix(sName, ".gz"):
 		size, files, err = ExtractGzip(xFile)
+	case strings.HasSuffix(sName, ".iso"):
+		size, files, err = ExtractISO(xFile)
 	case strings.HasSuffix(sName, ".tar"):
 		size, files, err = ExtractTar(xFile)
 	default:

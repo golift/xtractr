@@ -6,6 +6,7 @@ require (
 	github.com/bodgit/sevenzip v1.3.0
 	github.com/nwaples/rardecode v1.1.2
 	github.com/stretchr/testify v1.8.1
+	github.com/kdomanski/iso9660 v0.3.3
 )
 
 require (

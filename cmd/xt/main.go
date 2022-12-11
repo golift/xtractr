@@ -78,7 +78,7 @@ func getArchives(paths []string) map[string][]string {
 		case err != nil:
 			log.Fatalf("[ERROR] Reading Path: %s: %s", fileName, err)
 		case fileInfo.IsDir():
-			for k, v := range xtractr.FindCompressedFiles(fileName) {
+			for k, v := range xtractr.FindCompressedFiles(xtractr.Filter{Path: fileName}) {
 				archives[k] = v
 			}
 		default:
