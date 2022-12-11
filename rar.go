@@ -19,7 +19,12 @@ func ExtractRAR(xFile *XFile) (int64, []string, []string, error) {
 	}
 
 	// Try all the passwords.
-	passwords := append(xFile.Passwords, xFile.Password) // nolint:gocritic
+	passwords := xFile.Passwords
+
+	if xFile.Password != "" { // If a single password is provided, try it first.
+		passwords = append([]string{xFile.Password}, xFile.Passwords...)
+	}
+
 	for idx, password := range passwords {
 		size, files, archives, err := extractRAR(&XFile{
 			FilePath:  xFile.FilePath,
@@ -58,8 +63,16 @@ func extractRAR(xFile *XFile) (int64, []string, []string, error) {
 	defer rarReader.Close()
 
 	size, files, err := xFile.unrar(rarReader)
+	if err != nil {
+		lastFile := xFile.FilePath
+		if volumes := rarReader.Volumes(); len(volumes) > 0 {
+			lastFile = volumes[len(volumes)-1]
+		}
 
-	return size, files, rarReader.Volumes(), err
+		return size, files, rarReader.Volumes(), fmt.Errorf("%s: %w", lastFile, err)
+	}
+
+	return size, files, rarReader.Volumes(), nil
 }
 
 func (x *XFile) unrar(rarReader *rardecode.ReadCloser) (int64, []string, error) {

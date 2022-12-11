@@ -1,7 +1,6 @@
 package xtractr_test
 
 import (
-	"io/ioutil"
 	"log"
 	"os"
 	"path/filepath"
@@ -125,12 +124,12 @@ func TestNoTempFolder(t *testing.T) {
 func testSetupTestDir(t *testing.T) string {
 	t.Helper()
 
-	name, err := ioutil.TempDir(".", "xtractr_test_*_data")
+	name, err := os.MkdirTemp(".", "xtractr_test_*_data")
 	if err != nil {
 		t.Fatalf("could not make temporary directory: %v", err)
 	}
 
-	testFileData, err := ioutil.ReadFile(testFile)
+	testFileData, err := os.ReadFile(testFile)
 	if err != nil {
 		t.Fatalf("could not read test data file: %v", err)
 	}

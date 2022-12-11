@@ -4,7 +4,6 @@ package xtractr
 
 import (
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strings"
@@ -61,7 +60,7 @@ func (x *Xtractr) Extract(extract *Xtract) (int, error) {
 	return queueSize, nil
 }
 
-// processQueue runs in a go routine, 'e.Parallel' times,
+// processQueue runs in a go routine, 'x.Parallel' times,
 // and watches for things to extract.
 func (x *Xtractr) processQueue() {
 	for ex := range x.queue { // extractions come from Extract()
@@ -121,12 +120,15 @@ func (x *Xtractr) extract(ext *Xtract) {
 // or the extracted files may be copied back to where they were extracted from.
 // If the extracted data is not being coppied back, then the tempDir (output) paths match the input paths.
 func (x *Xtractr) decompressFolders(resp *Response) error {
+	allArchives := make(map[string][]string)
+
 	for subDir := range resp.Archives {
 		subResp := &Response{
 			X: &Xtract{
 				SearchPath: subDir,
 				Name:       resp.X.Name,
 				Password:   resp.X.Password,
+				Passwords:  resp.X.Passwords,
 				ExtractTo:  resp.X.ExtractTo,
 				DeleteOrig: resp.X.DeleteOrig,
 				TempFolder: resp.X.TempFolder,
@@ -148,7 +150,13 @@ func (x *Xtractr) decompressFolders(resp *Response) error {
 		for k, v := range subResp.Extras {
 			resp.Extras[k] = append(resp.Extras[k], v...)
 		}
+
+		for k, v := range subResp.Archives {
+			allArchives[k] = append(allArchives[k], v...)
+		}
 	}
+
+	resp.Archives = allArchives
 
 	return nil
 }
@@ -188,6 +196,7 @@ func (x *Xtractr) finishExtract(resp *Response, err error) {
 // This extracts everything in the search path then checks the
 // output path for more archives that were just decompressed.
 func (x *Xtractr) decompressFiles(resp *Response) error {
+
 	if err := x.decompressArchives(resp); err != nil {
 		return err
 	}
@@ -224,7 +233,7 @@ func (x *Xtractr) decompressArchives(resp *Response) error {
 		allArchives := []string{}
 
 		for _, archive := range archives {
-			bytes, files, archives, err := x.processArchive(archive, resp.Output, append(resp.X.Passwords, resp.X.Password)...)
+			bytes, files, archives, err := x.processArchive(archive, resp)
 			// Make sure these get added even with an error.
 			if resp.Size += bytes; files != nil {
 				resp.NewFiles = append(resp.NewFiles, files...)
@@ -247,22 +256,24 @@ func (x *Xtractr) decompressArchives(resp *Response) error {
 
 // processArchives extracts one archive at a time.
 // Returns list of archive files extracted, size of data written and files written.
-func (x *Xtractr) processArchive(filename, tmpPath string, passwords ...string) (int64, []string, []string, error) {
-	if err := os.MkdirAll(tmpPath, x.config.DirMode); err != nil {
+func (x *Xtractr) processArchive(filename string, resp *Response) (int64, []string, []string, error) {
+	if err := os.MkdirAll(resp.Output, x.config.DirMode); err != nil {
 		return 0, nil, nil, fmt.Errorf("os.MkdirAll: %w", err)
 	}
 
-	x.config.Debugf("Extracting File: %v to %v", filename, tmpPath)
+	x.config.Debugf("Extracting File: %v to %v", filename, resp.Output)
 
 	bytes, files, archives, err := ExtractFile(&XFile{ // extract the file.
 		FilePath:  filename,
-		OutputDir: tmpPath,
+		OutputDir: resp.Output,
 		FileMode:  x.config.FileMode,
 		DirMode:   x.config.DirMode,
-		Passwords: passwords,
+		Passwords: resp.X.Passwords,
+		Password:  resp.X.Password,
 	})
+
 	if err != nil {
-		x.DeleteFiles(tmpPath) // clean up the mess after an error and bail.
+		x.DeleteFiles(resp.Output) // clean up the mess after an error and bail.
 	}
 
 	return bytes, files, archives, err
@@ -311,7 +322,7 @@ func (x *Xtractr) createLogFile(resp *Response) {
 		x.config.Suffix, resp.Archives, resp.Extras, resp.X.SearchPath, resp.Output, !resp.X.TempFolder, time.Now(),
 		strings.Join(resp.NewFiles, "\n  - ")))
 
-	if err := ioutil.WriteFile(tmpFile, msg, x.config.FileMode); err != nil {
+	if err := os.WriteFile(tmpFile, msg, x.config.FileMode); err != nil {
 		x.config.Printf("Error: Creating Temporary Tracking File: %v", err)
 	}
 }

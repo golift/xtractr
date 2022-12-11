@@ -24,7 +24,7 @@ func ExtractZIP(xFile *XFile) (int64, []string, error) {
 	for _, zipFile := range zipReader.Reader.File {
 		fSize, err := xFile.unzip(zipFile)
 		if err != nil {
-			return size, files, err
+			return size, files, fmt.Errorf("%s: %w", xFile.FilePath, err)
 		}
 
 		files = append(files, filepath.Join(xFile.OutputDir, zipFile.Name)) // nolint: gosec

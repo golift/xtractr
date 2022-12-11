@@ -5,7 +5,6 @@ package xtractr
 import (
 	"fmt"
 	"io"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -27,12 +26,13 @@ type XFile struct {
 // This is non-resursive and only returns files _in_ the base path provided.
 // This is a helper method and only exposed for convenience. You do not have to call this.
 func (x *Xtractr) GetFileList(path string) ([]string, error) {
-	fileList, err := ioutil.ReadDir(path)
+	fileList, err := os.ReadDir(path)
 	if err != nil {
 		return nil, fmt.Errorf("reading path %s: %w", path, err)
 	}
 
-	files := make([]string, len(fileList))
+
+  files := make([]string, len(fileList))
 	for idx, file := range fileList {
 		files[idx] = filepath.Join(path, file.Name())
 	}
@@ -112,7 +112,7 @@ func getCompressedFiles(hasrar bool, path string, fileList []os.FileInfo) map[st
 			}
 		case strings.HasSuffix(lowerName, ".zip") || strings.HasSuffix(lowerName, ".tar") ||
 			strings.HasSuffix(lowerName, ".tgz") || strings.HasSuffix(lowerName, ".gz") ||
-			strings.HasSuffix(lowerName, ".bz2") || strings.HasSuffix(lowerName, ".7z"):
+			strings.HasSuffix(lowerName, ".bz2") || strings.HasSuffix(lowerName, ".7z") || strings.HasSuffix(lowerName, ".7z.001"):
 			files[path] = append(files[path], filepath.Join(path, file.Name()))
 		case strings.HasSuffix(lowerName, ".rar"):
 			hasParts := regexp.MustCompile(`.*\.part[0-9]+\.rar$`)
@@ -148,7 +148,7 @@ func ExtractFile(xFile *XFile) (int64, []string, []string, error) {
 	switch sName := strings.ToLower(xFile.FilePath); {
 	case strings.HasSuffix(sName, ".rar"), strings.HasSuffix(sName, ".r00"):
 		return ExtractRAR(xFile)
-	case strings.HasSuffix(sName, ".7z"):
+	case strings.HasSuffix(sName, ".7z"), strings.HasSuffix(sName, ".7z.001"):
 		size, files, err = Extract7z(xFile)
 	case strings.HasSuffix(sName, ".zip"):
 		size, files, err = ExtractZIP(xFile)
