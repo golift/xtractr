@@ -2,7 +2,6 @@ package xtractr
 
 import (
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,21 +13,21 @@ import (
 func ExtractISO(xFile *XFile) (int64, []string, error) {
 	openISO, err := os.Open(xFile.FilePath)
 	if err != nil {
-		return 0, nil, fmt.Errorf("failed to open iso: %s: %w", xFile.FilePath, err)
+		return 0, nil, fmt.Errorf("failed to open iso file: %s: %w", xFile.FilePath, err)
 	}
 	defer openISO.Close()
 
 	iso, err := iso9660.OpenImage(openISO)
 	if err != nil {
-		return 0, nil, err
+		return 0, nil, fmt.Errorf("failed to open iso image: %s: %w", xFile.FilePath, err)
 	}
 
 	root, err := iso.RootDir()
 	if err != nil {
-		return 0, nil, err
+		return 0, nil, fmt.Errorf("failed to open iso root: %s: %w", xFile.FilePath, err)
 	}
 
-	size, files, err := xFile.uniso(root, xFile.OutputDir)
+	size, files, err := xFile.uniso(root, "")
 	if err != nil {
 		return size, files, fmt.Errorf("%s: %w", xFile.FilePath, err)
 	}
@@ -36,46 +35,28 @@ func ExtractISO(xFile *XFile) (int64, []string, error) {
 	return size, files, nil
 }
 
-func (x *XFile) uniso(isoFile *iso9660.File, dest string) (int64, []string, error) {
-	wfile := x.clean(isoFile.Name())
-	// nolint:gocritic // this 1-argument filepath.Join removes a ./ prefix should there be one.
-	if !strings.HasPrefix(wfile, filepath.Join(x.OutputDir)) {
-		// The file being written is trying to write outside of our base path. Malicious archive?
-		return 0, nil, fmt.Errorf("%s: %w: %s != %s (from: %s)",
-			x.FilePath, ErrInvalidPath, wfile, x.OutputDir, isoFile.Name())
+func (x *XFile) uniso(isoFile *iso9660.File, parent string) (int64, []string, error) {
+	itemName := filepath.Join(parent, isoFile.Name())
+	if isoFile.Name() == string([]byte{0}) { // rename root folder.
+		itemName = strings.TrimSuffix(strings.TrimSuffix(filepath.Base(x.FilePath), ".iso"), ".ISO")
 	}
 
 	if !isoFile.IsDir() { // it's a file
-		newFile, err := os.Create(dest)
-		if err != nil {
-			return 0, nil, err
-		}
-		defer newFile.Close()
-
-		size, err := io.Copy(newFile, isoFile.Reader())
-		if err != nil {
-			return size, []string{dest}, err
-		}
-
-		return size, []string{dest}, err
-	}
-
-	if err := os.Mkdir(dest, x.DirMode); err != nil {
-		return 0, nil, err
+		return x.unisofile(isoFile, itemName)
 	}
 
 	children, err := isoFile.GetChildren()
 	if err != nil {
-		return 0, nil, err
+		return 0, nil, fmt.Errorf("getting children for %s: %w", isoFile.Name(), err)
 	}
 
 	files := []string{}
 	size := int64(0)
 
 	for _, child := range children {
-		childSize, childFiles, err := x.uniso(child, filepath.Join(dest, child.Name()))
+		childSize, childFiles, err := x.uniso(child, itemName)
 		if err != nil {
-			return size, files, err
+			return size + childSize, files, err
 		}
 
 		size += childSize
@@ -83,4 +64,18 @@ func (x *XFile) uniso(isoFile *iso9660.File, dest string) (int64, []string, erro
 	}
 
 	return size, files, nil
+}
+
+func (x *XFile) unisofile(isoFile *iso9660.File, fileName string) (int64, []string, error) {
+	destFile := x.clean(fileName)
+	// nolint:gocritic // this 1-argument filepath.Join removes a ./ prefix should there be one.
+	if !strings.HasPrefix(destFile, filepath.Join(x.OutputDir)) {
+		// The file being written is trying to write outside of our base path. Malicious ISO?
+		return 0, nil, fmt.Errorf("%s: %w: %s != %s (from: %s)",
+			x.FilePath, ErrInvalidPath, destFile, x.OutputDir, isoFile.Name())
+	}
+
+	size, err := writeFile(destFile, isoFile.Reader(), x.FileMode, x.DirMode)
+
+	return size, []string{destFile}, err
 }
