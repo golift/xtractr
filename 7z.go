@@ -109,8 +109,3 @@ func (x *XFile) un7zip(zipFile *sevenzip.File) (int64, error) {
 
 	return s, nil
 }
-
-type ZipFile interface {
-	FileInfo() os.FileInfo
-	Name() string
-}
