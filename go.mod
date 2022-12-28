@@ -5,7 +5,7 @@ go 1.19
 require (
 	github.com/bodgit/sevenzip v1.4.0
 	github.com/kdomanski/iso9660 v0.3.3
-	github.com/nwaples/rardecode v1.1.2
+	github.com/nwaples/rardecode v1.1.3
 	github.com/stretchr/testify v1.8.1
 )
 
