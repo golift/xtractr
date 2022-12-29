@@ -54,8 +54,8 @@ func processInput(paths []string, output string) {
 			size, files, _, err := xtractr.ExtractFile(&xtractr.XFile{
 				FilePath:  fileName, // Path to archive being extracted.
 				OutputDir: output,   // Folder to extract archive into.
-				FileMode:  0o644,    // nolint:gomnd // Write files with this mode.
-				DirMode:   0o755,    // nolint:gomnd // Write folders with this mode.
+				FileMode:  0o644,    //nolint:gomnd // Write files with this mode.
+				DirMode:   0o755,    //nolint:gomnd // Write folders with this mode.
 				Password:  "",       // (RAR) Archive password. Blank for none.
 			})
 			if err != nil {

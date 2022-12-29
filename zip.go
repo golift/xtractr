@@ -27,14 +27,14 @@ func ExtractZIP(xFile *XFile) (int64, []string, error) {
 			return size, files, fmt.Errorf("%s: %w", xFile.FilePath, err)
 		}
 
-		files = append(files, filepath.Join(xFile.OutputDir, zipFile.Name)) // nolint: gosec
+		files = append(files, filepath.Join(xFile.OutputDir, zipFile.Name)) //nolint: gosec
 		size += fSize
 	}
 
 	return size, files, nil
 }
 
-func (x *XFile) unzip(zipFile *zip.File) (int64, error) {
+func (x *XFile) unzip(zipFile *zip.File) (int64, error) { //nolint:dupl
 	wfile := x.clean(zipFile.Name)
 	if !strings.HasPrefix(wfile, x.OutputDir) {
 		// The file being written is trying to write outside of our base path. Malicious archive?

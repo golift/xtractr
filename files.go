@@ -173,7 +173,7 @@ func (x *XFile) Extract() (int64, []string, []string, error) {
 
 // ExtractFile calls the correct procedure for the type of file being extracted.
 // Returns size of extracted data, list of extracted files, list of archives processed, and/or error.
-func ExtractFile(xFile *XFile) (int64, []string, []string, error) {
+func ExtractFile(xFile *XFile) (int64, []string, []string, error) { //nolint:cyclop
 	var (
 		size  int64
 		files []string
