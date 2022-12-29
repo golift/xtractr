@@ -221,7 +221,6 @@ func (x *Xtractr) finishExtract(resp *Response, err error) {
 // This extracts everything in the search path then checks the
 // output path for more archives that were just decompressed.
 func (x *Xtractr) decompressFiles(resp *Response) error {
-
 	if err := x.decompressArchives(resp); err != nil {
 		return err
 	}
@@ -299,7 +298,6 @@ func (x *Xtractr) processArchive(filename string, resp *Response) (int64, []stri
 		Passwords: resp.X.Passwords,
 		Password:  resp.X.Password,
 	})
-
 	if err != nil {
 		x.DeleteFiles(resp.Output) // clean up the mess after an error and bail.
 	}
