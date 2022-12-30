@@ -18,13 +18,19 @@ const (
 // Config is the input data to configure the Xtract queue. Fill this out and
 // pass it into NewQueue() to create a queue for archive extractions.
 type Config struct {
+	// Size of the extraction channel buffer. Default=1000.
 	// Use -1 for unbuffered channel. Not recommend.
-	BuffSize int         // Size of the extraction channel buffer. Default=1000.
-	Parallel int         // Number of concurrent extractions.
-	FileMode os.FileMode // Filemode used when writing files, tar ignores this.
-	DirMode  os.FileMode // Filemode used when writing folders, tar ignores this.
-	Suffix   string      // The suffix used for temporary folders.
-	Logger               // Logs are sent to this Logger.
+	BuffSize int
+	// Number of concurrent extractions allowed.
+	Parallel int
+	// Filemode used when writing files, tar ignores this, so does Windows.
+	FileMode os.FileMode
+	// Filemode used when writing folders, tar ignores this.
+	DirMode os.FileMode
+	// The suffix used for temporary folders.
+	Suffix string
+	// Logs are sent to this Logger.
+	Logger
 }
 
 // Logger allows this library to write logs.

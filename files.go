@@ -28,7 +28,7 @@ type XFile struct {
 	Passwords []string
 }
 
-// Filter is the input to find comprressed files.
+// Filter is the input to find compressed files.
 type Filter struct {
 	// This is the path to search in for archives.
 	Path string

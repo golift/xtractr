@@ -24,6 +24,9 @@ type Xtract struct {
 	Passwords []string
 	// Folder path and filters describing where and how to find archives.
 	Filter
+	// Set RecurseISO to true if you want to recursively extract archives in ISO files.
+	// If ISOs and other archives are found, none will not extract recursively if this is false.
+	RecurseISO bool
 	// Folder to extract data. Default is same level as SearchPath with a suffix.
 	ExtractTo string
 	// Leave files in temporary folder? false=move files back to Searchpath
@@ -217,12 +220,31 @@ func (x *Xtractr) finishExtract(resp *Response, err error) {
 	x.config.Printf("Finished Extracting: %s (%v elapsed, queue size: %d)", resp.X.Path, resp.Elapsed, resp.Queued)
 }
 
+// weExtractedAnISO makes sure we do not recurse into an ISO file.
+// If an iso was found in the same directory as other archives,
+// it will prevent the other archives from extracting recursively.
+func weExtractedAnISO(resp *Response) bool {
+	for _, archives := range resp.Archives {
+		for _, archive := range archives {
+			if strings.HasSuffix(strings.ToLower(archive), ".iso") {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
 // decompressFiles runs after we find and verify archives exist.
 // This extracts everything in the search path then checks the
 // output path for more archives that were just decompressed.
 func (x *Xtractr) decompressFiles(resp *Response) error {
 	if err := x.decompressArchives(resp); err != nil {
 		return err
+	}
+
+	if !resp.X.RecurseISO && weExtractedAnISO(resp) {
+		return x.cleanupProcessedArchives(resp)
 	}
 
 	// Now do it again with the output folder.
