@@ -28,7 +28,7 @@ type XFile struct {
 	Passwords []string
 }
 
-// Filter is the input to find comprressed files.
+// Filter is the input to find compressed files.
 type Filter struct {
 	// This is the path to search in for archives.
 	Path string
@@ -184,7 +184,7 @@ func ExtractFile(xFile *XFile) (int64, []string, []string, error) { //nolint:cyc
 	case strings.HasSuffix(sName, ".rar"), strings.HasSuffix(sName, ".r00"):
 		return ExtractRAR(xFile)
 	case strings.HasSuffix(sName, ".7z"), strings.HasSuffix(sName, ".7z.001"):
-		size, files, err = Extract7z(xFile)
+		return Extract7z(xFile)
 	case strings.HasSuffix(sName, ".zip"):
 		size, files, err = ExtractZIP(xFile)
 	case strings.HasSuffix(sName, ".tar.gz"), strings.HasSuffix(sName, ".tgz"):

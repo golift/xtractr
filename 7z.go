@@ -11,7 +11,7 @@ import (
 
 // Extract7z extracts a 7zip archive.
 // Volumes: https://github.com/bodgit/sevenzip/issues/54
-func Extract7z(xFile *XFile) (int64, []string, error) {
+func Extract7z(xFile *XFile) (int64, []string, []string, error) {
 	if len(xFile.Passwords) == 0 && xFile.Password == "" {
 		return extract7z(xFile)
 	}
@@ -24,7 +24,7 @@ func Extract7z(xFile *XFile) (int64, []string, error) {
 	}
 
 	for idx, password := range passwords {
-		size, files, err := extract7z(&XFile{
+		size, files, archives, err := extract7z(&XFile{
 			FilePath:  xFile.FilePath,
 			OutputDir: xFile.OutputDir,
 			FileMode:  xFile.FileMode,
@@ -32,17 +32,17 @@ func Extract7z(xFile *XFile) (int64, []string, error) {
 			Password:  password,
 		})
 		if err != nil && idx == len(passwords)-1 {
-			return size, files, fmt.Errorf("used password %d of %d: %w", idx+1, len(passwords), err)
+			return size, files, archives, fmt.Errorf("used password %d of %d: %w", idx+1, len(passwords), err)
 		} else if err == nil {
-			return size, files, nil
+			return size, files, archives, nil
 		}
 	}
 
 	// unreachable code
-	return 0, nil, nil
+	return 0, nil, nil, nil
 }
 
-func extract7z(xFile *XFile) (int64, []string, error) {
+func extract7z(xFile *XFile) (int64, []string, []string, error) {
 	var (
 		sevenZip *sevenzip.ReadCloser
 		err      error
@@ -55,7 +55,7 @@ func extract7z(xFile *XFile) (int64, []string, error) {
 	}
 
 	if err != nil {
-		return 0, nil, fmt.Errorf("%s: os.Open: %w", xFile.FilePath, err)
+		return 0, nil, nil, fmt.Errorf("%s: os.Open: %w", xFile.FilePath, err)
 	}
 
 	defer sevenZip.Close()
@@ -68,17 +68,18 @@ func extract7z(xFile *XFile) (int64, []string, error) {
 		if err != nil {
 			lastFile := xFile.FilePath
 			/* // https://github.com/bodgit/sevenzip/issues/54
+			// We can probably never get the file with the error.
 			if volumes := sevenZip.Volumes(); len(volumes) > 0 {
 				lastFile = volumes[len(volumes)-1]
 			} */
-			return size, files, fmt.Errorf("%s: %w", lastFile, err)
+			return size, files, sevenZip.Volumes(), fmt.Errorf("%s: %w", lastFile, err)
 		}
 
 		files = append(files, filepath.Join(xFile.OutputDir, zipFile.Name))
 		size += fSize
 	}
 
-	return size, files, nil
+	return size, files, sevenZip.Volumes(), nil
 }
 
 func (x *XFile) un7zip(zipFile *sevenzip.File) (int64, error) { //nolint:dupl
