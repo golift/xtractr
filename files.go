@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"strings"
 )
 
@@ -277,17 +276,11 @@ func writeFile(fpath string, fdata io.Reader, fMode, dMode os.FileMode) (int64, 
 		return 0, fmt.Errorf("os.MkdirAll: %w", err)
 	}
 
-	fout, err := os.Create(fpath)
+	fout, err := os.OpenFile(fpath, os.O_RDWR|os.O_CREATE|os.O_TRUNC, fMode)
 	if err != nil {
-		return 0, fmt.Errorf("os.Create: %w", err)
+		return 0, fmt.Errorf("os.OpenFile: %w", err)
 	}
 	defer fout.Close()
-
-	if runtime.GOOS != "windows" {
-		if err = fout.Chmod(fMode); err != nil {
-			return 0, fmt.Errorf("chmod: %w", err)
-		}
-	}
 
 	s, err := io.Copy(fout, fdata)
 	if err != nil {
