@@ -8,6 +8,17 @@ Can also be used ad-hoc for direct decompression and extraction. See docs.
 -   Supports 32 and 64 bit architectures.
 -   Decrypts RAR and 7-Zip archives with passwords.
 
+# Interface
+
+This library provides a queue, and a common interface to extract files.
+It does not do the heavy lifting, and relies on these libraries to extract files:
+
+- [RAR: nwaples/rardecode](github.com/nwaples/rardecode)
+- [7-Zip: bodgit/sevenzip](github.com/bodgit/sevenzip)
+- [ISO: kdomanski/iso9660](github.com/kdomanski/iso9660)
+
+`Zip`, `Gzip`, `Tar` and `Bzip` are all handled by the standard Go library.
+
 # Examples
 
 ## Example 1 - Queue
