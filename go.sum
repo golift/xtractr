@@ -82,6 +82,8 @@ github.com/kdomanski/iso9660 v0.3.3 h1:cNwM9L2L1Hzc5hZWGy6fPJ92UyWDccaY69DmEPlfD
 github.com/kdomanski/iso9660 v0.3.3/go.mod h1:K+UlIGxKgtrdAWyoigPnFbeQLVs/Xudz4iztWFThBwo=
 github.com/kdomanski/iso9660 v0.3.4 h1:qO/GR50RNeZDwh8u58/HpLfg2bi6+xgmSyo+3j0lA8c=
 github.com/kdomanski/iso9660 v0.3.4/go.mod h1:K+UlIGxKgtrdAWyoigPnFbeQLVs/Xudz4iztWFThBwo=
+github.com/kdomanski/iso9660 v0.3.5 h1:LO1n75zPjLeDQkz0Pyk1eZ7JGinjKjk2C174GSABVwY=
+github.com/kdomanski/iso9660 v0.3.5/go.mod h1:K+UlIGxKgtrdAWyoigPnFbeQLVs/Xudz4iztWFThBwo=
 github.com/kisielk/gotool v1.0.0/go.mod h1:XhKaO+MFFWcvkIS/tQcRk01m1F5IRFswLeQ+oQHNcck=
 github.com/klauspost/compress v1.16.3 h1:XuJt9zzcnaz6a16/OU53ZjWp/v7/42WcR5t2a0PcNQY=
 github.com/klauspost/compress v1.16.3/go.mod h1:ntbaceVETuRiXiv4DpjP66DpAtAGkEQskQzEyD//IeE=
