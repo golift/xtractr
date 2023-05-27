@@ -25,6 +25,8 @@ github.com/bodgit/sevenzip v1.4.0 h1:OPUy/dCA9KvDTxcwQQYkv/W7kHmxhP4B3vpW8S02WlA
 github.com/bodgit/sevenzip v1.4.0/go.mod h1:0WaxeLofKpADVzngQXcMoXb98627kLDiqTZyDLaVxiA=
 github.com/bodgit/sevenzip v1.4.1 h1:otI04zch761Czrw1J3q0z6RXERRFH2eAOw7TMxG9hWo=
 github.com/bodgit/sevenzip v1.4.1/go.mod h1:wzG7p52yTqFNEmEWYn3ibtMa0eXaP0EFjrWxo9PEaME=
+github.com/bodgit/sevenzip v1.4.2 h1:J7MK2W+vlErQou57oGr7ezdsoDtPPGLi8jAtrf5JhPA=
+github.com/bodgit/sevenzip v1.4.2/go.mod h1:Vk8AS10UhoKbRqh4zz5hN2Blz5Af/ve/N4K/333RwiM=
 github.com/bodgit/windows v1.0.1 h1:tF7K6KOluPYygXa3Z2594zxlkbKPAOvqr97etrGNIz4=
 github.com/bodgit/windows v1.0.1/go.mod h1:a6JLwrB4KrTR5hBpp8FI9/9W9jJfeQ2h4XDXU74ZCdM=
 github.com/census-instrumentation/opencensus-proto v0.2.1/go.mod h1:f6KPmirojxKA12rnyqOA5BBL4O983OfeGPqjHWSTneU=
