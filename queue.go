@@ -150,6 +150,12 @@ func (x *Xtractr) decompressFolders(resp *Response) error {
 	allArchives := make(map[string][]string)
 
 	for subDir := range resp.Archives {
+		output := resp.Output
+		if resp.X.TempFolder {
+			// If we keep the temp folder, then use elaborate extraction paths.
+			output = filepath.Join(resp.Output, strings.TrimPrefix(subDir, resp.X.Path))
+		}
+
 		subResp := &Response{
 			X: &Xtract{
 				Filter: Filter{
@@ -165,7 +171,7 @@ func (x *Xtractr) decompressFolders(resp *Response) error {
 				LogFile:    resp.X.LogFile,
 			},
 			Started:  resp.Started,
-			Output:   filepath.Join(resp.Output, strings.TrimPrefix(subDir, resp.X.Path)),
+			Output:   output,
 			Archives: map[string][]string{subDir: resp.Archives[subDir]},
 		}
 
