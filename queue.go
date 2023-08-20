@@ -24,6 +24,8 @@ type Xtract struct {
 	Passwords []string
 	// Folder path and filters describing where and how to find archives.
 	Filter
+	// Set DisableRecursion to true if you want to avoid extracting archives inside archives.
+	DisableRecursion bool
 	// Set RecurseISO to true if you want to recursively extract archives in ISO files.
 	// If ISOs and other archives are found, none will not extract recursively if this is false.
 	RecurseISO bool
@@ -236,14 +238,14 @@ func weExtractedAnISO(resp *Response) bool {
 }
 
 // decompressFiles runs after we find and verify archives exist.
-// This extracts everything in the search path then checks the
-// output path for more archives that were just decompressed.
+// This extracts everything in the search path then (optionally)
+// checks the output path for more archives that were just decompressed.
 func (x *Xtractr) decompressFiles(resp *Response) error {
 	if err := x.decompressArchives(resp); err != nil {
 		return err
 	}
 
-	if !resp.X.RecurseISO && weExtractedAnISO(resp) {
+	if resp.X.DisableRecursion || (!resp.X.RecurseISO && weExtractedAnISO(resp)) {
 		return x.cleanupProcessedArchives(resp)
 	}
 
