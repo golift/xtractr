@@ -214,7 +214,7 @@ func ExtractFile(xFile *XFile) (int64, []string, []string, error) { //nolint:cyc
 // MoveFiles relocates files then removes the folder they were in.
 // Returns the new file paths.
 // This is a helper method and only exposed for convenience. You do not have to call this.
-func (x *Xtractr) MoveFiles(fromPath string, toPath string, overwrite bool) ([]string, error) {
+func (x *Xtractr) MoveFiles(fromPath string, toPath string, overwrite bool) ([]string, error) { //nolint:cyclop
 	var (
 		newFiles = []string{}
 		keepErr  error
