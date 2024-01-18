@@ -155,7 +155,7 @@ func getCompressedFiles(hasrar bool, filter Filter, fileList []os.FileInfo) map[
 			hasParts := regexp.MustCompile(`.*\.part[0-9]+\.rar$`)
 			partOne := regexp.MustCompile(`.*\.part0*1\.rar$`)
 			// Some archives are named poorly. Only return part01 or part001, not all.
-			if !hasParts.Match([]byte(lowerName)) || partOne.Match([]byte(lowerName)) {
+			if !hasParts.MatchString(lowerName) || partOne.MatchString(lowerName) {
 				files[path] = append(files[path], filepath.Join(path, file.Name()))
 			}
 		case isArchiveFile(lowerName):
