@@ -42,6 +42,10 @@ type Exclude []string
 // This is non-resursive and only returns files _in_ the base path provided.
 // This is a helper method and only exposed for convenience. You do not have to call this.
 func (x *Xtractr) GetFileList(path string) ([]string, error) {
+	if stat, err := os.Stat(path); err == nil && !stat.IsDir() {
+		return []string{path}, nil
+	}
+
 	fileList, err := os.ReadDir(path)
 	if err != nil {
 		return nil, fmt.Errorf("reading path %s: %w", path, err)
@@ -106,8 +110,7 @@ func FindCompressedFiles(filter Filter) map[string][]string {
 
 	if info, err := dir.Stat(); err != nil {
 		return nil // unreadable folder?
-	} else if l := strings.ToLower(filter.Path); !info.IsDir() &&
-		(strings.HasSuffix(l, ".zip") || strings.HasSuffix(l, ".rar") || strings.HasSuffix(l, ".r00")) {
+	} else if !info.IsDir() && isArchiveFile(filter.Path) {
 		return map[string][]string{filter.Path: {filter.Path}} // passed in an archive file; send it back out.
 	}
 
@@ -121,6 +124,12 @@ func FindCompressedFiles(filter Filter) map[string][]string {
 	r, _ := filepath.Glob(filepath.Join(filter.Path, "*.rar"))
 
 	return getCompressedFiles(len(r) > 0, filter, fileList)
+}
+
+func isArchiveFile(path string) bool {
+	x := strings.ToLower(filepath.Ext(path))
+	return x == ".zip" || x == ".tar" || x == ".tgz" || x == ".rar" ||
+		x == ".gz" || x == ".bz2" || x == ".7z" || x == ".7z.001" || x == ".iso"
 }
 
 // getCompressedFiles checks file suffixes to find archives to decompress.
@@ -142,19 +151,15 @@ func getCompressedFiles(hasrar bool, filter Filter, fileList []os.FileInfo) map[
 			}) {
 				files[k] = v
 			}
-		case strings.HasSuffix(lowerName, ".zip") || strings.HasSuffix(lowerName, ".tar") ||
-			strings.HasSuffix(lowerName, ".tgz") || strings.HasSuffix(lowerName, ".gz") ||
-			strings.HasSuffix(lowerName, ".bz2") || strings.HasSuffix(lowerName, ".7z") ||
-			strings.HasSuffix(lowerName, ".7z.001") || strings.HasSuffix(lowerName, ".iso"):
-			files[path] = append(files[path], filepath.Join(path, file.Name()))
 		case strings.HasSuffix(lowerName, ".rar"):
 			hasParts := regexp.MustCompile(`.*\.part[0-9]+\.rar$`)
 			partOne := regexp.MustCompile(`.*\.part0*1\.rar$`)
 			// Some archives are named poorly. Only return part01 or part001, not all.
-			if !hasParts.Match([]byte(lowerName)) || partOne.Match([]byte(lowerName)) {
+			if !hasParts.MatchString(lowerName) || partOne.MatchString(lowerName) {
 				files[path] = append(files[path], filepath.Join(path, file.Name()))
 			}
-
+		case isArchiveFile(lowerName):
+			files[path] = append(files[path], filepath.Join(path, file.Name()))
 		case !hasrar && strings.HasSuffix(lowerName, ".r00"):
 			// Accept .r00 as the first archive file if no .rar files are present in the path.
 			files[path] = append(files[path], filepath.Join(path, file.Name()))
@@ -209,19 +214,24 @@ func ExtractFile(xFile *XFile) (int64, []string, []string, error) { //nolint:cyc
 // MoveFiles relocates files then removes the folder they were in.
 // Returns the new file paths.
 // This is a helper method and only exposed for convenience. You do not have to call this.
-func (x *Xtractr) MoveFiles(fromPath string, toPath string, overwrite bool) ([]string, error) {
+func (x *Xtractr) MoveFiles(fromPath string, toPath string, overwrite bool) ([]string, error) { //nolint:cyclop
 	var (
-		files, err = x.GetFileList(fromPath)
-		newFiles   = []string{}
-		keepErr    error
+		newFiles = []string{}
+		keepErr  error
 	)
 
+	files, err := x.GetFileList(fromPath)
 	if err != nil {
 		return nil, err
 	}
 
+	// If the "to path" is an existing archive file, remove the suffix to make a directory.
+	if _, err := os.Stat(toPath); err == nil && isArchiveFile(toPath) {
+		toPath = strings.TrimSuffix(toPath, filepath.Ext(toPath))
+	}
+
 	if err := os.MkdirAll(toPath, x.config.DirMode); err != nil {
-		return nil, fmt.Errorf("os.MkDirAll: %w", err)
+		return nil, fmt.Errorf("os.MkdirAll: %w", err)
 	}
 
 	for _, file := range files {
