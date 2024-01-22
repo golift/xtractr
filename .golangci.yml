@@ -15,9 +15,6 @@ linters:
     # unused
     - nlreturn
     - exhaustruct
-    - rowserrcheck
-    - sqlclosecheck
-    - wastedassign
     - depguard
 run:
   timeout: 1m

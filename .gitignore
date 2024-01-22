@@ -10,5 +10,5 @@
 *.tgz
 *.bz2
 *.tbz2
-/cmd/xt/xt
-/xt
+*.001
+*.iso
