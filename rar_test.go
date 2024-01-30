@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"golift.io/xtractr"
 )
 
@@ -12,10 +13,8 @@ func TestExtractRAR(t *testing.T) {
 	t.Parallel()
 
 	name, err := os.MkdirTemp(".", "xtractr_test_*_data")
-	if err != nil {
-		t.Fatalf("could not make temporary directory: %v", err)
-	}
-	defer os.RemoveAll(name) //nolint:wsl
+	require.NoError(t, err, "creating temp directory failed")
+	defer os.RemoveAll(name)
 
 	size, files, archives, err := xtractr.ExtractRAR(&xtractr.XFile{
 		FilePath:  "./test_data/archive.rar",
@@ -23,8 +22,8 @@ func TestExtractRAR(t *testing.T) {
 		Password:  "testing", // one of these is right. :)
 		Passwords: []string{"testingmore", "some_password", "some_other"},
 	})
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, testDataSize, size)
-	assert.Equal(t, 1, len(archives))
-	assert.Equal(t, len(filesInTestArchive), len(files))
+	assert.Len(t, archives, 1)
+	assert.Len(t, files, len(filesInTestArchive))
 }

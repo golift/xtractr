@@ -33,6 +33,10 @@ type Filter struct {
 	Path string
 	// Any files with this suffix are ignored. ie. ".7z" or ."iso"
 	ExcludeSuffix Exclude
+	// Count of folder depth allowed when finding archives. 1 = root
+	MaxDepth int
+	// Only find archives this many child-folders deep.
+	MinDepth int
 }
 
 // Exclude represents an exclusion list.
@@ -95,14 +99,21 @@ func (e Exclude) Has(test string) bool {
 	return false
 }
 
-// FindCompressedFiles returns all the rar and zip files in a path. This attempts to grab
-// only the first file in a multi-part archive. Sometimes there are multiple archives, so
-// if the archive does not have "part" followed by a number in the name, then it will be
+// FindCompressedFiles returns all the compressed archive files in a path. This attempts to grab
+// only the first file in a multi-part rar or 7zip archive. Sometimes there are multiple archives,
+// so if the rar archive does not have "part" followed by a number in the name, then it will be
 // considered an independent archive. Some packagers seem to use different naming schemes,
-// so this will need to be updated as time progresses. So far it's working well.
-// This is a helper method and only exposed for convenience. You do not have to call this.
+// so this may need to be updated as time progresses. Use the input to filter to adjust the output.
 func FindCompressedFiles(filter Filter) map[string][]string {
-	dir, err := os.Open(filter.Path)
+	return findCompressedFiles(filter.Path, &filter, 0)
+}
+
+func findCompressedFiles(path string, filter *Filter, depth int) map[string][]string {
+	if filter.MaxDepth > 0 && filter.MaxDepth < depth {
+		return nil
+	}
+
+	dir, err := os.Open(path)
 	if err != nil {
 		return nil
 	}
@@ -110,8 +121,8 @@ func FindCompressedFiles(filter Filter) map[string][]string {
 
 	if info, err := dir.Stat(); err != nil {
 		return nil // unreadable folder?
-	} else if !info.IsDir() && isArchiveFile(filter.Path) {
-		return map[string][]string{filter.Path: {filter.Path}} // passed in an archive file; send it back out.
+	} else if !info.IsDir() && isArchiveFile(path) {
+		return map[string][]string{path: {path}} // passed in an archive file; send it back out.
 	}
 
 	fileList, err := dir.Readdir(-1)
@@ -121,34 +132,40 @@ func FindCompressedFiles(filter Filter) map[string][]string {
 
 	// Check (save) if the current path has any rar files.
 	// So we can ignore r00 if it does.
-	r, _ := filepath.Glob(filepath.Join(filter.Path, "*.rar"))
+	r, _ := filepath.Glob(filepath.Join(path, "*.rar"))
 
-	return getCompressedFiles(len(r) > 0, filter, fileList)
+	return getCompressedFiles(len(r) > 0, path, filter, fileList, depth)
 }
 
+//nolint:cyclop,wsl
 func isArchiveFile(path string) bool {
 	x := strings.ToLower(filepath.Ext(path))
-	return x == ".zip" || x == ".tar" || x == ".tgz" || x == ".rar" ||
-		x == ".gz" || x == ".bz2" || x == ".7z" || x == ".7z.001" || x == ".iso"
+	return x == ".tar" || x == ".tgz" || x == ".tar.gz" || x == ".gz" ||
+		x == ".tar.bz2" || x == ".tbz2" || x == ".tbz" || x == ".tar.bz" ||
+		x == ".rar" || x == ".r00" || x == ".bz" || x == ".bz2" ||
+		x == ".7z" || x == ".7z.001" || x == ".iso" || x == ".zip"
 }
 
 // getCompressedFiles checks file suffixes to find archives to decompress.
 // This pays special attention to the widely accepted variance of rar formats.
-func getCompressedFiles(hasrar bool, filter Filter, fileList []os.FileInfo) map[string][]string { //nolint:cyclop
+func getCompressedFiles( //nolint:cyclop
+	hasrar bool,
+	path string,
+	filter *Filter,
+	fileList []os.FileInfo,
+	depth int,
+) map[string][]string {
 	files := map[string][]string{}
-	path := filter.Path
 
 	for _, file := range fileList {
 		switch lowerName := strings.ToLower(file.Name()); {
-		case !file.IsDir() && filter.ExcludeSuffix.Has(lowerName):
-			continue // file suffix is excluded.
+		case !file.IsDir() &&
+			(filter.ExcludeSuffix.Has(lowerName) || depth < filter.MinDepth):
+			continue // file suffix is excluded or we are not deep enough.
 		case lowerName == "" || lowerName[0] == '.':
 			continue // ignore empty names and dot files/folders.
 		case file.IsDir(): // Recurse.
-			for k, v := range FindCompressedFiles(Filter{
-				Path:          filepath.Join(path, file.Name()),
-				ExcludeSuffix: filter.ExcludeSuffix,
-			}) {
+			for k, v := range findCompressedFiles(filepath.Join(path, file.Name()), filter, depth+1) {
 				files[k] = v
 			}
 		case strings.HasSuffix(lowerName, ".rar"):
@@ -158,10 +175,10 @@ func getCompressedFiles(hasrar bool, filter Filter, fileList []os.FileInfo) map[
 			if !hasParts.MatchString(lowerName) || partOne.MatchString(lowerName) {
 				files[path] = append(files[path], filepath.Join(path, file.Name()))
 			}
-		case isArchiveFile(lowerName):
-			files[path] = append(files[path], filepath.Join(path, file.Name()))
 		case !hasrar && strings.HasSuffix(lowerName, ".r00"):
 			// Accept .r00 as the first archive file if no .rar files are present in the path.
+			files[path] = append(files[path], filepath.Join(path, file.Name()))
+		case !strings.HasSuffix(lowerName, ".r00") && isArchiveFile(lowerName):
 			files[path] = append(files[path], filepath.Join(path, file.Name()))
 		}
 	}
