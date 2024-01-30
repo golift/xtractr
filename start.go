@@ -36,8 +36,8 @@ type Config struct {
 // Logger allows this library to write logs.
 // Use this to capture them in your own flow.
 type Logger interface {
-	Printf(string, ...interface{})
-	Debugf(string, ...interface{})
+	Printf(format string, v ...interface{})
+	Debugf(format string, v ...interface{})
 }
 
 // Xtractr is what you get from NewQueue(). This is the main app struct.

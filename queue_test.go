@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"golift.io/xtractr"
 )
 
@@ -60,15 +61,15 @@ func TestWithTempFolder(t *testing.T) {
 	}
 
 	depth, err := queue.Extract(xFile)
+	require.NoError(t, err, "why is there an error?!")
 	assert.Equal(t, 1, depth, "there should be 1 item queued now")
-	assert.NoError(t, err, "why is there an error?!")
 
 	for resp := range xFile.CBChannel {
-		assert.NoError(t, resp.Error, "the test archives should extract without any error")
-		assert.Equal(t, 4, len(resp.Archives), "four directories have archives in them")
+		require.NoError(t, resp.Error, "the test archives should extract without any error")
+		assert.Len(t, resp.Archives, 4, "four directories have archives in them")
 
 		if resp.Done {
-			assert.Equal(t, len(filesInTestArchive)*4+4, len(resp.NewFiles),
+			assert.Len(t, resp.NewFiles, len(filesInTestArchive)*4+4,
 				"wrong count of files were extracted, log files must be written too!")
 			assert.Equal(t, testDataSize*4, resp.Size, "wrong amount of data was written")
 
@@ -99,15 +100,15 @@ func TestNoTempFolder(t *testing.T) {
 	}
 
 	depth, err := queue.Extract(xFile)
+	require.NoError(t, err, "why is there an error?!")
 	assert.Equal(t, 1, depth, "there should be 1 item queued now")
-	assert.NoError(t, err, "why is there an error?!")
 
 	for resp := range xFile.CBChannel {
-		assert.NoError(t, resp.Error, "the test archives should extract without any error")
-		assert.Equal(t, 4, len(resp.Archives), "four directories have archives in them")
+		require.NoError(t, resp.Error, "the test archives should extract without any error")
+		assert.Len(t, resp.Archives, 4, "four directories have archives in them")
 
 		if resp.Done {
-			assert.Equal(t, len(filesInTestArchive)*4, len(resp.NewFiles), "wrong count of files were extracted")
+			assert.Len(t, resp.NewFiles, len(filesInTestArchive)*4, "wrong count of files were extracted")
 			assert.Equal(t, testDataSize*4, resp.Size, "wrong amount of data was written")
 
 			break
@@ -125,39 +126,29 @@ func testSetupTestDir(t *testing.T) string {
 	t.Helper()
 
 	name, err := os.MkdirTemp(".", "xtractr_test_*_data")
-	if err != nil {
-		t.Fatalf("could not make temporary directory: %v", err)
-	}
+	require.NoError(t, err, "creating temp directory failed")
 
 	testFileData, err := os.ReadFile(testFile)
-	if err != nil {
-		t.Fatalf("could not read test data file: %v", err)
-	}
+	require.NoError(t, err, "reading test data file failed")
 
 	for _, sub := range []string{"subDir1", "subDir2", "subDir3"} {
 		err = os.MkdirAll(filepath.Join(name, "subDirectory", sub), xtractr.DefaultDirMode)
-		if err != nil {
-			t.Fatalf("could not make temporary directory: %v", err)
-		}
+		require.NoError(t, err, "creating temp directory failed")
 
 		fileName := filepath.Join(name, "subDirectory", sub, sub+"_archive.rar")
-
-		err := makeFile(testFileData, fileName)
-		if err != nil {
-			t.Fatalf("creating test archive: %v", err)
-		}
+		require.NoError(t, makeFile(t, testFileData, fileName), "creating test archive failed")
 	}
 
-	err = makeFile(testFileData, filepath.Join(name, "subDirectory", "primary_arechive.rar"))
-	if err != nil {
-		t.Fatalf("creating test archive: %v", err)
-	}
+	err = makeFile(t, testFileData, filepath.Join(name, "subDirectory", "primary_arechive.rar"))
+	require.NoError(t, err, "creating test archive failed")
 
 	return name
 }
 
 //nolint:wrapcheck
-func makeFile(data []byte, fileName string) error {
+func makeFile(t *testing.T, data []byte, fileName string) error {
+	t.Helper()
+
 	openFile, err := os.Create(fileName)
 	if err != nil {
 		return err
