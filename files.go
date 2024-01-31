@@ -11,6 +11,59 @@ import (
 	"strings"
 )
 
+// https://github.com/golift/xtractr/issues/44
+//
+//nolint:gochecknoglobals
+var extension2function = map[string]func(*XFile) (int64, []string, []string, error){
+	".tar.bz":  fixOutput(ExtractTarBzip),
+	".tar.bz2": fixOutput(ExtractTarBzip),
+	".tar.gz":  fixOutput(ExtractTarGzip),
+	".tar.xz":  fixOutput(ExtractTarXZ),
+	".tar.z":   fixOutput(ExtractTarZ),
+	// The ones with double extensions that match a single (below) need to come first.
+	".7z":     Extract7z,
+	".7z.001": Extract7z,
+	".z":      fixOutput(ExtractLZW), // everything is lowercase...
+	".br":     fixOutput(ExtractBrotli),
+	".brotli": fixOutput(ExtractBrotli),
+	".bz":     fixOutput(ExtractBzip),
+	".bz2":    fixOutput(ExtractBzip),
+	".gz":     fixOutput(ExtractGzip),
+	".gzip":   fixOutput(ExtractGzip),
+	".iso":    fixOutput(ExtractISO),
+	".lz4":    fixOutput(ExtractLZ4),
+	".r00":    ExtractRAR,
+	".rar":    ExtractRAR,
+	".s2":     fixOutput(ExtractS2),
+	".snappy": fixOutput(ExtractSnappy),
+	".sz":     fixOutput(ExtractSnappy),
+	".tar":    fixOutput(ExtractTar),
+	".tbz":    fixOutput(ExtractTarBzip),
+	".tbz2":   fixOutput(ExtractTarBzip),
+	".tgz":    fixOutput(ExtractTarGzip),
+	".txz":    fixOutput(ExtractTarXZ),
+	".tz":     fixOutput(ExtractTarZ),
+	".xz":     fixOutput(ExtractXZ),
+	".zip":    fixOutput(ExtractZIP),
+	".zlib":   fixOutput(ExtractZlib),
+	".zst":    fixOutput(ExtractZstandard),
+	".zstd":   fixOutput(ExtractZstandard),
+	".zz":     fixOutput(ExtractZlib),
+}
+
+// SupportedExtensions returns a slice of file extensions this library recognizes.
+func SupportedExtensions() []string {
+	exts := make([]string, len(extension2function))
+	count := 0
+
+	for ext := range extension2function {
+		exts[count] = ext
+		count++
+	}
+
+	return exts
+}
+
 // XFile defines the data needed to extract an archive.
 type XFile struct {
 	// Path to archive being extracted.
@@ -137,13 +190,16 @@ func findCompressedFiles(path string, filter *Filter, depth int) map[string][]st
 	return getCompressedFiles(len(r) > 0, path, filter, fileList, depth)
 }
 
-//nolint:cyclop,wsl
 func isArchiveFile(path string) bool {
-	x := strings.ToLower(filepath.Ext(path))
-	return x == ".tar" || x == ".tgz" || x == ".tar.gz" || x == ".gz" ||
-		x == ".tar.bz2" || x == ".tbz2" || x == ".tbz" || x == ".tar.bz" ||
-		x == ".rar" || x == ".r00" || x == ".bz" || x == ".bz2" ||
-		x == ".7z" || x == ".7z.001" || x == ".iso" || x == ".zip"
+	path = strings.ToLower(path)
+
+	for extension := range extension2function {
+		if strings.HasSuffix(path, extension) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // getCompressedFiles checks file suffixes to find archives to decompress.
@@ -194,38 +250,25 @@ func (x *XFile) Extract() (int64, []string, []string, error) {
 
 // ExtractFile calls the correct procedure for the type of file being extracted.
 // Returns size of extracted data, list of extracted files, list of archives processed, and/or error.
-func ExtractFile(xFile *XFile) (int64, []string, []string, error) { //nolint:cyclop
-	var (
-		size  int64
-		files []string
-		err   error
-	)
+func ExtractFile(xFile *XFile) (int64, []string, []string, error) {
+	sName := strings.ToLower(xFile.FilePath)
 
-	switch sName := strings.ToLower(xFile.FilePath); {
-	case strings.HasSuffix(sName, ".rar"), strings.HasSuffix(sName, ".r00"):
-		return ExtractRAR(xFile)
-	case strings.HasSuffix(sName, ".7z"), strings.HasSuffix(sName, ".7z.001"):
-		return Extract7z(xFile)
-	case strings.HasSuffix(sName, ".zip"):
-		size, files, err = ExtractZIP(xFile)
-	case strings.HasSuffix(sName, ".tar.gz"), strings.HasSuffix(sName, ".tgz"):
-		size, files, err = ExtractTarGzip(xFile)
-	case strings.HasSuffix(sName, ".tar.bz2"), strings.HasSuffix(sName, ".tbz2"),
-		strings.HasSuffix(sName, ".tbz"), strings.HasSuffix(sName, ".tar.bz"):
-		size, files, err = ExtractTarBzip(xFile)
-	case strings.HasSuffix(sName, ".bz"), strings.HasSuffix(sName, ".bz2"):
-		size, files, err = ExtractBzip(xFile)
-	case strings.HasSuffix(sName, ".gz"):
-		size, files, err = ExtractGzip(xFile)
-	case strings.HasSuffix(sName, ".iso"):
-		size, files, err = ExtractISO(xFile)
-	case strings.HasSuffix(sName, ".tar"):
-		size, files, err = ExtractTar(xFile)
-	default:
-		return 0, nil, nil, fmt.Errorf("%w: %s", ErrUnknownArchiveType, xFile.FilePath)
+	for extension, extract := range extension2function {
+		if strings.HasSuffix(sName, extension) {
+			return extract(xFile)
+		}
 	}
 
-	return size, files, []string{xFile.FilePath}, err
+	return 0, nil, nil, fmt.Errorf("%w: %s", ErrUnknownArchiveType, xFile.FilePath)
+}
+
+// Functions with multi-part archive files return four values. Other functions return only 3.
+// This fixOutput function makes both interfaces compatible.
+func fixOutput(small func(*XFile) (int64, []string, error)) func(*XFile) (int64, []string, []string, error) {
+	return func(xFile *XFile) (int64, []string, []string, error) {
+		size, files, err := small(xFile)
+		return size, files, []string{xFile.FilePath}, err
+	}
 }
 
 // MoveFiles relocates files then removes the folder they were in.
@@ -361,4 +404,27 @@ func (x *XFile) clean(filePath string, trim ...string) string {
 	}
 
 	return filepath.Clean(filepath.Join(x.OutputDir, filePath))
+}
+
+// AllExcept can be used as an input to ExcludeSuffix in a Filter.
+// Returns a list of supported extensions minus the ones provided.
+// Extensions for like-types such as .rar and .r00 need to both be provided.
+// Same for .tar.gz and .tgz variants.
+func AllExcept(onlyThese []string) []string {
+	output := SupportedExtensions()
+
+	for _, str := range onlyThese {
+		idx := 0
+
+		for _, ext := range output {
+			if !strings.EqualFold(ext, str) {
+				output[idx] = ext
+				idx++
+			}
+		}
+
+		output = output[:idx]
+	}
+
+	return output
 }
