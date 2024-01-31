@@ -11,6 +11,75 @@ import (
 	"strings"
 )
 
+type archive struct {
+	// Extension is passed to strings.HasSuffix.
+	Extension string
+	// Extract function for this extension.
+	Extract Interface
+}
+
+// Interface is a common interface for extracting compressed or non-compressed files or archives.
+type Interface func(*XFile) (int64, []string, []string, error)
+
+// https://github.com/golift/xtractr/issues/44
+//
+//nolint:gochecknoglobals
+var extension2function = []archive{
+	{Extension: ".tar.bz2", Extract: ChngInt(ExtractTarBzip)},
+	{Extension: ".tar.gz", Extract: ChngInt(ExtractTarGzip)},
+	{Extension: ".tar.xz", Extract: ChngInt(ExtractTarXZ)},
+	{Extension: ".tar.z", Extract: ChngInt(ExtractTarZ)},
+	// The ones with double extensions that match a single (below) need to come first.
+	{Extension: ".7z", Extract: Extract7z},
+	{Extension: ".7z.001", Extract: Extract7z},
+	{Extension: ".z", Extract: ChngInt(ExtractLZW)}, // everything is lowercase...
+	{Extension: ".br", Extract: ChngInt(ExtractBrotli)},
+	{Extension: ".brotli", Extract: ChngInt(ExtractBrotli)},
+	{Extension: ".bz2", Extract: ChngInt(ExtractBzip)},
+	{Extension: ".gz", Extract: ChngInt(ExtractGzip)},
+	{Extension: ".gzip", Extract: ChngInt(ExtractGzip)},
+	{Extension: ".iso", Extract: ChngInt(ExtractISO)},
+	{Extension: ".lz4", Extract: ChngInt(ExtractLZ4)},
+	{Extension: ".r00", Extract: ExtractRAR},
+	{Extension: ".rar", Extract: ExtractRAR},
+	{Extension: ".s2", Extract: ChngInt(ExtractS2)},
+	{Extension: ".snappy", Extract: ChngInt(ExtractSnappy)},
+	{Extension: ".sz", Extract: ChngInt(ExtractSnappy)},
+	{Extension: ".tar", Extract: ChngInt(ExtractTar)},
+	{Extension: ".tbz", Extract: ChngInt(ExtractTarBzip)},
+	{Extension: ".tbz2", Extract: ChngInt(ExtractTarBzip)},
+	{Extension: ".tgz", Extract: ChngInt(ExtractTarGzip)},
+	{Extension: ".txz", Extract: ChngInt(ExtractTarXZ)},
+	{Extension: ".tz", Extract: ChngInt(ExtractTarZ)},
+	{Extension: ".xz", Extract: ChngInt(ExtractXZ)},
+	{Extension: ".zip", Extract: ChngInt(ExtractZIP)},
+	{Extension: ".zlib", Extract: ChngInt(ExtractZlib)},
+	{Extension: ".zst", Extract: ChngInt(ExtractZstandard)},
+	{Extension: ".zstd", Extract: ChngInt(ExtractZstandard)},
+	{Extension: ".zz", Extract: ChngInt(ExtractZlib)},
+}
+
+// ChngInt converts the smaller return interface into an ExtractInterface.
+// Functions with multi-part archive files return four values. Other functions return only 3.
+// This ChngInt function makes both interfaces compatible.
+func ChngInt(smallFn func(*XFile) (int64, []string, error)) Interface {
+	return func(xFile *XFile) (int64, []string, []string, error) {
+		size, files, err := smallFn(xFile)
+		return size, files, []string{xFile.FilePath}, err
+	}
+}
+
+// SupportedExtensions returns a slice of file extensions this library recognizes.
+func SupportedExtensions() []string {
+	exts := make([]string, len(extension2function))
+
+	for idx, ext := range extension2function {
+		exts[idx] = ext.Extension
+	}
+
+	return exts
+}
+
 // XFile defines the data needed to extract an archive.
 type XFile struct {
 	// Path to archive being extracted.
@@ -31,11 +100,12 @@ type XFile struct {
 type Filter struct {
 	// This is the path to search in for archives.
 	Path string
-	// Any files with this suffix are ignored. ie. ".7z" or ."iso"
+	// Any files with this suffix are ignored. ie. ".7z" or ".iso"
+	// Use the AllExcept func to create an inclusion list instead.
 	ExcludeSuffix Exclude
 	// Count of folder depth allowed when finding archives. 1 = root
 	MaxDepth int
-	// Only find archives this many child-folders deep.
+	// Only find archives this many child-folders deep. 0 and 1 are equal.
 	MinDepth int
 }
 
@@ -43,7 +113,7 @@ type Filter struct {
 type Exclude []string
 
 // GetFileList returns all the files in a path.
-// This is non-resursive and only returns files _in_ the base path provided.
+// This is non-recursive and only returns files _in_ the base path provided.
 // This is a helper method and only exposed for convenience. You do not have to call this.
 func (x *Xtractr) GetFileList(path string) ([]string, error) {
 	if stat, err := os.Stat(path); err == nil && !stat.IsDir() {
@@ -103,7 +173,7 @@ func (e Exclude) Has(test string) bool {
 // only the first file in a multi-part rar or 7zip archive. Sometimes there are multiple archives,
 // so if the rar archive does not have "part" followed by a number in the name, then it will be
 // considered an independent archive. Some packagers seem to use different naming schemes,
-// so this may need to be updated as time progresses. Use the input to filter to adjust the output.
+// so this may need to be updated as time progresses. Use the input to Filter to adjust the output.
 func FindCompressedFiles(filter Filter) map[string][]string {
 	return findCompressedFiles(filter.Path, &filter, 0)
 }
@@ -137,13 +207,16 @@ func findCompressedFiles(path string, filter *Filter, depth int) map[string][]st
 	return getCompressedFiles(len(r) > 0, path, filter, fileList, depth)
 }
 
-//nolint:cyclop,wsl
 func isArchiveFile(path string) bool {
-	x := strings.ToLower(filepath.Ext(path))
-	return x == ".tar" || x == ".tgz" || x == ".tar.gz" || x == ".gz" ||
-		x == ".tar.bz2" || x == ".tbz2" || x == ".tbz" || x == ".tar.bz" ||
-		x == ".rar" || x == ".r00" || x == ".bz" || x == ".bz2" ||
-		x == ".7z" || x == ".7z.001" || x == ".iso" || x == ".zip"
+	path = strings.ToLower(path)
+
+	for _, ext := range extension2function {
+		if strings.HasSuffix(path, ext.Extension) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // getCompressedFiles checks file suffixes to find archives to decompress.
@@ -194,38 +267,16 @@ func (x *XFile) Extract() (int64, []string, []string, error) {
 
 // ExtractFile calls the correct procedure for the type of file being extracted.
 // Returns size of extracted data, list of extracted files, list of archives processed, and/or error.
-func ExtractFile(xFile *XFile) (int64, []string, []string, error) { //nolint:cyclop
-	var (
-		size  int64
-		files []string
-		err   error
-	)
+func ExtractFile(xFile *XFile) (int64, []string, []string, error) {
+	sName := strings.ToLower(xFile.FilePath)
 
-	switch sName := strings.ToLower(xFile.FilePath); {
-	case strings.HasSuffix(sName, ".rar"), strings.HasSuffix(sName, ".r00"):
-		return ExtractRAR(xFile)
-	case strings.HasSuffix(sName, ".7z"), strings.HasSuffix(sName, ".7z.001"):
-		return Extract7z(xFile)
-	case strings.HasSuffix(sName, ".zip"):
-		size, files, err = ExtractZIP(xFile)
-	case strings.HasSuffix(sName, ".tar.gz"), strings.HasSuffix(sName, ".tgz"):
-		size, files, err = ExtractTarGzip(xFile)
-	case strings.HasSuffix(sName, ".tar.bz2"), strings.HasSuffix(sName, ".tbz2"),
-		strings.HasSuffix(sName, ".tbz"), strings.HasSuffix(sName, ".tar.bz"):
-		size, files, err = ExtractTarBzip(xFile)
-	case strings.HasSuffix(sName, ".bz"), strings.HasSuffix(sName, ".bz2"):
-		size, files, err = ExtractBzip(xFile)
-	case strings.HasSuffix(sName, ".gz"):
-		size, files, err = ExtractGzip(xFile)
-	case strings.HasSuffix(sName, ".iso"):
-		size, files, err = ExtractISO(xFile)
-	case strings.HasSuffix(sName, ".tar"):
-		size, files, err = ExtractTar(xFile)
-	default:
-		return 0, nil, nil, fmt.Errorf("%w: %s", ErrUnknownArchiveType, xFile.FilePath)
+	for _, ext := range extension2function {
+		if strings.HasSuffix(sName, ext.Extension) {
+			return ext.Extract(xFile)
+		}
 	}
 
-	return size, files, []string{xFile.FilePath}, err
+	return 0, nil, nil, fmt.Errorf("%w: %s", ErrUnknownArchiveType, xFile.FilePath)
 }
 
 // MoveFiles relocates files then removes the folder they were in.
@@ -361,4 +412,27 @@ func (x *XFile) clean(filePath string, trim ...string) string {
 	}
 
 	return filepath.Clean(filepath.Join(x.OutputDir, filePath))
+}
+
+// AllExcept can be used as an input to ExcludeSuffix in a Filter.
+// Returns a list of supported extensions minus the ones provided.
+// Extensions for like-types such as .rar and .r00 need to both be provided.
+// Same for .tar.gz and .tgz variants.
+func AllExcept(onlyThese []string) Exclude {
+	output := SupportedExtensions()
+
+	for _, str := range onlyThese {
+		idx := 0
+
+		for _, ext := range output {
+			if !strings.EqualFold(ext, str) {
+				output[idx] = ext
+				idx++
+			}
+		}
+
+		output = output[:idx]
+	}
+
+	return output
 }

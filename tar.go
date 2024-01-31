@@ -9,6 +9,9 @@ import (
 	"io"
 	"os"
 	"strings"
+
+	lzw "github.com/sshaman1101/dcompress"
+	"github.com/therootcompany/xz"
 )
 
 // ExtractTar extracts a raw (non-compressed) tar archive.
@@ -22,49 +25,6 @@ func ExtractTar(xFile *XFile) (int64, []string, error) {
 	return xFile.untar(tar.NewReader(tarFile))
 }
 
-// ExtractBzip extracts a bzip2-compressed file. That is, a single file.
-func ExtractBzip(xFile *XFile) (int64, []string, error) {
-	compressedFile, err := os.Open(xFile.FilePath)
-	if err != nil {
-		return 0, nil, fmt.Errorf("os.Open: %w", err)
-	}
-	defer compressedFile.Close()
-
-	// Get the absolute path of the file were writing.
-	wfile := xFile.clean(xFile.FilePath, ".bz", ".bz2")
-
-	size, err := writeFile(wfile, bzip2.NewReader(compressedFile), xFile.FileMode, xFile.DirMode)
-	if err != nil {
-		return size, nil, err
-	}
-
-	return size, []string{wfile}, nil
-}
-
-// ExtractGzip extracts a gzip-compressed file. That is, a single file.
-func ExtractGzip(xFile *XFile) (int64, []string, error) {
-	compressedFile, err := os.Open(xFile.FilePath)
-	if err != nil {
-		return 0, nil, fmt.Errorf("os.Open: %w", err)
-	}
-	defer compressedFile.Close()
-
-	zipReader, err := gzip.NewReader(compressedFile)
-	if err != nil {
-		return 0, nil, fmt.Errorf("gzip.NewReader: %w", err)
-	}
-
-	// Get the absolute path of the file were writing.
-	wfile := xFile.clean(xFile.FilePath, ".gz")
-
-	size, err := writeFile(wfile, zipReader, xFile.FileMode, xFile.DirMode)
-	if err != nil {
-		return size, nil, err
-	}
-
-	return size, []string{wfile}, nil
-}
-
 // ExtractTarBzip extracts a bzip2-compressed tar archive.
 func ExtractTarBzip(xFile *XFile) (int64, []string, error) {
 	compressedFile, err := os.Open(xFile.FilePath)
@@ -76,7 +36,39 @@ func ExtractTarBzip(xFile *XFile) (int64, []string, error) {
 	return xFile.untar(tar.NewReader(bzip2.NewReader(compressedFile)))
 }
 
-// ExtractTarGzip extracts a gzip-compressed tar archive.
+// ExtractTarXZ extracts an XZ-compressed tar archive (txz).
+func ExtractTarXZ(xFile *XFile) (int64, []string, error) {
+	compressedFile, err := os.Open(xFile.FilePath)
+	if err != nil {
+		return 0, nil, fmt.Errorf("os.Open: %w", err)
+	}
+	defer compressedFile.Close()
+
+	zipStream, err := xz.NewReader(compressedFile, 0)
+	if err != nil {
+		return 0, nil, fmt.Errorf("xz.NewReader: %w", err)
+	}
+
+	return xFile.untar(tar.NewReader(zipStream))
+}
+
+// ExtractTarZ extracts an LZW-compressed tar archive (tz).
+func ExtractTarZ(xFile *XFile) (int64, []string, error) {
+	compressedFile, err := os.Open(xFile.FilePath)
+	if err != nil {
+		return 0, nil, fmt.Errorf("os.Open: %w", err)
+	}
+	defer compressedFile.Close()
+
+	zipStream, err := lzw.NewReader(compressedFile)
+	if err != nil {
+		return 0, nil, fmt.Errorf("xz.NewReader: %w", err)
+	}
+
+	return xFile.untar(tar.NewReader(zipStream))
+}
+
+// ExtractTarGzip extracts a gzip-compressed tar archive (tgz).
 func ExtractTarGzip(xFile *XFile) (int64, []string, error) {
 	compressedFile, err := os.Open(xFile.FilePath)
 	if err != nil {
@@ -84,13 +76,13 @@ func ExtractTarGzip(xFile *XFile) (int64, []string, error) {
 	}
 	defer compressedFile.Close()
 
-	gzipstream, err := gzip.NewReader(compressedFile)
+	zipStream, err := gzip.NewReader(compressedFile)
 	if err != nil {
 		return 0, nil, fmt.Errorf("gzip.NewReader: %w", err)
 	}
-	defer gzipstream.Close()
+	defer zipStream.Close()
 
-	return xFile.untar(tar.NewReader(gzipstream))
+	return xFile.untar(tar.NewReader(zipStream))
 }
 
 func (x *XFile) untar(tarReader *tar.Reader) (int64, []string, error) {
