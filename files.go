@@ -11,54 +11,70 @@ import (
 	"strings"
 )
 
+type archive struct {
+	// Ext is passed to strings.HasSuffix.
+	Ext string
+	// Extract function for this extension.
+	Extract Interface
+}
+
+// Interface is a common interface for extracting compressed or non-compressed files or archives.
+type Interface func(*XFile) (int64, []string, []string, error)
+
 // https://github.com/golift/xtractr/issues/44
 //
 //nolint:gochecknoglobals
-var extension2function = map[string]func(*XFile) (int64, []string, []string, error){
-	".tar.bz":  fixOutput(ExtractTarBzip),
-	".tar.bz2": fixOutput(ExtractTarBzip),
-	".tar.gz":  fixOutput(ExtractTarGzip),
-	".tar.xz":  fixOutput(ExtractTarXZ),
-	".tar.z":   fixOutput(ExtractTarZ),
+var extension2function = []archive{
+	{Ext: ".tar.bz2", Extract: ChngInt(ExtractTarBzip)},
+	{Ext: ".tar.gz", Extract: ChngInt(ExtractTarGzip)},
+	{Ext: ".tar.xz", Extract: ChngInt(ExtractTarXZ)},
+	{Ext: ".tar.z", Extract: ChngInt(ExtractTarZ)},
 	// The ones with double extensions that match a single (below) need to come first.
-	".7z":     Extract7z,
-	".7z.001": Extract7z,
-	".z":      fixOutput(ExtractLZW), // everything is lowercase...
-	".br":     fixOutput(ExtractBrotli),
-	".brotli": fixOutput(ExtractBrotli),
-	".bz":     fixOutput(ExtractBzip),
-	".bz2":    fixOutput(ExtractBzip),
-	".gz":     fixOutput(ExtractGzip),
-	".gzip":   fixOutput(ExtractGzip),
-	".iso":    fixOutput(ExtractISO),
-	".lz4":    fixOutput(ExtractLZ4),
-	".r00":    ExtractRAR,
-	".rar":    ExtractRAR,
-	".s2":     fixOutput(ExtractS2),
-	".snappy": fixOutput(ExtractSnappy),
-	".sz":     fixOutput(ExtractSnappy),
-	".tar":    fixOutput(ExtractTar),
-	".tbz":    fixOutput(ExtractTarBzip),
-	".tbz2":   fixOutput(ExtractTarBzip),
-	".tgz":    fixOutput(ExtractTarGzip),
-	".txz":    fixOutput(ExtractTarXZ),
-	".tz":     fixOutput(ExtractTarZ),
-	".xz":     fixOutput(ExtractXZ),
-	".zip":    fixOutput(ExtractZIP),
-	".zlib":   fixOutput(ExtractZlib),
-	".zst":    fixOutput(ExtractZstandard),
-	".zstd":   fixOutput(ExtractZstandard),
-	".zz":     fixOutput(ExtractZlib),
+	{Ext: ".7z", Extract: Extract7z},
+	{Ext: ".7z.001", Extract: Extract7z},
+	{Ext: ".z", Extract: ChngInt(ExtractLZW)}, // everything is lowercase...
+	{Ext: ".br", Extract: ChngInt(ExtractBrotli)},
+	{Ext: ".brotli", Extract: ChngInt(ExtractBrotli)},
+	{Ext: ".bz2", Extract: ChngInt(ExtractBzip)},
+	{Ext: ".gz", Extract: ChngInt(ExtractGzip)},
+	{Ext: ".gzip", Extract: ChngInt(ExtractGzip)},
+	{Ext: ".iso", Extract: ChngInt(ExtractISO)},
+	{Ext: ".lz4", Extract: ChngInt(ExtractLZ4)},
+	{Ext: ".r00", Extract: ExtractRAR},
+	{Ext: ".rar", Extract: ExtractRAR},
+	{Ext: ".s2", Extract: ChngInt(ExtractS2)},
+	{Ext: ".snappy", Extract: ChngInt(ExtractSnappy)},
+	{Ext: ".sz", Extract: ChngInt(ExtractSnappy)},
+	{Ext: ".tar", Extract: ChngInt(ExtractTar)},
+	{Ext: ".tbz", Extract: ChngInt(ExtractTarBzip)},
+	{Ext: ".tbz2", Extract: ChngInt(ExtractTarBzip)},
+	{Ext: ".tgz", Extract: ChngInt(ExtractTarGzip)},
+	{Ext: ".txz", Extract: ChngInt(ExtractTarXZ)},
+	{Ext: ".tz", Extract: ChngInt(ExtractTarZ)},
+	{Ext: ".xz", Extract: ChngInt(ExtractXZ)},
+	{Ext: ".zip", Extract: ChngInt(ExtractZIP)},
+	{Ext: ".zlib", Extract: ChngInt(ExtractZlib)},
+	{Ext: ".zst", Extract: ChngInt(ExtractZstandard)},
+	{Ext: ".zstd", Extract: ChngInt(ExtractZstandard)},
+	{Ext: ".zz", Extract: ChngInt(ExtractZlib)},
+}
+
+// ChngInt converts the smaller return interface into an ExtractInterface.
+// Functions with multi-part archive files return four values. Other functions return only 3.
+// This ChngInt function makes both interfaces compatible.
+func ChngInt(smallFn func(*XFile) (int64, []string, error)) Interface {
+	return func(xFile *XFile) (int64, []string, []string, error) {
+		size, files, err := smallFn(xFile)
+		return size, files, []string{xFile.FilePath}, err
+	}
 }
 
 // SupportedExtensions returns a slice of file extensions this library recognizes.
 func SupportedExtensions() []string {
 	exts := make([]string, len(extension2function))
-	count := 0
 
-	for ext := range extension2function {
-		exts[count] = ext
-		count++
+	for idx, ext := range extension2function {
+		exts[idx] = ext.Ext
 	}
 
 	return exts
@@ -193,8 +209,8 @@ func findCompressedFiles(path string, filter *Filter, depth int) map[string][]st
 func isArchiveFile(path string) bool {
 	path = strings.ToLower(path)
 
-	for extension := range extension2function {
-		if strings.HasSuffix(path, extension) {
+	for _, ext := range extension2function {
+		if strings.HasSuffix(path, ext.Ext) {
 			return true
 		}
 	}
@@ -253,22 +269,13 @@ func (x *XFile) Extract() (int64, []string, []string, error) {
 func ExtractFile(xFile *XFile) (int64, []string, []string, error) {
 	sName := strings.ToLower(xFile.FilePath)
 
-	for extension, extract := range extension2function {
-		if strings.HasSuffix(sName, extension) {
-			return extract(xFile)
+	for _, ext := range extension2function {
+		if strings.HasSuffix(sName, ext.Ext) {
+			return ext.Extract(xFile)
 		}
 	}
 
 	return 0, nil, nil, fmt.Errorf("%w: %s", ErrUnknownArchiveType, xFile.FilePath)
-}
-
-// Functions with multi-part archive files return four values. Other functions return only 3.
-// This fixOutput function makes both interfaces compatible.
-func fixOutput(small func(*XFile) (int64, []string, error)) func(*XFile) (int64, []string, []string, error) {
-	return func(xFile *XFile) (int64, []string, []string, error) {
-		size, files, err := small(xFile)
-		return size, files, []string{xFile.FilePath}, err
-	}
 }
 
 // MoveFiles relocates files then removes the folder they were in.
