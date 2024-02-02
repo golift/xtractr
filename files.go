@@ -431,7 +431,7 @@ func (x *XFile) clean(filePath string, trim ...string) string {
 // Returns a list of supported extensions minus the ones provided.
 // Extensions for like-types such as .rar and .r00 need to both be provided.
 // Same for .tar.gz and .tgz variants.
-func AllExcept(onlyThese []string) Exclude {
+func AllExcept(onlyThese ...string) Exclude {
 	// Start by excluding everything.
 	output := SupportedExtensions()
 
