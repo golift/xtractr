@@ -2,6 +2,7 @@ package xtractr
 
 import (
 	"compress/gzip"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -46,7 +47,7 @@ func (x *XFile) uncpio(reader io.Reader) (int64, []string, error) {
 
 	for {
 		zipFile, err := zipReader.Next()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			return size, files, nil
 		} else if err != nil {
 			return 0, nil, fmt.Errorf("cpio Next() failed: %w", err)

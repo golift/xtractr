@@ -18,7 +18,7 @@ var (
 	ErrUnsupportedRPMArchiveFmt  = fmt.Errorf("unsupported rpm archive format")
 )
 
-func ExtractRPM(xFile *XFile) (int64, []string, error) {
+func ExtractRPM(xFile *XFile) (int64, []string, error) { //nolint:cyclop
 	rpmFile, err := os.Open(xFile.FilePath)
 	if err != nil {
 		return 0, nil, fmt.Errorf("os.Open: %w", err)
