@@ -4,7 +4,7 @@ go 1.19
 
 require (
 	github.com/andybalholm/brotli v1.1.0
-	github.com/bodgit/sevenzip v1.4.5
+	github.com/bodgit/sevenzip v1.5.0
 	github.com/kdomanski/iso9660 v0.4.0
 	github.com/klauspost/compress v1.17.6
 	github.com/nwaples/rardecode v1.1.3
