@@ -10,7 +10,7 @@ require (
 	github.com/nwaples/rardecode v1.1.3
 	github.com/pierrec/lz4/v4 v4.1.21
 	github.com/sshaman1101/dcompress v0.0.0-20200109162717-50436a6332de
-	github.com/stretchr/testify v1.8.4
+	github.com/stretchr/testify v1.9.0
 	github.com/therootcompany/xz v1.0.1
 )
 
