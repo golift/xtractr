@@ -5,20 +5,15 @@ linters:
   enable-all: true
   disable:
     # deprecated
-    - maligned
-    - scopelint
-    - interfacer
-    - golint
-    - exhaustivestruct
-    - nosnakecase
-    - structcheck
-    - deadcode
-    - varcheck
-    - ifshort
+    - gomnd
+    - execinquery
     # unused
     - nlreturn
     - exhaustruct
     - depguard
+    # requires go 1.22
+    - copyloopvar
+    - intrange
 
 output:
   sort-results: true
