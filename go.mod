@@ -6,7 +6,7 @@ require (
 	github.com/andybalholm/brotli v1.1.0
 	github.com/bodgit/sevenzip v1.5.1
 	github.com/kdomanski/iso9660 v0.4.0
-	github.com/klauspost/compress v1.17.8
+	github.com/klauspost/compress v1.17.9
 	github.com/nwaples/rardecode v1.1.3
 	github.com/pierrec/lz4/v4 v4.1.21
 	github.com/sshaman1101/dcompress v0.0.0-20200109162717-50436a6332de
