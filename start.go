@@ -1,7 +1,7 @@
 package xtractr
 
 import (
-	"fmt"
+	"errors"
 	"os"
 )
 
@@ -50,14 +50,14 @@ type Xtractr struct {
 
 // Custom errors returned by this module.
 var (
-	ErrQueueStopped       = fmt.Errorf("extractor queue stopped, cannot extract")
-	ErrNoCompressedFiles  = fmt.Errorf("no compressed files found")
-	ErrUnknownArchiveType = fmt.Errorf("unknown archive file type")
-	ErrInvalidPath        = fmt.Errorf("archived file contains invalid path")
-	ErrInvalidHead        = fmt.Errorf("archived file contains invalid header file")
-	ErrQueueRunning       = fmt.Errorf("extractor queue running, cannot start")
-	ErrNoConfig           = fmt.Errorf("call NewQueue() to initialize a queue")
-	ErrNoLogger           = fmt.Errorf("xtractr.Config.Logger must be non-nil")
+	ErrQueueStopped       = errors.New("extractor queue stopped, cannot extract")
+	ErrNoCompressedFiles  = errors.New("no compressed files found")
+	ErrUnknownArchiveType = errors.New("unknown archive file type")
+	ErrInvalidPath        = errors.New("archived file contains invalid path")
+	ErrInvalidHead        = errors.New("archived file contains invalid header file")
+	ErrQueueRunning       = errors.New("extractor queue running, cannot start")
+	ErrNoConfig           = errors.New("call NewQueue() to initialize a queue")
+	ErrNoLogger           = errors.New("xtractr.Config.Logger must be non-nil")
 )
 
 // NewQueue returns a new Xtractr Queue you can send Xtract jobs into.
