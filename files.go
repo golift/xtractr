@@ -200,11 +200,7 @@ func findCompressedFiles(path string, filter *Filter, depth int) map[string][]st
 		return nil
 	}
 
-	// Check (save) if the current path has any rar files.
-	// So we can ignore r00 if it does.
-	r, _ := filepath.Glob(filepath.Join(path, "*.rar"))
-
-	return getCompressedFiles(len(r) > 0, path, filter, fileList, depth)
+	return getCompressedFiles(path, filter, fileList, depth)
 }
 
 func isArchiveFile(path string) bool {
@@ -219,10 +215,22 @@ func isArchiveFile(path string) bool {
 	return false
 }
 
+// checkR00ForRarFile scans the file list to determine if a .rar file with the same name as .r00 exists.
+func checkR00ForRarFile(fileList []os.FileInfo, r00file string) bool {
+	findFile := strings.TrimSuffix(r00file, ".r00") + ".rar"
+
+	for _, file := range fileList {
+		if strings.EqualFold(file.Name(), findFile) {
+			return true
+		}
+	}
+
+	return false
+}
+
 // getCompressedFiles checks file suffixes to find archives to decompress.
 // This pays special attention to the widely accepted variance of rar formats.
 func getCompressedFiles( //nolint:cyclop
-	hasrar bool,
 	path string,
 	filter *Filter,
 	fileList []os.FileInfo,
@@ -248,7 +256,7 @@ func getCompressedFiles( //nolint:cyclop
 			if !hasParts.MatchString(lowerName) || partOne.MatchString(lowerName) {
 				files[path] = append(files[path], filepath.Join(path, file.Name()))
 			}
-		case !hasrar && strings.HasSuffix(lowerName, ".r00"):
+		case strings.HasSuffix(lowerName, ".r00") && !checkR00ForRarFile(fileList, lowerName):
 			// Accept .r00 as the first archive file if no .rar files are present in the path.
 			files[path] = append(files[path], filepath.Join(path, file.Name()))
 		case !strings.HasSuffix(lowerName, ".r00") && isArchiveFile(lowerName):
