@@ -26,8 +26,9 @@ func createTestPaths(t *testing.T) string {
 		"/path0/path1/path2/file.gz",         // 8
 		"/path0/path1/path2/file.zip",        // 9
 		"/path0/path1/path2/file.txt",        // not archive
-		"/path0/path1/path2/path3/file.rar",  // 10
-		"/path0/path1/path2/path3/file2.rar", // 11
+		"/path0/path1/path2/path3/file.r00",  // 10 because no file.rar.
+		"/path0/path1/path2/path3/file2.r00", // skip because RAR v
+		"/path0/path1/path2/path3/file2.RAR", // 11
 		"/path0/path1/path2/path3/file3.iso", // 12
 		"/path0/path1/path2/path3/file.nfo",  // not archive
 	}
