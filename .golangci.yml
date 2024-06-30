@@ -4,9 +4,6 @@ run:
 linters:
   enable-all: true
   disable:
-    # disabled because of Go 1.19
-    - copyloopvar
-    - intrange
     # deprecated
     - gomnd
     - execinquery
