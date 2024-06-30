@@ -445,7 +445,9 @@ func AllExcept(onlyThese []string) Exclude {
 }
 
 // Count returns the number of unique archives in the archive list.
-func (a ArchiveList) Count() (count int) {
+func (a ArchiveList) Count() int {
+	var count int
+
 	for _, files := range a {
 		count += len(files)
 	}
