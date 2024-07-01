@@ -195,7 +195,7 @@ func findCompressedFiles(path string, filter *Filter, depth int) ArchiveList {
 
 	if info, err := dir.Stat(); err != nil {
 		return nil // unreadable folder?
-	} else if !info.IsDir() && isArchiveFile(path) {
+	} else if !info.IsDir() && IsArchiveFile(path) {
 		return ArchiveList{path: {path}} // passed in an archive file; send it back out.
 	}
 
@@ -207,7 +207,11 @@ func findCompressedFiles(path string, filter *Filter, depth int) ArchiveList {
 	return getCompressedFiles(path, filter, fileList, depth)
 }
 
-func isArchiveFile(path string) bool {
+// IsArchiveFile returns true if the provided path has an archive file extension.
+// This is not picky about extensions, and will match any that are known as an archive.
+// In the future, it may use file magic to figure out if the file is an archive without
+// relying on the extension.
+func IsArchiveFile(path string) bool {
 	path = strings.ToLower(path)
 
 	for _, ext := range extension2function {
@@ -258,7 +262,7 @@ func getCompressedFiles(path string, filter *Filter, fileList []os.FileInfo, dep
 		case strings.HasSuffix(lowerName, ".r00") && !checkR00ForRarFile(fileList, lowerName):
 			// Accept .r00 as the first archive file if no .rar files are present in the path.
 			files[path] = append(files[path], filepath.Join(path, file.Name()))
-		case !strings.HasSuffix(lowerName, ".r00") && isArchiveFile(lowerName):
+		case !strings.HasSuffix(lowerName, ".r00") && IsArchiveFile(lowerName):
 			files[path] = append(files[path], filepath.Join(path, file.Name()))
 		}
 	}
@@ -301,7 +305,7 @@ func (x *Xtractr) MoveFiles(fromPath string, toPath string, overwrite bool) ([]s
 	}
 
 	// If the "to path" is an existing archive file, remove the suffix to make a directory.
-	if _, err := os.Stat(toPath); err == nil && isArchiveFile(toPath) {
+	if _, err := os.Stat(toPath); err == nil && IsArchiveFile(toPath) {
 		toPath = strings.TrimSuffix(toPath, filepath.Ext(toPath))
 	}
 
