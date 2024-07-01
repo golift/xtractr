@@ -12,6 +12,7 @@ import (
 
 	lzw "github.com/sshaman1101/dcompress"
 	"github.com/therootcompany/xz"
+	"github.com/ulikunitz/xz/lzma"
 )
 
 // ExtractTar extracts a raw (non-compressed) tar archive.
@@ -22,7 +23,7 @@ func ExtractTar(xFile *XFile) (int64, []string, error) {
 	}
 	defer tarFile.Close()
 
-	return xFile.untar(tar.NewReader(tarFile))
+	return xFile.untar(tarFile)
 }
 
 // ExtractTarBzip extracts a bzip2-compressed tar archive.
@@ -33,7 +34,7 @@ func ExtractTarBzip(xFile *XFile) (int64, []string, error) {
 	}
 	defer compressedFile.Close()
 
-	return xFile.untar(tar.NewReader(bzip2.NewReader(compressedFile)))
+	return xFile.untar(bzip2.NewReader(compressedFile))
 }
 
 // ExtractTarXZ extracts an XZ-compressed tar archive (txz).
@@ -49,7 +50,7 @@ func ExtractTarXZ(xFile *XFile) (int64, []string, error) {
 		return 0, nil, fmt.Errorf("xz.NewReader: %w", err)
 	}
 
-	return xFile.untar(tar.NewReader(zipStream))
+	return xFile.untar(zipStream)
 }
 
 // ExtractTarZ extracts an LZW-compressed tar archive (tz).
@@ -65,7 +66,7 @@ func ExtractTarZ(xFile *XFile) (int64, []string, error) {
 		return 0, nil, fmt.Errorf("xz.NewReader: %w", err)
 	}
 
-	return xFile.untar(tar.NewReader(zipStream))
+	return xFile.untar(zipStream)
 }
 
 // ExtractTarGzip extracts a gzip-compressed tar archive (tgz).
@@ -82,10 +83,27 @@ func ExtractTarGzip(xFile *XFile) (int64, []string, error) {
 	}
 	defer zipStream.Close()
 
-	return xFile.untar(tar.NewReader(zipStream))
+	return xFile.untar(zipStream)
 }
 
-func (x *XFile) untar(tarReader *tar.Reader) (int64, []string, error) {
+// ExtractTarLzip extracts an LZIP-compressed tar archive (tlz).
+func ExtractTarLzip(xFile *XFile) (int64, []string, error) {
+	compressedFile, err := os.Open(xFile.FilePath)
+	if err != nil {
+		return 0, nil, fmt.Errorf("os.Open: %w", err)
+	}
+	defer compressedFile.Close()
+
+	zipStream, err := lzma.NewReader(compressedFile)
+	if err != nil {
+		return 0, nil, fmt.Errorf("xz.NewReader: %w", err)
+	}
+
+	return xFile.untar(zipStream)
+}
+
+func (x *XFile) untar(reader io.Reader) (int64, []string, error) {
+	tarReader := tar.NewReader(reader)
 	files := []string{}
 	size := int64(0)
 
