@@ -226,7 +226,7 @@ func IsArchiveFile(path string) bool {
 // CheckR00ForRarFile scans the file list to determine if a .rar file with the same name as .r00 exists.
 // Returns true if the r00 files has an accompanying rar file in the fileList.
 func CheckR00ForRarFile(fileList []os.FileInfo, r00file string) bool {
-	findFile := strings.TrimSuffix(r00file, ".r00") + ".rar"
+	findFile := strings.TrimSuffix(strings.TrimSuffix(r00file, ".R00"), ".r00") + ".rar"
 
 	for _, file := range fileList {
 		if strings.EqualFold(file.Name(), findFile) {
