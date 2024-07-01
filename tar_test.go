@@ -143,9 +143,7 @@ func safeCloser(t *testing.T, c io.Closer) {
 	require.NoError(t, err)
 }
 
-func writeTar(t *testing.T, sourceDir string, destWriter io.Writer) error {
-	t.Helper()
-
+func writeTar(sourceDir string, destWriter io.Writer) error {
 	tarWriter := tar.NewWriter(destWriter)
 	outErr := filepath.Walk(sourceDir, func(path string, info os.FileInfo, _ error) error {
 		if info.Mode().IsDir() {
@@ -174,9 +172,8 @@ func writeTar(t *testing.T, sourceDir string, destWriter io.Writer) error {
 		}
 		return nil
 	})
-	require.NoError(t, outErr)
 
-	return nil
+	return fmt.Errorf("failed to walk source directory: %w", outErr)
 }
 
 func (c *tarCompressor) Compress(t *testing.T, sourceDir string, destBase string) error {
@@ -185,7 +182,7 @@ func (c *tarCompressor) Compress(t *testing.T, sourceDir string, destBase string
 	defer safeCloser(t, tarFile)
 	require.NoError(t, err)
 
-	return writeTar(t, sourceDir, tarFile)
+	return writeTar(sourceDir, tarFile)
 }
 
 func (c *tarZCompressor) Compress(t *testing.T, sourceDir string, destBase string) error {
@@ -195,7 +192,7 @@ func (c *tarZCompressor) Compress(t *testing.T, sourceDir string, destBase strin
 	tarFile, err := os.Create(tarFilename)
 	require.NoError(t, err)
 
-	err = writeTar(t, sourceDir, tarFile)
+	err = writeTar(sourceDir, tarFile)
 	require.NoError(t, err)
 	tarFile.Close()
 
@@ -216,7 +213,7 @@ func (c *tarBzipCompressor) Compress(t *testing.T, sourceDir string, destBase st
 	defer safeCloser(t, bzip2Writer)
 	require.NoError(t, err)
 
-	err = writeTar(t, sourceDir, bzip2Writer)
+	err = writeTar(sourceDir, bzip2Writer)
 	require.NoError(t, err)
 
 	return nil
@@ -233,7 +230,7 @@ func (c *tarXZCompressor) Compress(t *testing.T, sourceDir string, destBase stri
 	defer safeCloser(t, xzWriter)
 	require.NoError(t, err)
 
-	err = writeTar(t, sourceDir, xzWriter)
+	err = writeTar(sourceDir, xzWriter)
 	require.NoError(t, err)
 
 	return nil
@@ -250,7 +247,7 @@ func (c *tarGzipCompressor) Compress(t *testing.T, sourceDir string, destBase st
 	defer gzipWriter.Close()
 	require.NoError(t, err)
 
-	err = writeTar(t, sourceDir, gzipWriter)
+	err = writeTar(sourceDir, gzipWriter)
 	require.NoError(t, err)
 
 	return nil
