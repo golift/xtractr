@@ -11,6 +11,10 @@ import (
 	"strings"
 )
 
+// ArchiveList is the value returned when searchying for compressed files.
+// The map is directory to list of archives in that directory.
+type ArchiveList map[string][]string
+
 type archive struct {
 	// Extension is passed to strings.HasSuffix.
 	Extension string
@@ -174,11 +178,11 @@ func (e Exclude) Has(test string) bool {
 // so if the rar archive does not have "part" followed by a number in the name, then it will be
 // considered an independent archive. Some packagers seem to use different naming schemes,
 // so this may need to be updated as time progresses. Use the input to Filter to adjust the output.
-func FindCompressedFiles(filter Filter) map[string][]string {
+func FindCompressedFiles(filter Filter) ArchiveList {
 	return findCompressedFiles(filter.Path, &filter, 0)
 }
 
-func findCompressedFiles(path string, filter *Filter, depth int) map[string][]string {
+func findCompressedFiles(path string, filter *Filter, depth int) ArchiveList {
 	if filter.MaxDepth > 0 && filter.MaxDepth < depth {
 		return nil
 	}
@@ -192,7 +196,7 @@ func findCompressedFiles(path string, filter *Filter, depth int) map[string][]st
 	if info, err := dir.Stat(); err != nil {
 		return nil // unreadable folder?
 	} else if !info.IsDir() && isArchiveFile(path) {
-		return map[string][]string{path: {path}} // passed in an archive file; send it back out.
+		return ArchiveList{path: {path}} // passed in an archive file; send it back out.
 	}
 
 	fileList, err := dir.Readdir(-1)
@@ -230,13 +234,8 @@ func checkR00ForRarFile(fileList []os.FileInfo, r00file string) bool {
 
 // getCompressedFiles checks file suffixes to find archives to decompress.
 // This pays special attention to the widely accepted variance of rar formats.
-func getCompressedFiles( //nolint:cyclop
-	path string,
-	filter *Filter,
-	fileList []os.FileInfo,
-	depth int,
-) map[string][]string {
-	files := map[string][]string{}
+func getCompressedFiles(path string, filter *Filter, fileList []os.FileInfo, depth int) ArchiveList { //nolint:cyclop
+	files := ArchiveList{}
 
 	for _, file := range fileList {
 		switch lowerName := strings.ToLower(file.Name()); {
@@ -443,4 +442,26 @@ func AllExcept(onlyThese []string) Exclude {
 	}
 
 	return output
+}
+
+// Count returns the number of unique archives in the archive list.
+func (a ArchiveList) Count() int {
+	var count int
+
+	for _, files := range a {
+		count += len(files)
+	}
+
+	return count
+}
+
+// Random returns a random file listing from the archive list.
+// If the list only contains one directory, then that is the one returned.
+// If the archive list is empty or nil, returns nil.
+func (a ArchiveList) Random() []string {
+	for _, files := range a {
+		return files
+	}
+
+	return nil
 }
