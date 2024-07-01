@@ -3,6 +3,7 @@ package xtractr
 import (
 	"compress/bzip2"
 	"compress/gzip"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -14,8 +15,8 @@ import (
 )
 
 var (
-	ErrUnsupportedRPMCompression = fmt.Errorf("unsupported rpm compression")
-	ErrUnsupportedRPMArchiveFmt  = fmt.Errorf("unsupported rpm archive format")
+	ErrUnsupportedRPMCompression = errors.New("unsupported rpm compression")
+	ErrUnsupportedRPMArchiveFmt  = errors.New("unsupported rpm archive format")
 )
 
 func ExtractRPM(xFile *XFile) (int64, []string, error) { //nolint:cyclop

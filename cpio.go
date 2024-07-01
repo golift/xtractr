@@ -58,7 +58,7 @@ func (x *XFile) uncpio(reader io.Reader) (int64, []string, error) {
 			return size, files, fmt.Errorf("%s: %w", x.FilePath, err)
 		}
 
-		files = append(files, filepath.Join(x.OutputDir, zipFile.Name)) //nolint: gosec
+		files = append(files, filepath.Join(x.OutputDir, zipFile.Name))
 		size += fSize
 	}
 }
