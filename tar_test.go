@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/dsnet/compress/bzip2"
@@ -93,21 +94,26 @@ proident, sunt in culpa qui officia deserunt mollit anim id est laborum.`
 	}
 
 	tests := []struct {
-		name       string
-		compressor compressor
-		extension  string
+		name        string
+		compressor  compressor
+		extension   string
+		skipWindows bool
 	}{
-		{"tar", &tarCompressor{}, "tar"},
-		{"tarZ", &tarZCompressor{}, "tar.z"},
-		{"tarBzip", &tarBzipCompressor{}, "tar.bz2"},
-		{"tarXZ", &tarXZCompressor{}, "tar.xz"},
-		{"tarGzip", &tarGzipCompressor{}, "tar.gz"},
+		{"tar", &tarCompressor{}, "tar", false},
+		{"tarZ", &tarZCompressor{}, "tar.z", true},
+		{"tarBzip", &tarBzipCompressor{}, "tar.bz2", false},
+		{"tarXZ", &tarXZCompressor{}, "tar.xz", false},
+		{"tarGzip", &tarGzipCompressor{}, "tar.gz", false},
 	}
 
 	for i := range tests {
 		test := tests[i]
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
+
+			if runtime.GOOS == "windows" && test.skipWindows {
+				t.Log("skipping test on windows")
+			}
 
 			archiveBase := filepath.Join(destFilesDir, "archive")
 			err := test.compressor.Compress(t, sourceFilesDir, archiveBase)
@@ -194,7 +200,7 @@ func (c *tarZCompressor) Compress(t *testing.T, sourceDir string, destBase strin
 	tarFile.Close()
 
 	cmd := exec.Command("compress", tarFilename).Run()
-	assert.Nil(t, cmd)
+	assert.NoError(t, cmd)
 
 	return nil
 }
