@@ -223,9 +223,10 @@ func IsArchiveFile(path string) bool {
 	return false
 }
 
-// checkR00ForRarFile scans the file list to determine if a .rar file with the same name as .r00 exists.
-func checkR00ForRarFile(fileList []os.FileInfo, r00file string) bool {
-	findFile := strings.TrimSuffix(r00file, ".r00") + ".rar"
+// CheckR00ForRarFile scans the file list to determine if a .rar file with the same name as .r00 exists.
+// Returns true if the r00 files has an accompanying rar file in the fileList.
+func CheckR00ForRarFile(fileList []os.FileInfo, r00file string) bool {
+	findFile := strings.TrimSuffix(strings.TrimSuffix(r00file, ".R00"), ".r00") + ".rar"
 
 	for _, file := range fileList {
 		if strings.EqualFold(file.Name(), findFile) {
@@ -259,7 +260,7 @@ func getCompressedFiles(path string, filter *Filter, fileList []os.FileInfo, dep
 			if !hasParts.MatchString(lowerName) || partOne.MatchString(lowerName) {
 				files[path] = append(files[path], filepath.Join(path, file.Name()))
 			}
-		case strings.HasSuffix(lowerName, ".r00") && !checkR00ForRarFile(fileList, lowerName):
+		case strings.HasSuffix(lowerName, ".r00") && !CheckR00ForRarFile(fileList, lowerName):
 			// Accept .r00 as the first archive file if no .rar files are present in the path.
 			files[path] = append(files[path], filepath.Join(path, file.Name()))
 		case !strings.HasSuffix(lowerName, ".r00") && IsArchiveFile(lowerName):
