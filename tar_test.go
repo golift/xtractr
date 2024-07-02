@@ -192,7 +192,7 @@ func (c *tarZCompressor) Compress(t *testing.T, _ string, destBase string) error
 
 	// No native Go library for .tar.Z and compress Unix utility is not available on
 	// Windows. So, we use a pre-compressed file from test_data.
-	tarZFilename := destBase + ".tar.Z"
+	tarZFilename := destBase + ".tar.z"
 	tarZDestFile, err := os.Create(tarZFilename)
 	require.NoError(t, err)
 
