@@ -187,7 +187,7 @@ func (c *tarCompressor) Compress(t *testing.T, sourceDir string, destBase string
 	return writeTar(sourceDir, tarFile)
 }
 
-func (c *tarZCompressor) Compress(t *testing.T, sourceDir string, destBase string) error {
+func (c *tarZCompressor) Compress(t *testing.T, _ string, destBase string) error {
 	t.Helper()
 
 	// No native Go library for .tar.Z and compress Unix utility is not available on
@@ -203,7 +203,7 @@ func (c *tarZCompressor) Compress(t *testing.T, sourceDir string, destBase strin
 	assert.Greater(t, written, int64(0))
 	require.NoError(t, err)
 
-	return err
+	return nil
 }
 
 func (c *tarBzipCompressor) Compress(t *testing.T, sourceDir string, destBase string) error {
