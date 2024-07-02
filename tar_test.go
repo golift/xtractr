@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"testing"
@@ -173,6 +172,9 @@ func writeTar(sourceDir string, destWriter io.Writer) error {
 		return nil
 	})
 
+	if outErr == nil {
+		return nil
+	}
 	return fmt.Errorf("failed to walk source directory: %w", outErr)
 }
 
@@ -187,19 +189,21 @@ func (c *tarCompressor) Compress(t *testing.T, sourceDir string, destBase string
 
 func (c *tarZCompressor) Compress(t *testing.T, sourceDir string, destBase string) error {
 	t.Helper()
-	tarFilename := destBase + ".tar"
 
-	tarFile, err := os.Create(tarFilename)
+	// No native Go library for .tar.Z and compress Unix utility is not available on
+	// Windows. So, we use a pre-compressed file from test_data.
+	tarZFilename := destBase + ".tar.Z"
+	tarZDestFile, err := os.Create(tarZFilename)
 	require.NoError(t, err)
 
-	err = writeTar(sourceDir, tarFile)
+	tarZTestFile, err := os.Open("test_data/archive.tar.Z")
 	require.NoError(t, err)
-	tarFile.Close()
 
-	cmd := exec.Command("compress", tarFilename).Run()
-	assert.NoError(t, cmd)
+	written, err := io.Copy(tarZDestFile, tarZTestFile)
+	assert.Greater(t, written, int64(0))
+	require.NoError(t, err)
 
-	return nil
+	return err
 }
 
 func (c *tarBzipCompressor) Compress(t *testing.T, sourceDir string, destBase string) error {
