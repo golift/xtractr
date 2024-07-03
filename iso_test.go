@@ -66,10 +66,3 @@ func TestIso(t *testing.T) {
 	assert.Len(t, files, testFilesInfo.fileCount)
 	assert.Len(t, archives, testFilesInfo.archiveCount)
 }
-
-// err := writer.WriteTo(isoFile, "Test")
-// if err != nil {
-// 	log.Fatalf("failed to write ISO image: %s", err)
-// }
-
-// }

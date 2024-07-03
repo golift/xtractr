@@ -3,6 +3,7 @@ package xtractr_test
 // Shared utility functions/structs used in testing only.
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -90,4 +91,10 @@ proident, sunt in culpa qui officia deserunt mollit anim id est laborum.`
 		fileCount:    testFileCount,
 		archiveCount: testArchiveCount,
 	}
+}
+
+func safeCloser(t *testing.T, c io.Closer) {
+	t.Helper()
+	err := c.Close()
+	require.NoError(t, err)
 }

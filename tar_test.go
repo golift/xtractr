@@ -73,12 +73,6 @@ func TestTar(t *testing.T) {
 	}
 }
 
-func safeCloser(t *testing.T, c io.Closer) {
-	t.Helper()
-	err := c.Close()
-	require.NoError(t, err)
-}
-
 func writeTar(sourceDir string, destWriter io.Writer) error {
 	tarWriter := tar.NewWriter(destWriter)
 	outErr := filepath.Walk(sourceDir, func(path string, info os.FileInfo, _ error) error {
