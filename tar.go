@@ -63,7 +63,7 @@ func ExtractTarZ(xFile *XFile) (int64, []string, error) {
 
 	zipStream, err := lzw.NewReader(compressedFile)
 	if err != nil {
-		return 0, nil, fmt.Errorf("xz.NewReader: %w", err)
+		return 0, nil, fmt.Errorf("lzw.NewReader: %w", err)
 	}
 
 	return xFile.untar(zipStream)
