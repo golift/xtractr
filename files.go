@@ -486,3 +486,14 @@ func (a ArchiveList) Random() []string {
 
 	return nil
 }
+
+// List returns all of the archives as a string slice.
+func (a ArchiveList) List() []string {
+	list := []string{}
+
+	for _, files := range a {
+		list = append(list, files...)
+	}
+
+	return list
+}
