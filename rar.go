@@ -99,6 +99,13 @@ func (x *XFile) unrar(rarReader *rardecode.ReadCloser) (int64, []string, error) 
 				x.FilePath, ErrInvalidPath, wfile, x.OutputDir, header.Name)
 		}
 
+		file := "file"
+		if header.IsDir {
+			file = "directory"
+		}
+
+		x.Debugf("Writing archived %s: %s (packed: %d, unpacked: %d)", file, wfile, header.PackedSize, header.UnPackedSize)
+
 		if header.IsDir {
 			if err = os.MkdirAll(wfile, x.DirMode); err != nil {
 				return size, files, fmt.Errorf("os.MkdirAll: %w", err)
@@ -116,9 +123,8 @@ func (x *XFile) unrar(rarReader *rardecode.ReadCloser) (int64, []string, error) 
 			return size, files, err
 		}
 
-		x.Debugf("Extracted file: %s (%d bytes)", wfile, fSize)
-
 		files = append(files, wfile)
 		size += fSize
+		x.Debugf("Wrote extracted file: %s (%d bytes), total: %d files and %d bytes", wfile, fSize, len(files), size)
 	}
 }
