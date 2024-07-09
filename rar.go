@@ -116,6 +116,8 @@ func (x *XFile) unrar(rarReader *rardecode.ReadCloser) (int64, []string, error) 
 			return size, files, err
 		}
 
+		x.Debugf("Extracted file: %s (%d bytes)", wfile, fSize)
+
 		files = append(files, wfile)
 		size += fSize
 	}

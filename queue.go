@@ -327,6 +327,7 @@ func (x *Xtractr) processArchive(filename string, resp *Response) (int64, []stri
 		DirMode:   x.config.DirMode,
 		Passwords: resp.X.Passwords,
 		Password:  resp.X.Password,
+		log:       x.config.Logger,
 	})
 	if err != nil {
 		x.DeleteFiles(resp.Output) // clean up the mess after an error and bail.

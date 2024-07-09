@@ -98,6 +98,8 @@ type XFile struct {
 	Password string
 	// (RAR/7z) Archive passwords (to try multiple).
 	Passwords []string
+	// Logger allows printing debug messages.
+	log Logger
 }
 
 // Filter is the input to find compressed files.
@@ -115,6 +117,13 @@ type Filter struct {
 
 // Exclude represents an exclusion list.
 type Exclude []string
+
+// Debugf calls the debug method on the logger if it's not nil.
+func (x *XFile) Debugf(format string, v ...interface{}) {
+	if x.log != nil {
+		x.log.Debugf(format, v...)
+	}
+}
 
 // GetFileList returns all the files in a path.
 // This is non-recursive and only returns files _in_ the base path provided.
@@ -291,19 +300,6 @@ func ExtractFile(xFile *XFile) (int64, []string, []string, error) {
 	return 0, nil, nil, fmt.Errorf("%w: %s", ErrUnknownArchiveType, xFile.FilePath)
 }
 
-func fileList(paths ...string) []string {
-	files := []string{}
-
-	for _, path := range paths {
-		if file, err := os.Open(path); err == nil {
-			names, _ := file.Readdirnames(0)
-			files = append(files, names...)
-		}
-	}
-
-	return files
-}
-
 // MoveFiles relocates files then removes the folder they were in.
 // Returns the new file paths.
 // This is a helper method and only exposed for convenience. You do not have to call this.
@@ -323,8 +319,7 @@ func (x *Xtractr) MoveFiles(fromPath string, toPath string, overwrite bool) ([]s
 		toPath = strings.TrimSuffix(toPath, filepath.Ext(toPath))
 	}
 
-	x.config.Debugf("Moving files: %v (%d files, %d files) -> %v (%d files)",
-		fromPath, len(files), len(fileList(fromPath)), toPath, len(fileList(toPath)))
+	x.config.Debugf("Moving files: %v (%d files) -> %v", fromPath, len(files), toPath)
 
 	if err := os.MkdirAll(toPath, x.config.DirMode); err != nil {
 		return nil, fmt.Errorf("os.MkdirAll: %w", err)
