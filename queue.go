@@ -62,9 +62,9 @@ type Response struct {
 	// Elapsed extraction duration. ie. How long it took.
 	Elapsed time.Duration
 	// Extra archives extracted from within an archive.
-	Extras map[string][]string
+	Extras ArchiveList
 	// Initial archives found and extracted.
-	Archives map[string][]string
+	Archives ArchiveList
 	// Files written to final path.
 	NewFiles []string
 	// Error encountered, only when done=true.
@@ -131,8 +131,8 @@ func (x *Xtractr) extract(ext *Xtract) {
 		X:        ext,
 		Started:  resp.Started,
 		Output:   resp.Output,
-		Archives: make(map[string][]string),
-		Extras:   make(map[string][]string),
+		Archives: make(ArchiveList),
+		Extras:   make(ArchiveList),
 	}
 
 	for k, v := range resp.Archives {
@@ -147,7 +147,7 @@ func (x *Xtractr) extract(ext *Xtract) {
 // or the extracted files may be copied back to where they were extracted from.
 // If the extracted data is not being coppied back, then the tempDir (output) paths match the input paths.
 func (x *Xtractr) decompressFolders(resp *Response) error {
-	allArchives := make(map[string][]string)
+	allArchives := make(ArchiveList)
 
 	for subDir := range resp.Archives {
 		output := resp.Output
@@ -172,7 +172,7 @@ func (x *Xtractr) decompressFolders(resp *Response) error {
 			},
 			Started:  resp.Started,
 			Output:   output,
-			Archives: map[string][]string{subDir: resp.Archives[subDir]},
+			Archives: ArchiveList{subDir: resp.Archives[subDir]},
 		}
 
 		err := x.decompressFiles(subResp)
