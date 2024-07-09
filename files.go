@@ -323,7 +323,8 @@ func (x *Xtractr) MoveFiles(fromPath string, toPath string, overwrite bool) ([]s
 		toPath = strings.TrimSuffix(toPath, filepath.Ext(toPath))
 	}
 
-	x.config.Debugf("Moving files: %v (%d files, %d files) -> %v", fromPath, len(files), len(fileList(toPath)), toPath)
+	x.config.Debugf("Moving files: %v (%d files, %d files) -> %v (%d files)",
+		fromPath, len(files), len(fileList(fromPath)), toPath, len(fileList(toPath)))
 
 	if err := os.MkdirAll(toPath, x.config.DirMode); err != nil {
 		return nil, fmt.Errorf("os.MkdirAll: %w", err)
