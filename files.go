@@ -291,6 +291,19 @@ func ExtractFile(xFile *XFile) (int64, []string, []string, error) {
 	return 0, nil, nil, fmt.Errorf("%w: %s", ErrUnknownArchiveType, xFile.FilePath)
 }
 
+func fileList(paths ...string) []string {
+	files := []string{}
+
+	for _, path := range paths {
+		if file, err := os.Open(path); err == nil {
+			names, _ := file.Readdirnames(0)
+			files = append(files, names...)
+		}
+	}
+
+	return files
+}
+
 // MoveFiles relocates files then removes the folder they were in.
 // Returns the new file paths.
 // This is a helper method and only exposed for convenience. You do not have to call this.
@@ -309,6 +322,8 @@ func (x *Xtractr) MoveFiles(fromPath string, toPath string, overwrite bool) ([]s
 	if _, err := os.Stat(toPath); err == nil && IsArchiveFile(toPath) {
 		toPath = strings.TrimSuffix(toPath, filepath.Ext(toPath))
 	}
+
+	x.config.Debugf("Moving files: %v (%d files, %d files) -> %v", fromPath, len(files), len(fileList(toPath)), toPath)
 
 	if err := os.MkdirAll(toPath, x.config.DirMode); err != nil {
 		return nil, fmt.Errorf("os.MkdirAll: %w", err)
