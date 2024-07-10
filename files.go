@@ -11,7 +11,7 @@ import (
 	"strings"
 )
 
-// ArchiveList is the value returned when searchying for compressed files.
+// ArchiveList is the value returned when searching for compressed files.
 // The map is directory to list of archives in that directory.
 type ArchiveList map[string][]string
 
@@ -491,4 +491,9 @@ func (a ArchiveList) List() []string {
 	}
 
 	return list
+}
+
+// SetLogger sets the logger interface on an XFile. Useful when you need to debug what it's doing.
+func (x *XFile) SetLogger(logger Logger) {
+	x.log = logger
 }
