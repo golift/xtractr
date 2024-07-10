@@ -108,12 +108,16 @@ func (x *XFile) untar(tarReader *tar.Reader) (int64, []string, error) {
 		}
 
 		if header.Typeflag == tar.TypeDir {
+			x.Debugf("Writing archived directory: %s", wfile)
+
 			if err = os.MkdirAll(wfile, header.FileInfo().Mode()); err != nil {
 				return size, files, fmt.Errorf("os.MkdirAll: %w", err)
 			}
 
 			continue
 		}
+
+		x.Debugf("Writing archived file: %s (bytes: %d)", wfile, header.FileInfo().Size())
 
 		fSize, err := writeFile(wfile, tarReader, header.FileInfo().Mode(), x.DirMode)
 		if err != nil {
@@ -122,5 +126,6 @@ func (x *XFile) untar(tarReader *tar.Reader) (int64, []string, error) {
 
 		files = append(files, wfile)
 		size += fSize
+		x.Debugf("Wrote archived file: %s (%d bytes), total: %d files and %d bytes", wfile, fSize, len(files), size)
 	}
 }

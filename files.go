@@ -119,7 +119,7 @@ type Filter struct {
 type Exclude []string
 
 // Debugf calls the debug method on the logger if it's not nil.
-func (x *XFile) Debugf(format string, v ...interface{}) {
+func (x *XFile) Debugf(format string, v ...any) {
 	if x.log != nil {
 		x.log.Debugf(format, v...)
 	}

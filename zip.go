@@ -22,43 +22,49 @@ func ExtractZIP(xFile *XFile) (int64, []string, error) {
 	size := int64(0)
 
 	for _, zipFile := range zipReader.Reader.File {
-		fSize, err := xFile.unzip(zipFile)
+		fSize, wfile, err := xFile.unzip(zipFile)
 		if err != nil {
 			return size, files, fmt.Errorf("%s: %w", xFile.FilePath, err)
 		}
 
 		files = append(files, filepath.Join(xFile.OutputDir, zipFile.Name)) //nolint: gosec
 		size += fSize
+		xFile.Debugf("Wrote archived file: %s (%d bytes), total: %d files and %d bytes", wfile, fSize, len(files), size)
 	}
 
 	return size, files, nil
 }
 
-func (x *XFile) unzip(zipFile *zip.File) (int64, error) { //nolint:dupl
+func (x *XFile) unzip(zipFile *zip.File) (int64, string, error) {
 	wfile := x.clean(zipFile.Name)
 	if !strings.HasPrefix(wfile, x.OutputDir) {
 		// The file being written is trying to write outside of our base path. Malicious archive?
-		return 0, fmt.Errorf("%s: %w: %s (from: %s)", zipFile.FileInfo().Name(), ErrInvalidPath, wfile, zipFile.Name)
+		return 0, wfile, fmt.Errorf("%s: %w: %s (from: %s)", zipFile.FileInfo().Name(), ErrInvalidPath, wfile, zipFile.Name)
 	}
 
-	if strings.HasSuffix(wfile, "/") || zipFile.FileInfo().IsDir() {
+	if zipFile.FileInfo().IsDir() {
+		x.Debugf("Writing archived directory: %s", wfile)
+
 		if err := os.MkdirAll(wfile, x.DirMode); err != nil {
-			return 0, fmt.Errorf("making zipFile dir: %w", err)
+			return 0, wfile, fmt.Errorf("making zipFile dir: %w", err)
 		}
 
-		return 0, nil
+		return 0, wfile, nil
 	}
+
+	x.Debugf("Writing archived file: %s (packed: %d, unpacked: %d)", wfile,
+		zipFile.CompressedSize64, zipFile.UncompressedSize64)
 
 	zFile, err := zipFile.Open()
 	if err != nil {
-		return 0, fmt.Errorf("zipFile.Open: %w", err)
+		return 0, wfile, fmt.Errorf("zipFile.Open: %w", err)
 	}
 	defer zFile.Close()
 
 	s, err := writeFile(wfile, zFile, x.FileMode, x.DirMode)
 	if err != nil {
-		return s, fmt.Errorf("%s: %w: %s (from: %s)", zipFile.FileInfo().Name(), err, wfile, zipFile.Name)
+		return s, wfile, fmt.Errorf("%s: %w: %s (from: %s)", zipFile.FileInfo().Name(), err, wfile, zipFile.Name)
 	}
 
-	return s, nil
+	return s, wfile, nil
 }
