@@ -92,8 +92,8 @@ func (x *XFile) unrar(rarReader *rardecode.ReadCloser) (int64, []string, error) 
 		}
 
 		wfile := x.clean(header.Name)
-		//nolint:gocritic // this 1-argument filepath.Join removes a ./ prefix should there be one.
-		if !strings.HasPrefix(wfile, filepath.Join(x.OutputDir)) {
+		//nolint:gocritic // this 1-argument filepath.Clean removes a ./ prefix should there be one.
+		if !strings.HasPrefix(wfile, filepath.Clean(x.OutputDir)) {
 			// The file being written is trying to write outside of our base path. Malicious archive?
 			return size, files, fmt.Errorf("%s: %w: %s != %s (from: %s)",
 				x.FilePath, ErrInvalidPath, wfile, x.OutputDir, header.Name)

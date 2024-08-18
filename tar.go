@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	lzw "github.com/sshaman1101/dcompress"
@@ -102,7 +103,7 @@ func (x *XFile) untar(tarReader *tar.Reader) (int64, []string, error) {
 		}
 
 		wfile := x.clean(header.Name)
-		if !strings.HasPrefix(wfile, x.OutputDir) {
+		if !strings.HasPrefix(wfile, filepath.Clean(x.OutputDir)) {
 			// The file being written is trying to write outside of our base path. Malicious archive?
 			return size, files, fmt.Errorf("%s: %w: %s (from: %s)", x.FilePath, ErrInvalidPath, wfile, header.Name)
 		}

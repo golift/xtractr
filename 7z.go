@@ -68,10 +68,10 @@ func extract7z(xFile *XFile) (int64, []string, []string, error) {
 		if err != nil {
 			lastFile := xFile.FilePath
 			/* // https://github.com/bodgit/sevenzip/issues/54
-			// We can probably never get the file with the error.
-			if volumes := sevenZip.Volumes(); len(volumes) > 0 {
-				lastFile = volumes[len(volumes)-1]
-			} */
+			   // We can probably never get the file with the error.
+			   if volumes := sevenZip.Volumes(); len(volumes) > 0 {
+			   	lastFile = volumes[len(volumes)-1]
+			   } */
 			return size, files, sevenZip.Volumes(), fmt.Errorf("%s: %w", lastFile, err)
 		}
 
@@ -84,7 +84,7 @@ func extract7z(xFile *XFile) (int64, []string, []string, error) {
 
 func (x *XFile) un7zip(zipFile *sevenzip.File) (int64, error) { //nolint:dupl
 	wfile := x.clean(zipFile.Name)
-	if !strings.HasPrefix(wfile, x.OutputDir) {
+	if !strings.HasPrefix(wfile, filepath.Clean(x.OutputDir)) {
 		// The file being written is trying to write outside of our base path. Malicious archive?
 		return 0, fmt.Errorf("%s: %w: %s (from: %s)", zipFile.FileInfo().Name(), ErrInvalidPath, wfile, zipFile.Name)
 	}
