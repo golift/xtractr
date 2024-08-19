@@ -69,8 +69,8 @@ func (x *XFile) uniso(isoFile *iso9660.File, parent string) (int64, []string, er
 
 func (x *XFile) unisofile(isoFile *iso9660.File, fileName string) (int64, []string, error) {
 	destFile := x.clean(fileName)
-	//nolint:gocritic // this 1-argument filepath.Join removes a ./ prefix should there be one.
-	if !strings.HasPrefix(destFile, filepath.Join(x.OutputDir)) {
+	//nolint:gocritic // this 1-argument filepath.Clean removes a ./ prefix should there be one.
+	if !strings.HasPrefix(destFile, filepath.Clean(x.OutputDir)) {
 		// The file being written is trying to write outside of our base path. Malicious ISO?
 		return 0, nil, fmt.Errorf("%s: %w: %s != %s (from: %s)",
 			x.FilePath, ErrInvalidPath, destFile, x.OutputDir, isoFile.Name())
