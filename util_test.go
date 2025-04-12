@@ -14,7 +14,7 @@ import (
 type testFilesInfo struct {
 	srcFilesDir  string
 	dstFilesDir  string
-	dataSize     int
+	dataSize     int64
 	fileCount    int
 	archiveCount int
 }
@@ -30,7 +30,7 @@ Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliqu
 ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit 
 esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non 
 proident, sunt in culpa qui officia deserunt mollit anim id est laborum.`
-		testDataSize     = 1544
+		testDataSize     = 1544 // equals the above * 3 and the randomDigits * 2.
 		testFileCount    = 5
 		testArchiveCount = 1
 	)
@@ -56,10 +56,6 @@ proident, sunt in culpa qui officia deserunt mollit anim id est laborum.`
 	}
 
 	testDataDir := t.TempDir()
-	t.Cleanup(func() {
-		_ = os.RemoveAll(testDataDir)
-	})
-
 	srcFilesDir := filepath.Join(testDataDir, "sources")
 	require.NoError(t, os.MkdirAll(srcFilesDir, 0o700))
 
@@ -78,8 +74,7 @@ proident, sunt in culpa qui officia deserunt mollit anim id est laborum.`
 		require.NoError(t, err)
 
 		destFilesDir = filepath.Join(testDataDir, "out")
-		err = os.MkdirAll(destFilesDir, 0o700)
-		require.NoError(t, err)
+		require.NoError(t, os.MkdirAll(destFilesDir, 0o700))
 	}
 
 	return &testFilesInfo{

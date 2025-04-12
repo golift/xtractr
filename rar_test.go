@@ -1,7 +1,6 @@
 package xtractr_test
 
 import (
-	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -13,7 +12,6 @@ func TestExtractRAR(t *testing.T) {
 	t.Parallel()
 
 	name := t.TempDir()
-	defer os.RemoveAll(name)
 
 	size, files, archives, err := xtractr.ExtractRAR(&xtractr.XFile{
 		FilePath:  "./test_data/archive.rar",

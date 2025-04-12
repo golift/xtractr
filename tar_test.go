@@ -66,7 +66,7 @@ func TestTar(t *testing.T) {
 				DirMode:   0o700,
 			})
 			require.NoError(t, err)
-			assert.Equal(t, int64(testFilesInfo.dataSize), size)
+			assert.Equal(t, testFilesInfo.dataSize, size)
 			assert.Len(t, files, testFilesInfo.fileCount)
 			assert.Len(t, archives, testFilesInfo.archiveCount)
 		})

@@ -55,7 +55,6 @@ func TestFindCompressedFiles(t *testing.T) {
 	t.Parallel()
 
 	base := createTestPaths(t)
-	defer os.RemoveAll(base)
 
 	// Test 1
 	total := 0

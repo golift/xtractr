@@ -1,7 +1,6 @@
 package xtractr_test
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,7 +16,6 @@ func TestIso(t *testing.T) {
 	t.Parallel()
 
 	testFilesInfo := createTestFiles(t)
-
 	writer, err := iso9660.NewWriter()
 	require.NoError(t, err, "failed to create writer")
 	defer func() {
@@ -25,24 +23,25 @@ func TestIso(t *testing.T) {
 		require.NoError(t, err, "failed to cleanup writer")
 	}()
 
+	size := int64(0)
 	walkErr := filepath.Walk(testFilesInfo.srcFilesDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return fmt.Errorf("unexpected error: %w", err)
-		}
+		require.NoError(t, err, "unexpected")
+
 		if info.IsDir() {
 			return nil
 		}
 
 		fileToAdd, err := os.Open(path)
-		if err != nil {
-			return fmt.Errorf("failed to open file: %w", err)
-		}
+		require.NoError(t, err, "failed to open file")
 		defer fileToAdd.Close()
 
-		err = writer.AddFile(fileToAdd, strings.TrimLeft(fileToAdd.Name(), testFilesInfo.srcFilesDir))
-		if err != nil {
-			return fmt.Errorf("failed to add file: %w", err)
-		}
+		fStat, err := fileToAdd.Stat()
+		require.NoError(t, err, "failed to stat file")
+		size += fStat.Size()
+
+		err = writer.AddFile(fileToAdd, strings.TrimPrefix(fileToAdd.Name(), testFilesInfo.srcFilesDir))
+		require.NoError(t, err, "failed to add file")
+
 		return nil
 	})
 	require.NoError(t, walkErr, "failed to walk files")
@@ -55,14 +54,15 @@ func TestIso(t *testing.T) {
 	err = writer.WriteTo(isoFile, "test")
 	require.NoError(t, err, "failed to write ISO")
 
-	size, files, archives, err := xtractr.ExtractFile(&xtractr.XFile{
+	xSize, files, archives, err := xtractr.ExtractFile(&xtractr.XFile{
 		FilePath:  isoFileName,
 		OutputDir: filepath.Clean(testFilesInfo.dstFilesDir),
 		FileMode:  0o600,
 		DirMode:   0o700,
 	})
 	require.NoError(t, err)
-	assert.Equal(t, int64(testFilesInfo.dataSize), size)
+	assert.Equal(t, testFilesInfo.dataSize, size, "data written does not match predetermined size")
+	assert.Equal(t, testFilesInfo.dataSize, xSize, "data extracted does not match predetermined size")
 	assert.Len(t, files, testFilesInfo.fileCount)
 	assert.Len(t, archives, testFilesInfo.archiveCount)
 }

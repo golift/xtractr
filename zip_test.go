@@ -28,7 +28,6 @@ func TestZip(t *testing.T) {
 	}
 
 	name := t.TempDir()
-	defer os.RemoveAll(name)
 
 	zipFile, err := os.Create(filepath.Join(name, "archive.zip"))
 	require.NoError(t, err)
