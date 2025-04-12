@@ -67,8 +67,11 @@ func (x *XFile) uniso(isoFile *iso9660.File, parent string) (int64, []string, er
 	return size, files, nil
 }
 
-func (x *XFile) unisofile(isoFile *iso9660.File, wfile string) (int64, []string, error) {
-	wfile = x.clean(wfile)
+func (x *XFile) unisofile(isoFile *iso9660.File, fileName string) (int64, []string, error) {
+	wfile, err := x.clean(fileName)
+	if err != nil {
+		return 0, nil, err
+	}
 
 	//nolint:gocritic // this 1-argument filepath.Join removes a ./ prefix should there be one.
 	if !strings.HasPrefix(wfile, filepath.Join(x.OutputDir)) {

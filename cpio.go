@@ -64,7 +64,11 @@ func (x *XFile) uncpio(reader io.Reader) (int64, []string, error) {
 }
 
 func (x *XFile) uncpioFile(cpioFile *cpio.Header, cpioReader *cpio.Reader) (int64, error) {
-	wfile := x.clean(cpioFile.Name)
+	wfile, err := x.clean(cpioFile.Name)
+	if err != nil {
+		return 0, err
+	}
+
 	if !strings.HasPrefix(wfile, x.OutputDir) {
 		// The file being written is trying to write outside of the base path. Malicious archive?
 		return 0, fmt.Errorf("%s: %w: %s (from: %s)", cpioFile.FileInfo().Name(), ErrInvalidPath, wfile, cpioFile.Name)

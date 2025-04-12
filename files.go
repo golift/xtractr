@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"golang.org/x/text/encoding"
 )
 
 // ArchiveList is the value returned when searching for compressed files.
@@ -111,6 +113,8 @@ type XFile struct {
 	Password string
 	// (RAR/7z) Archive passwords (to try multiple).
 	Passwords []string
+	// If file names are not UTF8 encoded, pass your own encoder here.
+	Encoding encoding.Encoding
 	// Logger allows printing debug messages.
 	log Logger
 }
@@ -446,8 +450,9 @@ func (x *Xtractr) Rename(oldpath, newpath string) error {
 }
 
 // clean returns an absolute path for a file inside the OutputDir.
+// clean also decodes the file name using a provided decoder.
 // If trim length is > 0, then the suffixes are trimmed, and filepath removed.
-func (x *XFile) clean(filePath string, trim ...string) string {
+func (x *XFile) clean(filePath string, trim ...string) (string, error) {
 	if len(trim) != 0 {
 		filePath = filepath.Base(filePath)
 		for _, suffix := range trim {
@@ -455,7 +460,26 @@ func (x *XFile) clean(filePath string, trim ...string) string {
 		}
 	}
 
-	return filepath.Clean(filepath.Join(x.OutputDir, filePath))
+	decoded, err := x.decode(filePath)
+	if err != nil {
+		return "", err
+	}
+
+	return filepath.Clean(filepath.Join(x.OutputDir, decoded)), nil
+}
+
+// decode a string using the provided decoder.
+func (x *XFile) decode(input string) (string, error) {
+	if x.Encoding == nil {
+		return input, nil
+	}
+
+	output, err := x.Encoding.NewDecoder().String(input)
+	if err != nil {
+		return "", fmt.Errorf("decoding file name: %w", err)
+	}
+
+	return output, nil
 }
 
 // AllExcept can be used as an input to ExcludeSuffix in a Filter.

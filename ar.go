@@ -38,7 +38,11 @@ func (x *XFile) unAr(reader io.Reader) (int64, []string, error) {
 			return size, files, fmt.Errorf("%w: %s", ErrInvalidHead, x.FilePath)
 		}
 
-		wfile := x.clean(header.Name)
+		wfile, err := x.clean(header.Name)
+		if err != nil {
+			return 0, files, err
+		}
+
 		if !strings.HasPrefix(wfile, x.OutputDir) {
 			// The file being written is trying to write outside of our base path. Malicious archive?
 			return size, files, fmt.Errorf("%s: %w: %s (from: %s)", x.FilePath, ErrInvalidPath, wfile, header.Name)

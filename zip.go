@@ -37,7 +37,11 @@ func ExtractZIP(xFile *XFile) (size int64, filesList []string, err error) {
 }
 
 func (x *XFile) unzip(zipFile *zip.File) (int64, string, error) {
-	wfile := x.clean(zipFile.Name)
+	wfile, err := x.clean(zipFile.Name)
+	if err != nil {
+		return 0, wfile, err
+	}
+
 	if !strings.HasPrefix(wfile, x.OutputDir) {
 		// The file being written is trying to write outside of our base path. Malicious archive?
 		return 0, wfile, fmt.Errorf("%s: %w: %s (from: %s)", zipFile.FileInfo().Name(), ErrInvalidPath, wfile, zipFile.Name)
