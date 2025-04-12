@@ -80,7 +80,7 @@ func writeTar(sourceDir string, destWriter io.Writer) error {
 			return nil
 		}
 		relativePath := path[len(sourceDir):]
-		if len(relativePath) == 0 {
+		if relativePath == "" {
 			return nil
 		}
 		fileReader, err := os.Open(path)
@@ -109,7 +109,7 @@ func writeTar(sourceDir string, destWriter io.Writer) error {
 	return fmt.Errorf("failed to walk source directory: %w", outErr)
 }
 
-func (c *tarCompressor) Compress(t *testing.T, sourceDir string, destBase string) error {
+func (c *tarCompressor) Compress(t *testing.T, sourceDir, destBase string) error {
 	t.Helper()
 	tarFile, err := os.Create(destBase + ".tar")
 	defer safeCloser(t, tarFile)
@@ -118,7 +118,7 @@ func (c *tarCompressor) Compress(t *testing.T, sourceDir string, destBase string
 	return writeTar(sourceDir, tarFile)
 }
 
-func (c *tarZCompressor) Compress(t *testing.T, _ string, destBase string) error {
+func (c *tarZCompressor) Compress(t *testing.T, _, destBase string) error {
 	t.Helper()
 
 	// No native Go library for .tar.Z and compress Unix utility is not available on
@@ -131,13 +131,13 @@ func (c *tarZCompressor) Compress(t *testing.T, _ string, destBase string) error
 	require.NoError(t, err)
 
 	written, err := io.Copy(tarZDestFile, tarZTestFile)
-	assert.Greater(t, written, int64(0))
+	assert.Positive(t, written)
 	require.NoError(t, err)
 
 	return nil
 }
 
-func (c *tarBzipCompressor) Compress(t *testing.T, sourceDir string, destBase string) error {
+func (c *tarBzipCompressor) Compress(t *testing.T, sourceDir, destBase string) error {
 	t.Helper()
 	tarBZ2Filename := destBase + ".tar.bz2"
 
@@ -154,7 +154,7 @@ func (c *tarBzipCompressor) Compress(t *testing.T, sourceDir string, destBase st
 	return nil
 }
 
-func (c *tarXZCompressor) Compress(t *testing.T, sourceDir string, destBase string) error {
+func (c *tarXZCompressor) Compress(t *testing.T, sourceDir, destBase string) error {
 	t.Helper()
 	tarXZFilename := destBase + ".tar.xz"
 
@@ -171,7 +171,7 @@ func (c *tarXZCompressor) Compress(t *testing.T, sourceDir string, destBase stri
 	return nil
 }
 
-func (c *tarGzipCompressor) Compress(t *testing.T, sourceDir string, destBase string) error {
+func (c *tarGzipCompressor) Compress(t *testing.T, sourceDir, destBase string) error {
 	t.Helper()
 	tarGZFilename := destBase + ".tar.gz"
 

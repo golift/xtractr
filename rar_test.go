@@ -12,8 +12,7 @@ import (
 func TestExtractRAR(t *testing.T) {
 	t.Parallel()
 
-	name, err := os.MkdirTemp(".", "xtractr_test_*_data")
-	require.NoError(t, err, "creating temp directory failed")
+	name := t.TempDir()
 	defer os.RemoveAll(name)
 
 	size, files, archives, err := xtractr.ExtractRAR(&xtractr.XFile{

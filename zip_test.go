@@ -27,8 +27,7 @@ func TestZip(t *testing.T) {
 		"subdir/level2/level2file.txt",
 	}
 
-	name, err := os.MkdirTemp(".", "xtractr_test_*_data")
-	require.NoError(t, err, "creating temp directory failed")
+	name := t.TempDir()
 	defer os.RemoveAll(name)
 
 	zipFile, err := os.Create(filepath.Join(name, "archive.zip"))

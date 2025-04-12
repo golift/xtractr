@@ -1,6 +1,6 @@
 module golift.io/xtractr
 
-go 1.19
+go 1.22
 
 require (
 	github.com/andybalholm/brotli v1.1.0

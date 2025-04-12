@@ -10,7 +10,7 @@ import (
 )
 
 // ExtractISO writes an ISO's contents to disk.
-func ExtractISO(xFile *XFile) (int64, []string, error) {
+func ExtractISO(xFile *XFile) (size int64, filesList []string, err error) {
 	openISO, err := os.Open(xFile.FilePath)
 	if err != nil {
 		return 0, nil, fmt.Errorf("failed to open iso file: %s: %w", xFile.FilePath, err)

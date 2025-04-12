@@ -11,7 +11,7 @@ import (
 
 // Extract7z extracts a 7zip archive.
 // Volumes: https://github.com/bodgit/sevenzip/issues/54
-func Extract7z(xFile *XFile) (int64, []string, []string, error) {
+func Extract7z(xFile *XFile) (size int64, filesList, archiveList []string, err error) {
 	if len(xFile.Passwords) == 0 && xFile.Password == "" {
 		return extract7z(xFile)
 	}

@@ -103,7 +103,7 @@ func (x *Xtractr) extract(ext *Xtract) {
 	resp := &Response{
 		X:        ext,
 		Started:  time.Now(),
-		Output:   strings.TrimRight(ext.Filter.Path, `/\`) + x.config.Suffix, // tmp folder.
+		Output:   strings.TrimRight(ext.Path, `/\`) + x.config.Suffix, // tmp folder.
 		Archives: FindCompressedFiles(ext.Filter),
 		Queued:   len(x.queue),
 	}
@@ -160,7 +160,7 @@ func (x *Xtractr) decompressFolders(resp *Response) error {
 			X: &Xtract{
 				Filter: Filter{
 					Path:          subDir,
-					ExcludeSuffix: resp.X.Filter.ExcludeSuffix,
+					ExcludeSuffix: resp.X.ExcludeSuffix,
 				},
 				Name:       resp.X.Name,
 				Password:   resp.X.Password,

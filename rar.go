@@ -13,7 +13,8 @@ import (
 	"github.com/nwaples/rardecode"
 )
 
-func ExtractRAR(xFile *XFile) (int64, []string, []string, error) {
+// ExtractRAR attempts to extract a file as a rar file.
+func ExtractRAR(xFile *XFile) (size int64, filesList, archiveList []string, err error) {
 	if len(xFile.Passwords) == 0 && xFile.Password == "" {
 		return extractRAR(xFile)
 	}
@@ -54,7 +55,7 @@ func ExtractRAR(xFile *XFile) (int64, []string, []string, error) {
 	})
 }
 
-// ExtractRAR extracts a rar file. to a destination. This wraps github.com/nwaples/rardecode.
+// extractRAR extracts a rar file. to a destination. This wraps github.com/nwaples/rardecode.
 func extractRAR(xFile *XFile) (int64, []string, []string, error) {
 	rarReader, err := rardecode.OpenReader(xFile.FilePath, xFile.Password)
 	if err != nil {

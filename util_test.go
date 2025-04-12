@@ -55,15 +55,13 @@ proident, sunt in culpa qui officia deserunt mollit anim id est laborum.`
 		"level1/level2/level2.bin",
 	}
 
-	testDataDir, err := os.MkdirTemp(".", "xtractr_test_*_data")
-	require.NoError(t, err, "creating temp directory failed")
+	testDataDir := t.TempDir()
 	t.Cleanup(func() {
-		os.RemoveAll(testDataDir)
+		_ = os.RemoveAll(testDataDir)
 	})
 
 	srcFilesDir := filepath.Join(testDataDir, "sources")
-	err = os.MkdirAll(srcFilesDir, 0o700)
-	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(srcFilesDir, 0o700))
 
 	var destFilesDir string
 	for _, file := range testFiles {
