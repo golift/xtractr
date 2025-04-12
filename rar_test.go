@@ -11,14 +11,13 @@ import (
 func TestExtractRAR(t *testing.T) {
 	t.Parallel()
 
-	name := t.TempDir()
-
 	size, files, archives, err := xtractr.ExtractRAR(&xtractr.XFile{
 		FilePath:  "./test_data/archive.rar",
-		OutputDir: name,
+		OutputDir: t.TempDir(),
 		Password:  "testing", // one of these is right. :)
 		Passwords: []string{"testingmore", "some_password", "some_other"},
 	})
+
 	require.NoError(t, err)
 	assert.Equal(t, testDataSize, size)
 	assert.Len(t, archives, 1)

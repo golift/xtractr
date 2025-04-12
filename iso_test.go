@@ -33,7 +33,7 @@ func TestIso(t *testing.T) {
 
 		fileToAdd, err := os.Open(path)
 		require.NoError(t, err, "failed to open file")
-		defer fileToAdd.Close()
+		defer safeCloser(t, fileToAdd)
 
 		fStat, err := fileToAdd.Stat()
 		require.NoError(t, err, "failed to stat file")
@@ -47,9 +47,10 @@ func TestIso(t *testing.T) {
 	require.NoError(t, walkErr, "failed to walk files")
 
 	isoFileName := filepath.Join(testFilesInfo.dstFilesDir, "archive.iso")
+
 	isoFile, err := os.Create(isoFileName)
-	defer safeCloser(t, isoFile)
 	require.NoError(t, err, "failed to create ISO file")
+	defer safeCloser(t, isoFile)
 
 	err = writer.WriteTo(isoFile, "test")
 	require.NoError(t, err, "failed to write ISO")

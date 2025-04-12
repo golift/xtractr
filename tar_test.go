@@ -111,9 +111,10 @@ func writeTar(sourceDir string, destWriter io.Writer) error {
 
 func (c *tarCompressor) Compress(t *testing.T, sourceDir, destBase string) error {
 	t.Helper()
+
 	tarFile, err := os.Create(destBase + ".tar")
-	defer safeCloser(t, tarFile)
 	require.NoError(t, err)
+	defer safeCloser(t, tarFile)
 
 	return writeTar(sourceDir, tarFile)
 }
@@ -126,9 +127,11 @@ func (c *tarZCompressor) Compress(t *testing.T, _, destBase string) error {
 	tarZFilename := destBase + ".tar.z"
 	tarZDestFile, err := os.Create(tarZFilename)
 	require.NoError(t, err)
+	defer safeCloser(t, tarZDestFile)
 
 	tarZTestFile, err := os.Open("test_data/archive.tar.Z")
 	require.NoError(t, err)
+	defer safeCloser(t, tarZTestFile)
 
 	written, err := io.Copy(tarZDestFile, tarZTestFile)
 	assert.Positive(t, written)
@@ -143,10 +146,11 @@ func (c *tarBzipCompressor) Compress(t *testing.T, sourceDir, destBase string) e
 
 	tarBZ2File, err := os.Create(tarBZ2Filename)
 	require.NoError(t, err)
+	defer safeCloser(t, tarBZ2File)
 
 	bzip2Writer, err := bzip2.NewWriter(tarBZ2File, &bzip2.WriterConfig{Level: bzip2.BestSpeed})
-	defer safeCloser(t, bzip2Writer)
 	require.NoError(t, err)
+	defer safeCloser(t, bzip2Writer)
 
 	err = writeTar(sourceDir, bzip2Writer)
 	require.NoError(t, err)
@@ -160,10 +164,11 @@ func (c *tarXZCompressor) Compress(t *testing.T, sourceDir, destBase string) err
 
 	tarXZFile, err := os.Create(tarXZFilename)
 	require.NoError(t, err)
+	defer safeCloser(t, tarXZFile)
 
 	xzWriter, err := xz.NewWriter(tarXZFile)
-	defer safeCloser(t, xzWriter)
 	require.NoError(t, err)
+	defer safeCloser(t, xzWriter)
 
 	err = writeTar(sourceDir, xzWriter)
 	require.NoError(t, err)
@@ -177,10 +182,11 @@ func (c *tarGzipCompressor) Compress(t *testing.T, sourceDir, destBase string) e
 
 	tarGZFile, err := os.Create(tarGZFilename)
 	require.NoError(t, err)
+	defer safeCloser(t, tarGZFile)
 
 	gzipWriter := gzip.NewWriter(tarGZFile)
-	defer gzipWriter.Close()
 	require.NoError(t, err)
+	defer safeCloser(t, gzipWriter)
 
 	err = writeTar(sourceDir, gzipWriter)
 	require.NoError(t, err)

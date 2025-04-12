@@ -152,7 +152,7 @@ func makeFile(t *testing.T, data []byte, fileName string) error {
 	if err != nil {
 		return err
 	}
-	defer openFile.Close()
+	defer safeCloser(t, openFile)
 
 	_, err = openFile.Write(data)
 
