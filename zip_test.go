@@ -57,7 +57,7 @@ func makeZipFile(t *testing.T) testFilesInfo {
 
 	for _, file := range testFiles {
 		if file[len(file)-1] == '/' {
-			_, err := zipWriter.Create(file)
+			_, err = zipWriter.Create(file)
 			require.NoError(t, err)
 		} else {
 			f, err := zipWriter.Create(file)
