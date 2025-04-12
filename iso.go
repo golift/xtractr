@@ -10,7 +10,7 @@ import (
 )
 
 // ExtractISO writes an ISO's contents to disk.
-func ExtractISO(xFile *XFile) (int64, []string, error) {
+func ExtractISO(xFile *XFile) (size int64, filesList []string, err error) {
 	openISO, err := os.Open(xFile.FilePath)
 	if err != nil {
 		return 0, nil, fmt.Errorf("failed to open iso file: %s: %w", xFile.FilePath, err)
@@ -67,16 +67,19 @@ func (x *XFile) uniso(isoFile *iso9660.File, parent string) (int64, []string, er
 	return size, files, nil
 }
 
-func (x *XFile) unisofile(isoFile *iso9660.File, fileName string) (int64, []string, error) {
-	destFile := x.clean(fileName)
+func (x *XFile) unisofile(isoFile *iso9660.File, wfile string) (int64, []string, error) {
+	wfile = x.clean(wfile)
+
 	//nolint:gocritic // this 1-argument filepath.Join removes a ./ prefix should there be one.
-	if !strings.HasPrefix(destFile, filepath.Join(x.OutputDir)) {
+	if !strings.HasPrefix(wfile, filepath.Join(x.OutputDir)) {
 		// The file being written is trying to write outside of our base path. Malicious ISO?
 		return 0, nil, fmt.Errorf("%s: %w: %s != %s (from: %s)",
-			x.FilePath, ErrInvalidPath, destFile, x.OutputDir, isoFile.Name())
+			x.FilePath, ErrInvalidPath, wfile, x.OutputDir, isoFile.Name())
 	}
 
-	size, err := writeFile(destFile, isoFile.Reader(), x.FileMode, x.DirMode)
+	x.Debugf("Writing archived file: %s (bytes: %d)", wfile, isoFile.Size())
 
-	return size, []string{destFile}, err
+	size, err := writeFile(wfile, isoFile.Reader(), x.FileMode, x.DirMode)
+
+	return size, []string{wfile}, err
 }

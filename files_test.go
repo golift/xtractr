@@ -38,8 +38,7 @@ func createTestPaths(t *testing.T) string {
 		fileMode = 0o644
 	)
 
-	base, err := os.MkdirTemp("", "GoTest_*_Path")
-	require.NoError(t, err, "cannot create temp directory for testing")
+	base := t.TempDir()
 
 	for _, testPath := range testFileList {
 		testPath = filepath.Join(base, testPath)
@@ -56,7 +55,6 @@ func TestFindCompressedFiles(t *testing.T) {
 	t.Parallel()
 
 	base := createTestPaths(t)
-	defer os.RemoveAll(base)
 
 	// Test 1
 	total := 0

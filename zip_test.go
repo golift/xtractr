@@ -14,11 +14,30 @@ import (
 
 func TestZip(t *testing.T) {
 	t.Parallel()
+
+	zip := makeZipFile(t)
+
+	size, files, archives, err := xtractr.ExtractFile(&xtractr.XFile{
+		FilePath:  zip.srcFilesDir,
+		OutputDir: filepath.Clean(zip.dstFilesDir),
+		FileMode:  0o600,
+		DirMode:   0o700,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, zip.dataSize, size)
+	assert.Len(t, files, zip.fileCount)
+	assert.Len(t, archives, zip.archiveCount)
+}
+
+func makeZipFile(t *testing.T) testFilesInfo {
+	t.Helper()
+
 	const (
-		testDataSize     = 21
-		testFileCount    = 5
-		testArchiveCount = 1
+		dataSize     = int64(21)
+		fileCount    = 5
+		archiveCount = 1
 	)
+
 	testFiles := []string{
 		"README.txt",
 		"subdir/",
@@ -27,13 +46,14 @@ func TestZip(t *testing.T) {
 		"subdir/level2/level2file.txt",
 	}
 
-	name, err := os.MkdirTemp(".", "xtractr_test_*_data")
-	require.NoError(t, err, "creating temp directory failed")
-	defer os.RemoveAll(name)
+	name := t.TempDir()
 
 	zipFile, err := os.Create(filepath.Join(name, "archive.zip"))
 	require.NoError(t, err)
+	defer safeCloser(t, zipFile)
+
 	zipWriter := zip.NewWriter(zipFile)
+	defer safeCloser(t, zipWriter)
 
 	for _, file := range testFiles {
 		if file[len(file)-1] == '/' {
@@ -46,21 +66,12 @@ func TestZip(t *testing.T) {
 			require.NoError(t, err)
 		}
 	}
-	err = zipWriter.Close()
-	require.NoError(t, err)
-	err = zipFile.Close()
-	require.NoError(t, err)
 
-	zipTestFile := filepath.Join(name, "archive.zip")
-
-	size, files, archives, err := xtractr.ExtractFile(&xtractr.XFile{
-		FilePath:  zipTestFile,
-		OutputDir: filepath.Clean(name),
-		FileMode:  0o600,
-		DirMode:   0o700,
-	})
-	require.NoError(t, err)
-	assert.Equal(t, int64(testDataSize), size)
-	assert.Len(t, files, testFileCount)
-	assert.Len(t, archives, testArchiveCount)
+	return testFilesInfo{
+		srcFilesDir:  filepath.Join(name, "archive.zip"),
+		dstFilesDir:  name,
+		dataSize:     dataSize,
+		fileCount:    fileCount,
+		archiveCount: archiveCount,
+	}
 }

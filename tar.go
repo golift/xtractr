@@ -16,7 +16,7 @@ import (
 )
 
 // ExtractTar extracts a raw (non-compressed) tar archive.
-func ExtractTar(xFile *XFile) (int64, []string, error) {
+func ExtractTar(xFile *XFile) (size int64, filesList []string, err error) {
 	tarFile, err := os.Open(xFile.FilePath)
 	if err != nil {
 		return 0, nil, fmt.Errorf("os.Open: %w", err)
@@ -27,7 +27,7 @@ func ExtractTar(xFile *XFile) (int64, []string, error) {
 }
 
 // ExtractTarBzip extracts a bzip2-compressed tar archive.
-func ExtractTarBzip(xFile *XFile) (int64, []string, error) {
+func ExtractTarBzip(xFile *XFile) (size int64, filesList []string, err error) {
 	compressedFile, err := os.Open(xFile.FilePath)
 	if err != nil {
 		return 0, nil, fmt.Errorf("os.Open: %w", err)
@@ -38,7 +38,7 @@ func ExtractTarBzip(xFile *XFile) (int64, []string, error) {
 }
 
 // ExtractTarXZ extracts an XZ-compressed tar archive (txz).
-func ExtractTarXZ(xFile *XFile) (int64, []string, error) {
+func ExtractTarXZ(xFile *XFile) (size int64, filesList []string, err error) {
 	compressedFile, err := os.Open(xFile.FilePath)
 	if err != nil {
 		return 0, nil, fmt.Errorf("os.Open: %w", err)
@@ -54,7 +54,7 @@ func ExtractTarXZ(xFile *XFile) (int64, []string, error) {
 }
 
 // ExtractTarZ extracts an LZW-compressed tar archive (tz).
-func ExtractTarZ(xFile *XFile) (int64, []string, error) {
+func ExtractTarZ(xFile *XFile) (size int64, filesList []string, err error) {
 	compressedFile, err := os.Open(xFile.FilePath)
 	if err != nil {
 		return 0, nil, fmt.Errorf("os.Open: %w", err)
@@ -70,7 +70,7 @@ func ExtractTarZ(xFile *XFile) (int64, []string, error) {
 }
 
 // ExtractTarGzip extracts a gzip-compressed tar archive (tgz).
-func ExtractTarGzip(xFile *XFile) (int64, []string, error) {
+func ExtractTarGzip(xFile *XFile) (size int64, filesList []string, err error) {
 	compressedFile, err := os.Open(xFile.FilePath)
 	if err != nil {
 		return 0, nil, fmt.Errorf("os.Open: %w", err)
@@ -87,7 +87,7 @@ func ExtractTarGzip(xFile *XFile) (int64, []string, error) {
 }
 
 // ExtractTarLzip extracts an LZIP-compressed tar archive (tlz).
-func ExtractTarLzip(xFile *XFile) (int64, []string, error) {
+func ExtractTarLzip(xFile *XFile) (size int64, filesList []string, err error) {
 	compressedFile, err := os.Open(xFile.FilePath)
 	if err != nil {
 		return 0, nil, fmt.Errorf("os.Open: %w", err)
@@ -126,12 +126,16 @@ func (x *XFile) untar(reader io.Reader) (int64, []string, error) {
 		}
 
 		if header.Typeflag == tar.TypeDir {
+			x.Debugf("Writing archived directory: %s", wfile)
+
 			if err = os.MkdirAll(wfile, header.FileInfo().Mode()); err != nil {
 				return size, files, fmt.Errorf("os.MkdirAll: %w", err)
 			}
 
 			continue
 		}
+
+		x.Debugf("Writing archived file: %s (bytes: %d)", wfile, header.FileInfo().Size())
 
 		fSize, err := writeFile(wfile, tarReader, header.FileInfo().Mode(), x.DirMode)
 		if err != nil {
@@ -140,5 +144,6 @@ func (x *XFile) untar(reader io.Reader) (int64, []string, error) {
 
 		files = append(files, wfile)
 		size += fSize
+		x.Debugf("Wrote archived file: %s (%d bytes), total: %d files and %d bytes", wfile, fSize, len(files), size)
 	}
 }

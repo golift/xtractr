@@ -1,31 +1,55 @@
-run:
-  timeout: 1m
-  
+version: "2"
 linters:
-  enable-all: true
+  default: all
   disable:
-    # deprecated
-    - gomnd
-    - execinquery
     # unused
     - nlreturn
     - exhaustruct
     - depguard
+    - nonamedreturns
+  exclusions:
+    rules:
+      - linters:
+          - funlen
+          - goconst
+          - wsl
+          - errcheck
+        path: .+_test.go
 
-output:
-  sort-results: true
+  settings:
+    gosec:
+      excludes:
+        - G304
+    gocritic:
+      enable-all: true
+      disabled-checks:
+        - whyNoLint
+        - commentedOutCode
+      settings:
+        unnamedResult:
+          checkExported: true
+    errcheck:
+      check-type-assertions: true
+      check-blank: true
+      disable-default-exclusions: true
+      exclude-functions:
+      - (*os.File).Close
+      - os.RemoveAll
+      - os.Remove
+      - (io.Closer).Close
+      - (*compress/gzip.Reader).Close
+      - (*archive/zip.ReadCloser).Close
+      - (*github.com/bodgit/sevenzip.ReadCloser).Close
+      - (*github.com/nwaples/rardecode.ReadCloser).Close
 
 issues:
-  # disable the default limit so we see everything
-  max-same-issues: 0
   max-issues-per-linter: 0
-
-  # default enable fix where the linter supports
+  max-same-issues: 0
   fix: true
-  exclude-rules:
-    # Exclude some linters from testing files.
-    - linters:
-        - goconst
-        - wsl
-        - funlen
-      path: '.+_test.go'
+formatters:
+  enable:
+    - gci
+    - gofmt
+    - gofumpt
+    - goimports
+

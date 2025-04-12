@@ -11,7 +11,7 @@ import (
 )
 
 // ExtractAr extracts a raw ar archive. Used by debian (.deb) packages.
-func ExtractAr(xFile *XFile) (int64, []string, error) {
+func ExtractAr(xFile *XFile) (size int64, filesList []string, err error) {
 	arFile, err := os.Open(xFile.FilePath)
 	if err != nil {
 		return 0, nil, fmt.Errorf("os.Open: %w", err)
@@ -45,6 +45,7 @@ func (x *XFile) unAr(reader io.Reader) (int64, []string, error) {
 		}
 
 		// ar format does not store directory paths. Flat list of files.
+		//nolint:gosec // we are not overflowing an integer with this conversion.
 		fSize, err := writeFile(wfile, arReader, os.FileMode(header.Mode), x.DirMode)
 		if err != nil {
 			return size, files, err

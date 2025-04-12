@@ -13,7 +13,8 @@ import (
 	"github.com/nwaples/rardecode"
 )
 
-func ExtractRAR(xFile *XFile) (int64, []string, []string, error) {
+// ExtractRAR attempts to extract a file as a rar file.
+func ExtractRAR(xFile *XFile) (size int64, filesList, archiveList []string, err error) {
 	if len(xFile.Passwords) == 0 && xFile.Password == "" {
 		return extractRAR(xFile)
 	}
@@ -54,7 +55,7 @@ func ExtractRAR(xFile *XFile) (int64, []string, []string, error) {
 	})
 }
 
-// ExtractRAR extracts a rar file. to a destination. This wraps github.com/nwaples/rardecode.
+// extractRAR extracts a rar file. to a destination. This wraps github.com/nwaples/rardecode.
 func extractRAR(xFile *XFile) (int64, []string, []string, error) {
 	rarReader, err := rardecode.OpenReader(xFile.FilePath, xFile.Password)
 	if err != nil {
@@ -100,6 +101,8 @@ func (x *XFile) unrar(rarReader *rardecode.ReadCloser) (int64, []string, error) 
 		}
 
 		if header.IsDir {
+			x.Debugf("Writing archived directory: %s", wfile)
+
 			if err = os.MkdirAll(wfile, x.DirMode); err != nil {
 				return size, files, fmt.Errorf("os.MkdirAll: %w", err)
 			}
@@ -107,9 +110,7 @@ func (x *XFile) unrar(rarReader *rardecode.ReadCloser) (int64, []string, error) 
 			continue
 		}
 
-		if err = os.MkdirAll(filepath.Dir(wfile), x.DirMode); err != nil {
-			return size, files, fmt.Errorf("os.MkdirAll: %w", err)
-		}
+		x.Debugf("Writing archived file: %s (packed: %d, unpacked: %d)", wfile, header.PackedSize, header.UnPackedSize)
 
 		fSize, err := writeFile(wfile, rarReader, x.FileMode, x.DirMode)
 		if err != nil {
@@ -118,5 +119,6 @@ func (x *XFile) unrar(rarReader *rardecode.ReadCloser) (int64, []string, error) 
 
 		files = append(files, wfile)
 		size += fSize
+		x.Debugf("Wrote archived file: %s (%d bytes), total: %d files and %d bytes", wfile, fSize, len(files), size)
 	}
 }

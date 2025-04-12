@@ -91,7 +91,7 @@ func (x *Xtractr) Start() error {
 
 	x.queue = make(chan *Xtract, x.config.BuffSize)
 
-	for i := 0; i < x.config.Parallel; i++ {
+	for range x.config.Parallel {
 		go x.processQueue()
 	}
 
@@ -137,7 +137,7 @@ func (x *Xtractr) Stop() {
 	close(x.queue)
 
 	// Wait until all running extractions are done.
-	for i := 0; i < x.config.Parallel; i++ {
+	for range x.config.Parallel {
 		<-x.done
 	}
 

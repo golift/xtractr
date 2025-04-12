@@ -79,8 +79,8 @@ func TestWithTempFolder(t *testing.T) {
 
 	// test written files here?
 	// each directory should have its own files.
-	os.RemoveAll(xFile.Path)
-	os.RemoveAll(xFile.Path + xtractr.DefaultSuffix)
+	_ = os.RemoveAll(xFile.Path)
+	_ = os.RemoveAll(xFile.Path + xtractr.DefaultSuffix)
 }
 
 func TestNoTempFolder(t *testing.T) {
@@ -117,16 +117,15 @@ func TestNoTempFolder(t *testing.T) {
 
 	// test written files here?
 	// each directory should have its own files.
-	os.RemoveAll(xFile.Path)
-	os.RemoveAll(xFile.Path + xtractr.DefaultSuffix)
+	_ = os.RemoveAll(xFile.Path)
+	_ = os.RemoveAll(xFile.Path + xtractr.DefaultSuffix)
 }
 
 // testSetupTestDir creates a temp directory with 4 copies of a rar archive in it.
 func testSetupTestDir(t *testing.T) string {
 	t.Helper()
 
-	name, err := os.MkdirTemp(".", "xtractr_test_*_data")
-	require.NoError(t, err, "creating temp directory failed")
+	name := t.TempDir()
 
 	testFileData, err := os.ReadFile(testFile)
 	require.NoError(t, err, "reading test data file failed")
@@ -153,7 +152,7 @@ func makeFile(t *testing.T, data []byte, fileName string) error {
 	if err != nil {
 		return err
 	}
-	defer openFile.Close()
+	defer safeCloser(t, openFile)
 
 	_, err = openFile.Write(data)
 

@@ -11,7 +11,7 @@ import (
 	"strings"
 )
 
-// ArchiveList is the value returned when searchying for compressed files.
+// ArchiveList is the value returned when searching for compressed files.
 // The map is directory to list of archives in that directory.
 type ArchiveList map[string][]string
 
@@ -111,6 +111,8 @@ type XFile struct {
 	Password string
 	// (RAR/7z) Archive passwords (to try multiple).
 	Passwords []string
+	// Logger allows printing debug messages.
+	log Logger
 }
 
 // Filter is the input to find compressed files.
@@ -129,22 +131,38 @@ type Filter struct {
 // Exclude represents an exclusion list.
 type Exclude []string
 
-// GetFileList returns all the files in a path.
-// This is non-recursive and only returns files _in_ the base path provided.
+// Debugf calls the debug method on the logger if it's not nil.
+func (x *XFile) Debugf(format string, v ...any) {
+	if x.log != nil {
+		x.log.Debugf(format, v...)
+	}
+}
+
+// GetFileList returns all the files in a path or paths.
+// This is non-recursive and only returns files _in_ the base paths provided.
 // This is a helper method and only exposed for convenience. You do not have to call this.
-func (x *Xtractr) GetFileList(path string) ([]string, error) {
-	if stat, err := os.Stat(path); err == nil && !stat.IsDir() {
-		return []string{path}, nil
-	}
+func (x *Xtractr) GetFileList(paths ...string) ([]string, error) {
+	files := []string{}
 
-	fileList, err := os.ReadDir(path)
-	if err != nil {
-		return nil, fmt.Errorf("reading path %s: %w", path, err)
-	}
+	for _, path := range paths {
+		stat, err := os.Stat(path)
+		if err != nil {
+			return nil, fmt.Errorf("stat: %w", err)
+		}
 
-	files := make([]string, len(fileList))
-	for idx, file := range fileList {
-		files[idx] = filepath.Join(path, file.Name())
+		if !stat.IsDir() {
+			files = append(files, path)
+			continue
+		}
+
+		fileList, err := os.ReadDir(path)
+		if err != nil {
+			return nil, fmt.Errorf("reading path %s: %w", path, err)
+		}
+
+		for _, file := range fileList {
+			files = append(files, filepath.Join(path, file.Name()))
+		}
 	}
 
 	return files, nil
@@ -153,7 +171,7 @@ func (x *Xtractr) GetFileList(path string) ([]string, error) {
 // Difference returns all the strings that are in slice2 but not in slice1.
 // Used to find new files in a file list from a path. ie. those we extracted.
 // This is a helper method and only exposed for convenience. You do not have to call this.
-func Difference(slice1 []string, slice2 []string) []string {
+func Difference(slice1, slice2 []string) []string {
 	diff := []string{}
 
 	for _, s2p := range slice2 {
@@ -267,7 +285,7 @@ func getCompressedFiles(path string, filter *Filter, fileList []os.FileInfo, dep
 				files[k] = v
 			}
 		case strings.HasSuffix(lowerName, ".rar"):
-			hasParts := regexp.MustCompile(`.*\.part[0-9]+\.rar$`)
+			hasParts := regexp.MustCompile(`.*\.part\d+\.rar$`)
 			partOne := regexp.MustCompile(`.*\.part0*1\.rar$`)
 			// Some archives are named poorly. Only return part01 or part001, not all.
 			if !hasParts.MatchString(lowerName) || partOne.MatchString(lowerName) {
@@ -286,13 +304,13 @@ func getCompressedFiles(path string, filter *Filter, fileList []os.FileInfo, dep
 
 // Extract calls the correct procedure for the type of file being extracted.
 // Returns size of extracted data, list of extracted files, and/or error.
-func (x *XFile) Extract() (int64, []string, []string, error) {
+func (x *XFile) Extract() (size int64, filesList, archiveList []string, err error) {
 	return ExtractFile(x)
 }
 
 // ExtractFile calls the correct procedure for the type of file being extracted.
 // Returns size of extracted data, list of extracted files, list of archives processed, and/or error.
-func ExtractFile(xFile *XFile) (int64, []string, []string, error) {
+func ExtractFile(xFile *XFile) (size int64, filesList, archiveList []string, err error) {
 	sName := strings.ToLower(xFile.FilePath)
 
 	for _, ext := range extension2function {
@@ -307,7 +325,7 @@ func ExtractFile(xFile *XFile) (int64, []string, []string, error) {
 // MoveFiles relocates files then removes the folder they were in.
 // Returns the new file paths.
 // This is a helper method and only exposed for convenience. You do not have to call this.
-func (x *Xtractr) MoveFiles(fromPath string, toPath string, overwrite bool) ([]string, error) { //nolint:cyclop
+func (x *Xtractr) MoveFiles(fromPath, toPath string, overwrite bool) ([]string, error) { //nolint:cyclop
 	var (
 		newFiles = []string{}
 		keepErr  error
@@ -322,6 +340,8 @@ func (x *Xtractr) MoveFiles(fromPath string, toPath string, overwrite bool) ([]s
 	if _, err := os.Stat(toPath); err == nil && IsArchiveFile(toPath) {
 		toPath = strings.TrimSuffix(toPath, filepath.Ext(toPath))
 	}
+
+	x.config.Debugf("Moving files: %v (%d files) -> %v", fromPath, len(files), toPath)
 
 	if err := os.MkdirAll(toPath, x.config.DirMode); err != nil {
 		return nil, fmt.Errorf("os.MkdirAll: %w", err)
@@ -405,22 +425,21 @@ func (x *Xtractr) Rename(oldpath, newpath string) error {
 	if err != nil {
 		return fmt.Errorf("os.Open(): %w", err)
 	}
+	defer oldFile.Close()
 
 	newFile, err := os.OpenFile(newpath, os.O_TRUNC|os.O_CREATE|os.O_WRONLY, x.config.FileMode)
 	if err != nil {
-		oldFile.Close()
 		return fmt.Errorf("os.OpenFile(): %w", err)
 	}
 	defer newFile.Close()
 
 	_, err = io.Copy(newFile, oldFile)
-	oldFile.Close()
-
 	if err != nil {
 		return fmt.Errorf("io.Copy(): %w", err)
 	}
 
 	// The copy was successful, so now delete the original file
+	_ = oldFile.Close() // Needs to be closed before delete.
 	_ = os.Remove(oldpath)
 
 	return nil
@@ -484,4 +503,20 @@ func (a ArchiveList) Random() []string {
 	}
 
 	return nil
+}
+
+// List returns all of the archives as a string slice.
+func (a ArchiveList) List() []string {
+	list := []string{}
+
+	for _, files := range a {
+		list = append(list, files...)
+	}
+
+	return list
+}
+
+// SetLogger sets the logger interface on an XFile. Useful when you need to debug what it's doing.
+func (x *XFile) SetLogger(logger Logger) {
+	x.log = logger
 }
