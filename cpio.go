@@ -13,7 +13,7 @@ import (
 )
 
 // ExtractCPIOGzip extracts a gzip-compressed cpio archive (cpgz).
-func ExtractCPIOGzip(xFile *XFile) (int64, []string, error) {
+func ExtractCPIOGzip(xFile *XFile) (size int64, filesList []string, err error) {
 	compressedFile, err := os.Open(xFile.FilePath)
 	if err != nil {
 		return 0, nil, fmt.Errorf("os.Open: %w", err)
@@ -30,7 +30,7 @@ func ExtractCPIOGzip(xFile *XFile) (int64, []string, error) {
 }
 
 // ExtractCPIO extracts a .cpio file.
-func ExtractCPIO(xFile *XFile) (int64, []string, error) {
+func ExtractCPIO(xFile *XFile) (size int64, filesList []string, err error) {
 	fileReader, err := os.Open(xFile.FilePath)
 	if err != nil {
 		return 0, nil, fmt.Errorf("os.Open: %w", err)

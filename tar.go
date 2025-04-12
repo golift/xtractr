@@ -87,7 +87,7 @@ func ExtractTarGzip(xFile *XFile) (size int64, filesList []string, err error) {
 }
 
 // ExtractTarLzip extracts an LZIP-compressed tar archive (tlz).
-func ExtractTarLzip(xFile *XFile) (int64, []string, error) {
+func ExtractTarLzip(xFile *XFile) (size int64, filesList []string, err error) {
 	compressedFile, err := os.Open(xFile.FilePath)
 	if err != nil {
 		return 0, nil, fmt.Errorf("os.Open: %w", err)

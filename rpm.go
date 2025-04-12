@@ -14,12 +14,14 @@ import (
 	"github.com/ulikunitz/xz/lzma"
 )
 
+// Errors returned when decompressing RAR archives.
 var (
 	ErrUnsupportedRPMCompression = errors.New("unsupported rpm compression")
 	ErrUnsupportedRPMArchiveFmt  = errors.New("unsupported rpm archive format")
 )
 
-func ExtractRPM(xFile *XFile) (int64, []string, error) { //nolint:cyclop
+// ExtractRPM extract a file as a RedHat Package Manager file.
+func ExtractRPM(xFile *XFile) (size int64, filesList []string, err error) { //nolint:cyclop
 	rpmFile, err := os.Open(xFile.FilePath)
 	if err != nil {
 		return 0, nil, fmt.Errorf("os.Open: %w", err)
@@ -78,7 +80,7 @@ func ExtractRPM(xFile *XFile) (int64, []string, error) { //nolint:cyclop
 	}
 }
 
-func (x *XFile) unrpm(reader io.Reader, format string) (int64, []string, error) {
+func (x *XFile) unrpm(reader io.Reader, format string) (size int64, filesList []string, err error) {
 	// Check the archive format of the payload
 	switch format {
 	case "cpio":
