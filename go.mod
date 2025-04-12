@@ -13,7 +13,7 @@ require (
 	github.com/kdomanski/iso9660 v0.4.0
 	github.com/klauspost/compress v1.18.0
 	github.com/nwaples/rardecode v1.1.3
-	github.com/peterebden/ar v0.0.0-20230524111245-4f7c7b065694
+	github.com/peterebden/ar v0.0.0-20241106141004-20dc11b778e8
 	github.com/pierrec/lz4/v4 v4.1.22
 	github.com/sshaman1101/dcompress v0.0.0-20200109162717-50436a6332de
 	github.com/stretchr/testify v1.9.0
