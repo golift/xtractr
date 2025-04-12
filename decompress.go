@@ -14,6 +14,7 @@ import (
 	"github.com/pierrec/lz4/v4"
 	lzw "github.com/sshaman1101/dcompress"
 	"github.com/therootcompany/xz"
+	"github.com/ulikunitz/xz/lzma"
 )
 
 // ExtractXZ extracts an XZ-compressed file. A single file.
@@ -56,6 +57,54 @@ func ExtractZlib(xFile *XFile) (int64, []string, error) {
 
 	// Get the absolute path of the file being written.
 	wfile := xFile.clean(xFile.FilePath, ".zz", ".zlib")
+
+	size, err := writeFile(wfile, zipReader, xFile.FileMode, xFile.DirMode)
+	if err != nil {
+		return size, nil, err
+	}
+
+	return size, []string{wfile}, nil
+}
+
+// ExtractLZMA extracts an lzma-compressed file. A single file.
+func ExtractLZMA(xFile *XFile) (int64, []string, error) {
+	compressedFile, err := os.Open(xFile.FilePath)
+	if err != nil {
+		return 0, nil, fmt.Errorf("os.Open: %w", err)
+	}
+	defer compressedFile.Close()
+
+	zipReader, err := lzma.NewReader(compressedFile)
+	if err != nil {
+		return 0, nil, fmt.Errorf("lzma.NewReader: %w", err)
+	}
+
+	// Get the absolute path of the file being written.
+	wfile := xFile.clean(xFile.FilePath, ".lzma", ".lz", ".lzip")
+
+	size, err := writeFile(wfile, zipReader, xFile.FileMode, xFile.DirMode)
+	if err != nil {
+		return size, nil, err
+	}
+
+	return size, []string{wfile}, nil
+}
+
+// ExtractLZMA2 extracts an lzma2-compressed file. A single file.
+func ExtractLZMA2(xFile *XFile) (int64, []string, error) {
+	compressedFile, err := os.Open(xFile.FilePath)
+	if err != nil {
+		return 0, nil, fmt.Errorf("os.Open: %w", err)
+	}
+	defer compressedFile.Close()
+
+	zipReader, err := lzma.NewReader2(compressedFile)
+	if err != nil {
+		return 0, nil, fmt.Errorf("lzma.NewReader2: %w", err)
+	}
+
+	// Get the absolute path of the file being written.
+	wfile := xFile.clean(xFile.FilePath, ".lzma", ".lzma2")
 
 	size, err := writeFile(wfile, zipReader, xFile.FileMode, xFile.DirMode)
 	if err != nil {

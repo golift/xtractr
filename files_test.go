@@ -121,7 +121,7 @@ func TestAllExcept(t *testing.T) {
 	t.Parallel()
 
 	includeOnlyThese := []string{".rar", ".zip", ".7z"}
-	allExcept := xtractr.AllExcept(includeOnlyThese)
+	allExcept := xtractr.AllExcept(includeOnlyThese...)
 
 	assert.Len(t, allExcept, len(xtractr.SupportedExtensions())-len(includeOnlyThese),
 		"we should have 3 fewer entries that the total supported extensions")

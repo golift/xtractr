@@ -27,35 +27,48 @@ type Interface func(*XFile) (int64, []string, []string, error)
 
 // https://github.com/golift/xtractr/issues/44
 //
+// This list of archive types is used in a few places as extension lists.
+//
 //nolint:gochecknoglobals
 var extension2function = []archive{
 	{Extension: ".tar.bz2", Extract: ChngInt(ExtractTarBzip)},
+	{Extension: ".cpio.gz", Extract: ChngInt(ExtractCPIOGzip)},
 	{Extension: ".tar.gz", Extract: ChngInt(ExtractTarGzip)},
 	{Extension: ".tar.xz", Extract: ChngInt(ExtractTarXZ)},
 	{Extension: ".tar.z", Extract: ChngInt(ExtractTarZ)},
 	// The ones with double extensions that match a single (below) need to come first.
 	{Extension: ".7z", Extract: Extract7z},
 	{Extension: ".7z.001", Extract: Extract7z},
-	{Extension: ".z", Extract: ChngInt(ExtractLZW)}, // everything is lowercase...
+	{Extension: ".ar", Extract: ChngInt(ExtractAr)},
 	{Extension: ".br", Extract: ChngInt(ExtractBrotli)},
 	{Extension: ".brotli", Extract: ChngInt(ExtractBrotli)},
 	{Extension: ".bz2", Extract: ChngInt(ExtractBzip)},
+	{Extension: ".cpgz", Extract: ChngInt(ExtractCPIOGzip)},
+	{Extension: ".cpio", Extract: ChngInt(ExtractCPIO)},
+	{Extension: ".deb", Extract: ChngInt(ExtractAr)},
 	{Extension: ".gz", Extract: ChngInt(ExtractGzip)},
 	{Extension: ".gzip", Extract: ChngInt(ExtractGzip)},
 	{Extension: ".iso", Extract: ChngInt(ExtractISO)},
 	{Extension: ".lz4", Extract: ChngInt(ExtractLZ4)},
+	{Extension: ".lz", Extract: ChngInt(ExtractLZMA)},
+	{Extension: ".lzip", Extract: ChngInt(ExtractLZMA)},
+	{Extension: ".lzma", Extract: ChngInt(ExtractLZMA)},
+	{Extension: ".lzma2", Extract: ChngInt(ExtractLZMA2)},
 	{Extension: ".r00", Extract: ExtractRAR},
 	{Extension: ".rar", Extract: ExtractRAR},
 	{Extension: ".s2", Extract: ChngInt(ExtractS2)},
+	{Extension: ".rpm", Extract: ChngInt(ExtractRPM)},
 	{Extension: ".snappy", Extract: ChngInt(ExtractSnappy)},
 	{Extension: ".sz", Extract: ChngInt(ExtractSnappy)},
 	{Extension: ".tar", Extract: ChngInt(ExtractTar)},
 	{Extension: ".tbz", Extract: ChngInt(ExtractTarBzip)},
 	{Extension: ".tbz2", Extract: ChngInt(ExtractTarBzip)},
 	{Extension: ".tgz", Extract: ChngInt(ExtractTarGzip)},
+	{Extension: ".tlz", Extract: ChngInt(ExtractTarLzip)},
 	{Extension: ".txz", Extract: ChngInt(ExtractTarXZ)},
 	{Extension: ".tz", Extract: ChngInt(ExtractTarZ)},
 	{Extension: ".xz", Extract: ChngInt(ExtractXZ)},
+	{Extension: ".z", Extract: ChngInt(ExtractLZW)}, // everything is lowercase...
 	{Extension: ".zip", Extract: ChngInt(ExtractZIP)},
 	{Extension: ".zlib", Extract: ChngInt(ExtractZlib)},
 	{Extension: ".zst", Extract: ChngInt(ExtractZstandard)},
@@ -430,19 +443,21 @@ func (x *XFile) clean(filePath string, trim ...string) string {
 // Returns a list of supported extensions minus the ones provided.
 // Extensions for like-types such as .rar and .r00 need to both be provided.
 // Same for .tar.gz and .tgz variants.
-func AllExcept(onlyThese []string) Exclude {
+func AllExcept(onlyThese ...string) Exclude {
+	// Start by excluding everything.
 	output := SupportedExtensions()
 
+	// Loop through the extensions we want to keep.
 	for _, str := range onlyThese {
 		idx := 0
-
+		// Remove each one from the output list.
 		for _, ext := range output {
 			if !strings.EqualFold(ext, str) {
 				output[idx] = ext
 				idx++
 			}
 		}
-
+		// Truncate the output to the size of items kept.
 		output = output[:idx]
 	}
 
