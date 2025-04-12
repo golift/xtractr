@@ -23,7 +23,7 @@ type archive struct {
 }
 
 // Interface is a common interface for extracting compressed or non-compressed files or archives.
-type Interface func(*XFile) (int64, []string, []string, error)
+type Interface func(x *XFile) (size int64, filesList, archiveList []string, err error)
 
 // https://github.com/golift/xtractr/issues/44
 //
