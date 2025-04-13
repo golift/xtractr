@@ -10,6 +10,8 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/saintfish/chardet"
+	"golang.org/x/net/html/charset"
 	"golang.org/x/text/encoding"
 )
 
@@ -470,11 +472,17 @@ func (x *XFile) clean(filePath string, trim ...string) (string, error) {
 
 // decode a string using the provided decoder.
 func (x *XFile) decode(input string) (string, error) {
-	if x.Encoding == nil {
+	encoding := x.Encoding
+	if encoding == nil {
+		res, _ := chardet.NewTextDetector().DetectBest([]byte(input))
+		encoding, _ = charset.Lookup(res.Charset)
+	}
+
+	if encoding == nil {
 		return input, nil
 	}
 
-	output, err := x.Encoding.NewDecoder().String(input)
+	output, err := encoding.NewDecoder().String(input)
 	if err != nil {
 		return "", fmt.Errorf("decoding file name: %w", err)
 	}
