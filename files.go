@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 )
 
 // ArchiveList is the value returned when searching for compressed files.
@@ -393,24 +394,37 @@ func (x *Xtractr) DeleteFiles(files ...string) {
 	}
 }
 
-// writeFile writes a file from an io reader, making sure all parent directories exist.
-func writeFile(fpath string, fdata io.Reader, fMode, dMode os.FileMode) (int64, error) {
-	if err := os.MkdirAll(filepath.Dir(fpath), dMode); err != nil {
+type file struct {
+	Path     string
+	Data     io.Reader
+	FileMode os.FileMode
+	DirMode  os.FileMode
+	Mtime    time.Time
+	Atime    time.Time
+}
+
+// Write a file from an io reader, making sure all parent directories exist.
+func (file *file) Write() (int64, error) {
+	if err := os.MkdirAll(filepath.Dir(file.Path), file.DirMode); err != nil {
 		return 0, fmt.Errorf("os.MkdirAll: %w", err)
 	}
 
-	fout, err := os.OpenFile(fpath, os.O_RDWR|os.O_CREATE|os.O_TRUNC, fMode)
+	fout, err := os.OpenFile(file.Path, os.O_RDWR|os.O_CREATE|os.O_TRUNC, file.FileMode)
 	if err != nil {
 		return 0, fmt.Errorf("os.OpenFile: %w", err)
 	}
 	defer fout.Close()
 
-	s, err := io.Copy(fout, fdata)
+	size, err := io.Copy(fout, file.Data)
 	if err != nil {
-		return s, fmt.Errorf("copying io: %w", err)
+		return size, fmt.Errorf("copying io: %w", err)
 	}
 
-	return s, nil
+	if err = os.Chtimes(file.Path, file.Atime, file.Mtime); err != nil {
+		return size, fmt.Errorf("changing file times: %w", err)
+	}
+
+	return size, nil
 }
 
 // Rename is an attempt to deal with "invalid cross link device" on weird file systems.

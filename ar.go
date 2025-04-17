@@ -38,20 +38,27 @@ func (x *XFile) unAr(reader io.Reader) (int64, []string, error) {
 			return size, files, fmt.Errorf("%w: %s", ErrInvalidHead, x.FilePath)
 		}
 
-		wfile := x.clean(header.Name)
-		if !strings.HasPrefix(wfile, x.OutputDir) {
+		file := &file{
+			Path:     x.clean(header.Name),
+			Data:     arReader,
+			FileMode: os.FileMode(header.Mode), //nolint:gosec // what else ya gonna do with this?
+			DirMode:  x.DirMode,
+			Mtime:    header.ModTime,
+		}
+
+		if !strings.HasPrefix(file.Path, x.OutputDir) {
 			// The file being written is trying to write outside of our base path. Malicious archive?
-			return size, files, fmt.Errorf("%s: %w: %s (from: %s)", x.FilePath, ErrInvalidPath, wfile, header.Name)
+			return size, files, fmt.Errorf("%s: %w: %s (from: %s)", x.FilePath, ErrInvalidPath, file.Path, header.Name)
 		}
 
 		// ar format does not store directory paths. Flat list of files.
-		//nolint:gosec // we are not overflowing an integer with this conversion.
-		fSize, err := writeFile(wfile, arReader, os.FileMode(header.Mode), x.DirMode)
+
+		fSize, err := file.Write()
 		if err != nil {
 			return size, files, err
 		}
 
-		files = append(files, wfile)
+		files = append(files, file.Path)
 		size += fSize
 	}
 }
