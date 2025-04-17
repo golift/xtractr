@@ -404,6 +404,26 @@ func (x *Xtractr) cleanTempFolder(resp *Response) {
 		return
 	}
 
+	// If the original thing we extracted was an archive (not a dir), remove the suffix from the output folder.
+	if IsArchiveFile(resp.X.Name) {
+		noSuffix = strings.TrimSuffix(noSuffix, filepath.Ext(noSuffix))
+	}
+
+	if IsArchiveFile(noSuffix) { // We do it twice in case of `tar.gz` etc.
+		noSuffix = strings.TrimSuffix(noSuffix, filepath.Ext(noSuffix))
+	}
+
+	// If the name is taken, try up to 999 different names.
+	if _, err := os.Stat(noSuffix); x.config.TryNames && err == nil {
+		for i := range 999 {
+			newName := noSuffix + fmt.Sprint(".", i)
+			if _, err := os.Stat(newName); err != nil {
+				noSuffix = newName
+				break
+			}
+		}
+	}
+
 	if newFiles, err := x.MoveFiles(resp.Output, noSuffix, false); err != nil {
 		x.config.Printf("Error: Renaming Temporary Folder: %v", err)
 	} else {
