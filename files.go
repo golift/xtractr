@@ -544,7 +544,7 @@ func (x *XFile) squashRoot(files []string) ([]string, error) {
 	}
 
 	roots := map[string]bool{}
-
+	//nolint:mnd
 	for _, path := range files {
 		roots[strings.SplitN(strings.TrimPrefix(path, x.OutputDir), string(filepath.Separator), 2)[0]] = true
 	}
