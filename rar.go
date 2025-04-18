@@ -95,7 +95,7 @@ func (x *XFile) unrar(rarReader *rardecode.ReadCloser) (int64, []string, error) 
 		file := &file{
 			Path:     x.clean(header.Name),
 			Data:     rarReader,
-			FileMode: header.Mode(),
+			FileMode: x.safeFileMode(header.Mode()),
 			DirMode:  x.DirMode,
 			Mtime:    header.ModificationTime,
 			Atime:    header.AccessTime,
@@ -110,7 +110,7 @@ func (x *XFile) unrar(rarReader *rardecode.ReadCloser) (int64, []string, error) 
 		if header.IsDir {
 			x.Debugf("Writing archived directory: %s", file.Path)
 
-			if err = os.MkdirAll(file.Path, header.Mode().Perm()); err != nil {
+			if err = os.MkdirAll(file.Path, x.safeDirMode(header.Mode())); err != nil {
 				return size, files, fmt.Errorf("os.MkdirAll: %w", err)
 			}
 

@@ -41,7 +41,7 @@ func (x *XFile) unAr(reader io.Reader) (int64, []string, error) {
 		file := &file{
 			Path:     x.clean(header.Name),
 			Data:     arReader,
-			FileMode: os.FileMode(header.Mode), //nolint:gosec // what else ya gonna do with this?
+			FileMode: x.safeFileMode(os.FileMode(header.Mode)), //nolint:gosec // what else ya gonna do with this?
 			DirMode:  x.DirMode,
 			Mtime:    header.ModTime,
 		}

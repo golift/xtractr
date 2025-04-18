@@ -67,7 +67,7 @@ func (x *XFile) uncpioFile(cpioFile *cpio.Header, cpioReader *cpio.Reader) (int6
 	file := &file{
 		Path:     x.clean(cpioFile.Name),
 		Data:     cpioReader,
-		FileMode: cpioFile.FileInfo().Mode(),
+		FileMode: x.safeFileMode(cpioFile.FileInfo().Mode()),
 		DirMode:  x.DirMode,
 		Mtime:    cpioFile.ModTime,
 	}
@@ -78,7 +78,7 @@ func (x *XFile) uncpioFile(cpioFile *cpio.Header, cpioReader *cpio.Reader) (int6
 	}
 
 	if cpioFile.Mode.IsDir() || cpioFile.FileInfo().IsDir() {
-		if err := os.MkdirAll(file.Path, cpioFile.FileInfo().Mode()); err != nil {
+		if err := os.MkdirAll(file.Path, x.safeDirMode(cpioFile.FileInfo().Mode())); err != nil {
 			return 0, fmt.Errorf("making cpio dir: %w", err)
 		}
 

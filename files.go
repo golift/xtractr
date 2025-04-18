@@ -534,3 +534,19 @@ func (a ArchiveList) List() []string {
 func (x *XFile) SetLogger(logger Logger) {
 	x.log = logger
 }
+
+func (x *XFile) safeDirMode(current os.FileMode) os.FileMode {
+	if current.Perm() == 0 {
+		return x.DirMode
+	}
+
+	return current | 0700 // ensure owner has read/write/exec on folders.
+}
+
+func (x *XFile) safeFileMode(current os.FileMode) os.FileMode {
+	if current.Perm() == 0 {
+		return x.FileMode
+	}
+
+	return current | 0400 // ensure owner has read access to the file.
+}

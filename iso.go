@@ -37,6 +37,7 @@ func ExtractISO(xFile *XFile) (size int64, filesList []string, err error) {
 
 func (x *XFile) uniso(isoFile *iso9660.File, parent string) (int64, []string, error) {
 	itemName := filepath.Join(parent, isoFile.Name())
+
 	if isoFile.Name() == string([]byte{0}) { // rename root folder.
 		itemName = strings.TrimSuffix(strings.TrimSuffix(filepath.Base(x.FilePath), ".iso"), ".ISO")
 	}
@@ -45,8 +46,8 @@ func (x *XFile) uniso(isoFile *iso9660.File, parent string) (int64, []string, er
 		return x.unisofile(isoFile, itemName)
 	}
 
-	if err := os.MkdirAll(isoFile.Name(), isoFile.Mode()); err != nil {
-		return 0, nil, fmt.Errorf("making directory %s: %w", isoFile.Name(), err)
+	if err := os.MkdirAll(filepath.Join(x.OutputDir, itemName), x.safeDirMode(isoFile.Mode())); err != nil {
+		return 0, nil, fmt.Errorf("making 1directory %s: %w", isoFile.Name(), err)
 	}
 
 	children, err := isoFile.GetChildren()
@@ -75,7 +76,7 @@ func (x *XFile) unisofile(isoFile *iso9660.File, wfile string) (int64, []string,
 	file := &file{
 		Path:     x.clean(wfile),
 		Data:     isoFile.Reader(),
-		FileMode: isoFile.Mode(),
+		FileMode: x.safeFileMode(isoFile.Mode()),
 		DirMode:  x.DirMode,
 		Mtime:    isoFile.ModTime(),
 	}

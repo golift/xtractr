@@ -93,7 +93,7 @@ func (x *XFile) un7zip(zipFile *sevenzip.File) (int64, string, error) {
 	file := &file{
 		Path:     x.clean(zipFile.Name),
 		Data:     zFile,
-		FileMode: zipFile.Mode(),
+		FileMode: x.safeFileMode(zipFile.Mode()),
 		DirMode:  x.DirMode,
 		Mtime:    zipFile.Modified,
 		Atime:    zipFile.Accessed,
