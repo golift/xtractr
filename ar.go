@@ -41,7 +41,7 @@ func (x *XFile) unAr(reader io.Reader) (int64, []string, error) {
 		file := &file{
 			Path:     x.clean(header.Name),
 			Data:     arReader,
-			FileMode: x.safeFileMode(os.FileMode(header.Mode)), //nolint:gosec // what else ya gonna do with this?
+			FileMode: os.FileMode(header.Mode), //nolint:gosec // what else ya gonna do with this?
 			DirMode:  x.DirMode,
 			Mtime:    header.ModTime,
 		}
@@ -53,7 +53,7 @@ func (x *XFile) unAr(reader io.Reader) (int64, []string, error) {
 
 		// ar format does not store directory paths. Flat list of files.
 
-		fSize, err := file.Write()
+		fSize, err := x.write(file)
 		if err != nil {
 			return size, files, err
 		}

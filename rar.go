@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -95,7 +94,7 @@ func (x *XFile) unrar(rarReader *rardecode.ReadCloser) (int64, []string, error) 
 		file := &file{
 			Path:     x.clean(header.Name),
 			Data:     rarReader,
-			FileMode: x.safeFileMode(header.Mode()),
+			FileMode: header.Mode(),
 			DirMode:  x.DirMode,
 			Mtime:    header.ModificationTime,
 			Atime:    header.AccessTime,
@@ -110,8 +109,8 @@ func (x *XFile) unrar(rarReader *rardecode.ReadCloser) (int64, []string, error) 
 		if header.IsDir {
 			x.Debugf("Writing archived directory: %s", file.Path)
 
-			if err = os.MkdirAll(file.Path, x.safeDirMode(header.Mode())); err != nil {
-				return size, files, fmt.Errorf("os.MkdirAll: %w", err)
+			if err = x.mkDir(file.Path, header.Mode(), header.ModificationTime); err != nil {
+				return size, files, fmt.Errorf("making rar file dir: %w", err)
 			}
 
 			continue
@@ -119,7 +118,7 @@ func (x *XFile) unrar(rarReader *rardecode.ReadCloser) (int64, []string, error) 
 
 		x.Debugf("Writing archived file: %s (packed: %d, unpacked: %d)", file.Path, header.PackedSize, header.UnPackedSize)
 
-		fSize, err := file.Write()
+		fSize, err := x.write(file)
 		if err != nil {
 			return size, files, err
 		}

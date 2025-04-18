@@ -46,8 +46,8 @@ func (x *XFile) uniso(isoFile *iso9660.File, parent string) (int64, []string, er
 		return x.unisofile(isoFile, itemName)
 	}
 
-	if err := os.MkdirAll(filepath.Join(x.OutputDir, itemName), x.safeDirMode(isoFile.Mode())); err != nil {
-		return 0, nil, fmt.Errorf("making 1directory %s: %w", isoFile.Name(), err)
+	if err := x.mkDir(filepath.Join(x.OutputDir, itemName), isoFile.Mode(), isoFile.ModTime()); err != nil {
+		return 0, nil, fmt.Errorf("making iso directory %s: %w", isoFile.Name(), err)
 	}
 
 	children, err := isoFile.GetChildren()
@@ -76,7 +76,7 @@ func (x *XFile) unisofile(isoFile *iso9660.File, wfile string) (int64, []string,
 	file := &file{
 		Path:     x.clean(wfile),
 		Data:     isoFile.Reader(),
-		FileMode: x.safeFileMode(isoFile.Mode()),
+		FileMode: isoFile.Mode(),
 		DirMode:  x.DirMode,
 		Mtime:    isoFile.ModTime(),
 	}
@@ -90,7 +90,7 @@ func (x *XFile) unisofile(isoFile *iso9660.File, wfile string) (int64, []string,
 
 	x.Debugf("Writing archived file: %s (bytes: %d)", file.Path, isoFile.Size())
 
-	size, err := file.Write()
+	size, err := x.write(file)
 
 	return size, []string{file.Path}, err
 }

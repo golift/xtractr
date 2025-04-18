@@ -3,8 +3,6 @@ package xtractr
 import (
 	"archive/zip"
 	"fmt"
-	"log"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -48,7 +46,7 @@ func (x *XFile) unzip(zipFile *zip.File) (int64, string, error) {
 	file := &file{
 		Path:     x.clean(zipFile.Name),
 		Data:     zFile,
-		FileMode: x.safeFileMode(zipFile.Mode()),
+		FileMode: zipFile.Mode(),
 		DirMode:  x.DirMode,
 		Mtime:    zipFile.Modified,
 		Atime:    time.Now(),
@@ -62,8 +60,8 @@ func (x *XFile) unzip(zipFile *zip.File) (int64, string, error) {
 
 	if zipFile.FileInfo().IsDir() {
 		x.Debugf("Writing archived directory: %s", file.Path)
-		log.Println("MOOOODE", zipFile.Mode())
-		if err := os.MkdirAll(file.Path, x.safeDirMode(zipFile.Mode())); err != nil {
+
+		if err := x.mkDir(file.Path, zipFile.Mode(), zipFile.Modified); err != nil {
 			return 0, file.Path, fmt.Errorf("making zipFile dir: %w", err)
 		}
 
@@ -73,7 +71,7 @@ func (x *XFile) unzip(zipFile *zip.File) (int64, string, error) {
 	x.Debugf("Writing archived file: %s (packed: %d, unpacked: %d)", file.Path,
 		zipFile.CompressedSize64, zipFile.UncompressedSize64)
 
-	s, err := file.Write()
+	s, err := x.write(file)
 	if err != nil {
 		return s, file.Path, fmt.Errorf("%s: %w: %s (from: %s)", zipFile.FileInfo().Name(), err, file.Path, zipFile.Name)
 	}

@@ -2,7 +2,6 @@ package xtractr
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -93,7 +92,7 @@ func (x *XFile) un7zip(zipFile *sevenzip.File) (int64, string, error) {
 	file := &file{
 		Path:     x.clean(zipFile.Name),
 		Data:     zFile,
-		FileMode: x.safeFileMode(zipFile.Mode()),
+		FileMode: zipFile.Mode(),
 		DirMode:  x.DirMode,
 		Mtime:    zipFile.Modified,
 		Atime:    zipFile.Accessed,
@@ -108,7 +107,7 @@ func (x *XFile) un7zip(zipFile *sevenzip.File) (int64, string, error) {
 	if zipFile.FileInfo().IsDir() {
 		x.Debugf("Writing archived directory: %s", file.Path)
 
-		if err := os.MkdirAll(file.Path, zipFile.Mode()); err != nil {
+		if err := x.mkDir(file.Path, zipFile.Mode(), zipFile.Modified); err != nil {
 			return 0, file.Path, fmt.Errorf("making zipFile dir: %w", err)
 		}
 
@@ -118,7 +117,7 @@ func (x *XFile) un7zip(zipFile *sevenzip.File) (int64, string, error) {
 	x.Debugf("Writing archived file: %s (packed: %d, unpacked: %d)",
 		file.Path, zipFile.FileInfo().Size(), zipFile.UncompressedSize)
 
-	s, err := file.Write()
+	s, err := x.write(file)
 	if err != nil {
 		return s, file.Path, fmt.Errorf("%s: %w: %s (from: %s)", zipFile.FileInfo().Name(), err, file.Path, zipFile.Name)
 	}

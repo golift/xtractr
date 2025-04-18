@@ -38,7 +38,7 @@ func ExtractXZ(xFile *XFile) (size int64, filesList []string, err error) {
 		DirMode:  xFile.DirMode,
 	}
 
-	size, err = file.Write()
+	size, err = xFile.write(file)
 	if err != nil {
 		return size, nil, err
 	}
@@ -68,7 +68,7 @@ func ExtractZlib(xFile *XFile) (size int64, filesList []string, err error) {
 		DirMode:  xFile.DirMode,
 	}
 
-	size, err = file.Write()
+	size, err = xFile.write(file)
 	if err != nil {
 		return size, nil, err
 	}
@@ -97,7 +97,7 @@ func ExtractLZMA(xFile *XFile) (size int64, filesList []string, err error) {
 		DirMode:  xFile.DirMode,
 	}
 
-	size, err = file.Write()
+	size, err = xFile.write(file)
 	if err != nil {
 		return size, nil, err
 	}
@@ -126,7 +126,7 @@ func ExtractLZMA2(xFile *XFile) (size int64, filesList []string, err error) {
 		DirMode:  xFile.DirMode,
 	}
 
-	size, err = file.Write()
+	size, err = xFile.write(file)
 	if err != nil {
 		return size, nil, err
 	}
@@ -156,7 +156,7 @@ func ExtractZstandard(xFile *XFile) (size int64, filesList []string, err error) 
 		DirMode:  xFile.DirMode,
 	}
 
-	size, err = file.Write()
+	size, err = xFile.write(file)
 	if err != nil {
 		return size, nil, err
 	}
@@ -185,7 +185,7 @@ func ExtractLZW(xFile *XFile) (size int64, filesList []string, err error) {
 		DirMode:  xFile.DirMode,
 	}
 
-	size, err = file.Write()
+	size, err = xFile.write(file)
 	if err != nil {
 		return size, nil, err
 	}
@@ -209,7 +209,7 @@ func ExtractLZ4(xFile *XFile) (size int64, filesList []string, err error) {
 		DirMode:  xFile.DirMode,
 	}
 
-	size, err = file.Write()
+	size, err = xFile.write(file)
 	if err != nil {
 		return size, nil, err
 	}
@@ -233,7 +233,7 @@ func ExtractSnappy(xFile *XFile) (size int64, filesList []string, err error) {
 		DirMode:  xFile.DirMode,
 	}
 
-	size, err = file.Write()
+	size, err = xFile.write(file)
 	if err != nil {
 		return size, nil, err
 	}
@@ -257,7 +257,7 @@ func ExtractS2(xFile *XFile) (size int64, filesList []string, err error) {
 		DirMode:  xFile.DirMode,
 	}
 
-	size, err = file.Write()
+	size, err = xFile.write(file)
 	if err != nil {
 		return size, nil, err
 	}
@@ -281,7 +281,7 @@ func ExtractBrotli(xFile *XFile) (size int64, filesList []string, err error) {
 		DirMode:  xFile.DirMode,
 	}
 
-	size, err = file.Write()
+	size, err = xFile.write(file)
 	if err != nil {
 		return size, nil, err
 	}
@@ -305,7 +305,7 @@ func ExtractBzip(xFile *XFile) (size int64, filesList []string, err error) {
 		DirMode:  xFile.DirMode,
 	}
 
-	size, err = file.Write()
+	size, err = xFile.write(file)
 	if err != nil {
 		return size, nil, err
 	}
@@ -336,7 +336,7 @@ func ExtractGzip(xFile *XFile) (size int64, filesList []string, err error) {
 		Mtime:    zipReader.ModTime,
 	}
 
-	size, err = file.Write()
+	size, err = xFile.write(file)
 	if err != nil {
 		return size, nil, err
 	}

@@ -36,6 +36,7 @@ linters:
       - (*os.File).Close
       - os.RemoveAll
       - os.Remove
+      - os.Chtimes
       - (io.Closer).Close
       - (*compress/gzip.Reader).Close
       - (*archive/zip.ReadCloser).Close
