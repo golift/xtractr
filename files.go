@@ -111,8 +111,13 @@ type XFile struct {
 	Password string
 	// (RAR/7z) Archive passwords (to try multiple).
 	Passwords []string
+	// If the archive only has one directory in the root, then setting
+	// this true will cause the extracted content to be moved into the
+	// output folder, and the root folder in the archive to be removed.
+	SquashRoot bool
 	// Logger allows printing debug messages.
-	log Logger
+	log       Logger
+	moveFiles func(fromPath, toPath string, overwrite bool) ([]string, error)
 }
 
 // Filter is the input to find compressed files.
@@ -312,6 +317,7 @@ func (x *XFile) Extract() (size int64, filesList, archiveList []string, err erro
 // Returns size of extracted data, list of extracted files, list of archives processed, and/or error.
 func ExtractFile(xFile *XFile) (size int64, filesList, archiveList []string, err error) {
 	sName := strings.ToLower(xFile.FilePath)
+	xFile.moveFiles = parseConfig(&Config{}).MoveFiles // just borrowing this...
 
 	for _, ext := range extension2function {
 		if strings.HasSuffix(sName, ext.Extension) {
@@ -519,4 +525,35 @@ func (a ArchiveList) List() []string {
 // SetLogger sets the logger interface on an XFile. Useful when you need to debug what it's doing.
 func (x *XFile) SetLogger(logger Logger) {
 	x.log = logger
+}
+
+// cleanup runs after a successful extract.
+// The intent it to move files into their final location.
+func (x *XFile) cleanup(files []string) ([]string, error) {
+	files, err := x.squashRoot(files)
+	if err != nil {
+		return files, err
+	}
+
+	return files, nil
+}
+
+func (x *XFile) squashRoot(files []string) ([]string, error) {
+	if !x.SquashRoot {
+		return files, nil
+	}
+
+	roots := map[string]bool{}
+
+	for _, path := range files {
+		roots[strings.SplitN(strings.TrimPrefix(path, x.OutputDir), string(filepath.Separator), 2)[0]] = true
+	}
+
+	if len(roots) == 1 {
+		for root := range roots { // there's only 1.
+			return x.moveFiles(filepath.Join(x.OutputDir, root), x.OutputDir, false)
+		}
+	}
+
+	return files, nil
 }

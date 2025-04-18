@@ -28,14 +28,12 @@ func (x *XFile) unAr(reader io.Reader) (int64, []string, error) {
 
 	for {
 		header, err := arReader.Next()
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
 
-		switch {
-		case errors.Is(err, io.EOF):
-			return size, files, nil
-		case err != nil:
 			return size, files, fmt.Errorf("%s: arReader.Next: %w", x.FilePath, err)
-		case header == nil:
-			return size, files, fmt.Errorf("%w: %s", ErrInvalidHead, x.FilePath)
 		}
 
 		wfile := x.clean(header.Name)
@@ -54,4 +52,8 @@ func (x *XFile) unAr(reader io.Reader) (int64, []string, error) {
 		files = append(files, wfile)
 		size += fSize
 	}
+
+	files, err := x.cleanup(files)
+
+	return size, files, err
 }

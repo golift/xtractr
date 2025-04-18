@@ -109,14 +109,12 @@ func (x *XFile) untar(reader io.Reader) (int64, []string, error) {
 
 	for {
 		header, err := tarReader.Next()
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
 
-		switch {
-		case errors.Is(err, io.EOF):
-			return size, files, nil
-		case err != nil:
 			return size, files, fmt.Errorf("%s: tarReader.Next: %w", x.FilePath, err)
-		case header == nil:
-			return size, files, fmt.Errorf("%w: %s", ErrInvalidHead, x.FilePath)
 		}
 
 		wfile := x.clean(header.Name)
@@ -146,4 +144,8 @@ func (x *XFile) untar(reader io.Reader) (int64, []string, error) {
 		size += fSize
 		x.Debugf("Wrote archived file: %s (%d bytes), total: %d files and %d bytes", wfile, fSize, len(files), size)
 	}
+
+	files, err := x.cleanup(files)
+
+	return size, files, err
 }

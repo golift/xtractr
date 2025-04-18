@@ -33,7 +33,9 @@ func ExtractZIP(xFile *XFile) (size int64, filesList []string, err error) {
 		xFile.Debugf("Wrote archived file: %s (%d bytes), total: %d files and %d bytes", wfile, fSize, len(files), size)
 	}
 
-	return size, files, nil
+	files, err = xFile.cleanup(files)
+
+	return size, files, err
 }
 
 func (x *XFile) unzip(zipFile *zip.File) (int64, string, error) {

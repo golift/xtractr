@@ -80,7 +80,9 @@ func extract7z(xFile *XFile) (int64, []string, []string, error) {
 		xFile.Debugf("Wrote archived file: %s (%d bytes), total: %d files and %d bytes", wfile, fSize, len(files), size)
 	}
 
-	return size, files, sevenZip.Volumes(), nil
+	files, err = xFile.cleanup(files)
+
+	return size, files, sevenZip.Volumes(), err
 }
 
 func (x *XFile) un7zip(zipFile *sevenzip.File) (int64, string, error) {
