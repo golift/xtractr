@@ -116,7 +116,7 @@ type XFile struct {
 	Passwords []string
 	// If file names are not UTF8 encoded, pass your own encoder here.
 	// Provide a function that takes in a file name and returns an encoder for it.
-	Encoder func(input *EncoderInput) *encoding.Decoder
+	Encoder func(*EncoderInput) *encoding.Decoder
 	// If the archive only has one directory in the root, then setting
 	// this true will cause the extracted content to be moved into the
 	// output folder, and the root folder in the archive to be removed.
