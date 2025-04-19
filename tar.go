@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	lzw "github.com/sshaman1101/dcompress"
 	"github.com/therootcompany/xz"
@@ -109,45 +110,64 @@ func (x *XFile) untar(reader io.Reader) (int64, []string, error) {
 
 	for {
 		header, err := tarReader.Next()
-
-		switch {
-		case errors.Is(err, io.EOF):
-			return size, files, nil
-		case err != nil:
-			return size, files, fmt.Errorf("%s: tarReader.Next: %w", x.FilePath, err)
-		case header == nil:
-			return size, files, fmt.Errorf("%w: %s", ErrInvalidHead, x.FilePath)
-		}
-
-		wfile, err := x.clean(header.Name)
 		if err != nil {
-			return 0, nil, err
-		}
-
-		if !strings.HasPrefix(wfile, x.OutputDir) {
-			// The file being written is trying to write outside of our base path. Malicious archive?
-			return size, files, fmt.Errorf("%s: %w: %s (from: %s)", x.FilePath, ErrInvalidPath, wfile, header.Name)
-		}
-
-		if header.Typeflag == tar.TypeDir {
-			x.Debugf("Writing archived directory: %s", wfile)
-
-			if err = os.MkdirAll(wfile, header.FileInfo().Mode()); err != nil {
-				return size, files, fmt.Errorf("os.MkdirAll: %w", err)
+			if errors.Is(err, io.EOF) {
+				break
 			}
 
-			continue
+			return size, files, fmt.Errorf("%s: tarReader.Next: %w", x.FilePath, err)
 		}
 
-		x.Debugf("Writing archived file: %s (bytes: %d)", wfile, header.FileInfo().Size())
-
-		fSize, err := writeFile(wfile, tarReader, header.FileInfo().Mode(), x.DirMode)
+		fSize, err := x.untarFile(header, tarReader)
 		if err != nil {
 			return size, files, err
 		}
 
-		files = append(files, wfile)
+		files = append(files, header.Name)
 		size += fSize
-		x.Debugf("Wrote archived file: %s (%d bytes), total: %d files and %d bytes", wfile, fSize, len(files), size)
+		x.Debugf("Wrote archived file: %s (%d bytes), total: %d files and %d bytes", header.Name, fSize, len(files), size)
 	}
+
+	files, err := x.cleanup(files)
+
+	return size, files, err
+}
+
+func (x *XFile) untarFile(header *tar.Header, tarReader *tar.Reader) (int64, error) {
+	file := &file{
+		Data:     tarReader,
+		FileMode: header.FileInfo().Mode(),
+		DirMode:  x.DirMode,
+		Mtime:    header.ChangeTime,
+		Atime:    header.AccessTime,
+	}
+
+	var err error
+	if file.Path, err = x.clean(header.Name); err != nil {
+		return 0, err
+	}
+
+	if header.Format != tar.FormatGNU && header.Format != tar.FormatPAX {
+		file.Mtime = header.ModTime
+		file.Atime = time.Now()
+	}
+
+	if !strings.HasPrefix(file.Path, x.OutputDir) {
+		// The file being written is trying to write outside of our base path. Malicious archive?
+		return 0, fmt.Errorf("%s: %w: %s (from: %s)", x.FilePath, ErrInvalidPath, file.Path, header.Name)
+	}
+
+	if header.Typeflag == tar.TypeDir {
+		x.Debugf("Writing archived directory: %s", file.Path)
+
+		if err := x.mkDir(file.Path, header.FileInfo().Mode(), header.ModTime); err != nil {
+			return 0, fmt.Errorf("making tar file dir: %w", err)
+		}
+
+		return 0, nil
+	}
+
+	x.Debugf("Writing archived file: %s (bytes: %d)", file.Path, header.FileInfo().Size())
+
+	return x.write(file)
 }

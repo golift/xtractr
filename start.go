@@ -27,6 +27,10 @@ type Config struct {
 	FileMode os.FileMode
 	// Filemode used when writing folders, tar ignores this.
 	DirMode os.FileMode
+	// When true, if extractions would overwrite the final folder,
+	// a suffix is added instead. ie. .1, .2, .3, etc.
+	// Default is false because a misconfiguration may fill your disk.
+	TryNames bool
 	// The suffix used for temporary folders.
 	Suffix string
 	// Logs are sent to this Logger.
@@ -120,6 +124,10 @@ func parseConfig(config *Config) *Xtractr {
 
 	if config.Suffix == "" {
 		config.Suffix = DefaultSuffix
+	}
+
+	if config.Logger == nil {
+		config.Logger = NoLogger()
 	}
 
 	return &Xtractr{

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"golang.org/x/text/encoding"
 )
@@ -116,8 +117,13 @@ type XFile struct {
 	// If file names are not UTF8 encoded, pass your own encoder here.
 	// Provide a function that takes in a file name and returns an encoder for it.
 	Encoder func(input *EncoderInput) *encoding.Decoder
+	// If the archive only has one directory in the root, then setting
+	// this true will cause the extracted content to be moved into the
+	// output folder, and the root folder in the archive to be removed.
+	SquashRoot bool
 	// Logger allows printing debug messages.
-	log Logger
+	log       Logger
+	moveFiles func(fromPath, toPath string, overwrite bool) ([]string, error)
 }
 
 // Filter is the input to find compressed files.
@@ -317,6 +323,8 @@ func (x *XFile) Extract() (size int64, filesList, archiveList []string, err erro
 // Returns size of extracted data, list of extracted files, list of archives processed, and/or error.
 func ExtractFile(xFile *XFile) (size int64, filesList, archiveList []string, err error) {
 	sName := strings.ToLower(xFile.FilePath)
+	// just borrowing this... Has to go into an interface to avoid a cycle.
+	xFile.moveFiles = parseConfig(&Config{Logger: xFile.log}).MoveFiles
 
 	for _, ext := range extension2function {
 		if strings.HasSuffix(sName, ext.Extension) {
@@ -349,7 +357,7 @@ func (x *Xtractr) MoveFiles(fromPath, toPath string, overwrite bool) ([]string, 
 	x.config.Debugf("Moving files: %v (%d files) -> %v", fromPath, len(files), toPath)
 
 	if err := os.MkdirAll(toPath, x.config.DirMode); err != nil {
-		return nil, fmt.Errorf("os.MkdirAll: %w", err)
+		return nil, fmt.Errorf("making final dir: %w", err)
 	}
 
 	for _, file := range files {
@@ -398,24 +406,43 @@ func (x *Xtractr) DeleteFiles(files ...string) {
 	}
 }
 
-// writeFile writes a file from an io reader, making sure all parent directories exist.
-func writeFile(fpath string, fdata io.Reader, fMode, dMode os.FileMode) (int64, error) {
-	if err := os.MkdirAll(filepath.Dir(fpath), dMode); err != nil {
-		return 0, fmt.Errorf("os.MkdirAll: %w", err)
+type file struct {
+	Path     string
+	Data     io.Reader
+	FileMode os.FileMode
+	DirMode  os.FileMode
+	Mtime    time.Time
+	Atime    time.Time
+}
+
+func (x *XFile) mkDir(path string, mode os.FileMode, mtime time.Time) error {
+	defer os.Chtimes(path, time.Time{}, mtime)
+	return os.MkdirAll(path, x.safeDirMode(mode)) //nolint:wrapcheck
+}
+
+// write a file from an io reader, making sure all parent directories exist.
+func (x *XFile) write(file *file) (int64, error) {
+	if err := x.mkDir(filepath.Dir(file.Path), file.DirMode, file.Mtime); err != nil {
+		return 0, fmt.Errorf("writing archived file '%s' parent folder: %w", filepath.Base(file.Path), err)
 	}
 
-	fout, err := os.OpenFile(fpath, os.O_RDWR|os.O_CREATE|os.O_TRUNC, fMode)
+	fout, err := os.OpenFile(file.Path, os.O_RDWR|os.O_CREATE|os.O_TRUNC, x.safeFileMode(file.FileMode))
 	if err != nil {
-		return 0, fmt.Errorf("os.OpenFile: %w", err)
+		return 0, fmt.Errorf("opening archived file for writing: %w", err)
 	}
 	defer fout.Close()
 
-	s, err := io.Copy(fout, fdata)
+	size, err := io.Copy(fout, file.Data)
 	if err != nil {
-		return s, fmt.Errorf("copying io: %w", err)
+		return size, fmt.Errorf("copying archived file '%s' io: %w", file.Path, err)
 	}
 
-	return s, nil
+	// If this sucks, make it a defer and ignore the error, like xFile.mkDir().
+	if err = os.Chtimes(file.Path, file.Atime, file.Mtime); err != nil {
+		return size, fmt.Errorf("changing archived file times: %w", err)
+	}
+
+	return size, nil
 }
 
 // Rename is an attempt to deal with "invalid cross link device" on weird file systems.
@@ -530,4 +557,57 @@ func (a ArchiveList) List() []string {
 // SetLogger sets the logger interface on an XFile. Useful when you need to debug what it's doing.
 func (x *XFile) SetLogger(logger Logger) {
 	x.log = logger
+}
+
+// cleanup runs after a successful extract.
+// The intent it to move files into their final location.
+func (x *XFile) cleanup(files []string) ([]string, error) {
+	files, err := x.squashRoot(files)
+	if err != nil {
+		return files, err
+	}
+
+	return files, nil
+}
+
+func (x *XFile) squashRoot(files []string) ([]string, error) {
+	if !x.SquashRoot {
+		return files, nil
+	}
+
+	roots := map[string]struct{}{}
+
+	for _, path := range files {
+		// Remove the output dir suffix, then split on `/` (or `\`) and get the first item.
+		newRoot := strings.TrimLeft(strings.TrimPrefix(path, x.OutputDir), string(filepath.Separator))
+		roots[strings.SplitN(newRoot, string(filepath.Separator), 2)[0]] = struct{}{} //nolint:mnd
+	}
+
+	if len(roots) == 1 { // only 1 root folder...
+		for root := range roots { // ...move it's content up a level.
+			return x.moveFiles(filepath.Join(x.OutputDir, root), x.OutputDir, false)
+		}
+	}
+
+	return files, nil
+}
+
+func (x *XFile) safeDirMode(current os.FileMode) os.FileMode {
+	if current.Perm() == 0 {
+		return x.DirMode
+	}
+
+	const minimum = 0o700 // ensure owner has read/write/exec on folders.
+
+	return current | minimum
+}
+
+func (x *XFile) safeFileMode(current os.FileMode) os.FileMode {
+	if current.Perm() == 0 {
+		return x.FileMode
+	}
+
+	const minimum = 0o400 // ensure owner has read access to the file.
+
+	return current | minimum
 }

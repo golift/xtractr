@@ -30,18 +30,24 @@ func ExtractXZ(xFile *XFile) (size int64, filesList []string, err error) {
 		return 0, nil, fmt.Errorf("xz.NewReader: %w", err)
 	}
 
+	file := &file{
+		Data:     zipReader,
+		FileMode: xFile.FileMode,
+		DirMode:  xFile.DirMode,
+	}
+
 	// Get the absolute path of the file being written.
-	wfile, err := xFile.clean(xFile.FilePath, ".xz")
+	file.Path, err = xFile.clean(xFile.FilePath, ".xz")
 	if err != nil {
 		return 0, nil, err
 	}
 
-	size, err = writeFile(wfile, zipReader, xFile.FileMode, xFile.DirMode)
+	size, err = xFile.write(file)
 	if err != nil {
 		return size, nil, err
 	}
 
-	return size, []string{wfile}, nil
+	return size, []string{file.Path}, nil
 }
 
 // ExtractZlib extracts a zlib-compressed file. A single file.
@@ -58,18 +64,24 @@ func ExtractZlib(xFile *XFile) (size int64, filesList []string, err error) {
 	}
 	defer zipReader.Close()
 
+	file := &file{
+		Data:     zipReader,
+		FileMode: xFile.FileMode,
+		DirMode:  xFile.DirMode,
+	}
+
 	// Get the absolute path of the file being written.
-	wfile, err := xFile.clean(xFile.FilePath, ".zz", ".zlib")
+	file.Path, err = xFile.clean(xFile.FilePath, ".zz", ".zlib")
 	if err != nil {
 		return 0, nil, err
 	}
 
-	size, err = writeFile(wfile, zipReader, xFile.FileMode, xFile.DirMode)
+	size, err = xFile.write(file)
 	if err != nil {
 		return size, nil, err
 	}
 
-	return size, []string{wfile}, nil
+	return size, []string{file.Path}, nil
 }
 
 // ExtractLZMA extracts an lzma-compressed file. A single file.
@@ -85,18 +97,24 @@ func ExtractLZMA(xFile *XFile) (size int64, filesList []string, err error) {
 		return 0, nil, fmt.Errorf("lzma.NewReader: %w", err)
 	}
 
+	file := &file{
+		Data:     zipReader,
+		FileMode: xFile.FileMode,
+		DirMode:  xFile.DirMode,
+	}
+
 	// Get the absolute path of the file being written.
-	wfile, err := xFile.clean(xFile.FilePath, ".lzma", ".lz", ".lzip")
+	file.Path, err = xFile.clean(xFile.FilePath, ".lzma", ".lz", ".lzip")
 	if err != nil {
 		return 0, nil, err
 	}
 
-	size, err = writeFile(wfile, zipReader, xFile.FileMode, xFile.DirMode)
+	size, err = xFile.write(file)
 	if err != nil {
 		return size, nil, err
 	}
 
-	return size, []string{wfile}, nil
+	return size, []string{file.Path}, nil
 }
 
 // ExtractLZMA2 extracts an lzma2-compressed file. A single file.
@@ -112,18 +130,24 @@ func ExtractLZMA2(xFile *XFile) (size int64, filesList []string, err error) {
 		return 0, nil, fmt.Errorf("lzma.NewReader2: %w", err)
 	}
 
+	file := &file{
+		Data:     zipReader,
+		FileMode: xFile.FileMode,
+		DirMode:  xFile.DirMode,
+	}
+
 	// Get the absolute path of the file being written.
-	wfile, err := xFile.clean(xFile.FilePath, ".lzma", ".lzma2")
+	file.Path, err = xFile.clean(xFile.FilePath, ".lzma", ".lzma2")
 	if err != nil {
 		return 0, nil, err
 	}
 
-	size, err = writeFile(wfile, zipReader, xFile.FileMode, xFile.DirMode)
+	size, err = xFile.write(file)
 	if err != nil {
 		return size, nil, err
 	}
 
-	return size, []string{wfile}, nil
+	return size, []string{file.Path}, nil
 }
 
 // ExtractZstandard extracts a Zstandard-compressed file. A single file.
@@ -140,18 +164,24 @@ func ExtractZstandard(xFile *XFile) (size int64, filesList []string, err error) 
 	}
 	defer zipReader.Close()
 
+	file := &file{
+		Data:     zipReader,
+		FileMode: xFile.FileMode,
+		DirMode:  xFile.DirMode,
+	}
+
 	// Get the absolute path of the file being written.
-	wfile, err := xFile.clean(xFile.FilePath, ".zstd", ".zst")
+	file.Path, err = xFile.clean(xFile.FilePath, ".zstd", ".zst")
 	if err != nil {
 		return 0, nil, err
 	}
 
-	size, err = writeFile(wfile, zipReader, xFile.FileMode, xFile.DirMode)
+	size, err = xFile.write(file)
 	if err != nil {
 		return size, nil, err
 	}
 
-	return size, []string{wfile}, nil
+	return size, []string{file.Path}, nil
 }
 
 // ExtractLZW extracts an LZW-compressed file. A single file.
@@ -167,18 +197,24 @@ func ExtractLZW(xFile *XFile) (size int64, filesList []string, err error) {
 		return 0, nil, fmt.Errorf("lzw.NewReader: %w", err)
 	}
 
+	file := &file{
+		Data:     zipReader,
+		FileMode: xFile.FileMode,
+		DirMode:  xFile.DirMode,
+	}
+
 	// Get the absolute path of the file being written.
-	wfile, err := xFile.clean(xFile.FilePath, ".Z")
+	file.Path, err = xFile.clean(xFile.FilePath, ".Z")
 	if err != nil {
 		return 0, nil, err
 	}
 
-	size, err = writeFile(wfile, zipReader, xFile.FileMode, xFile.DirMode)
+	size, err = xFile.write(file)
 	if err != nil {
 		return size, nil, err
 	}
 
-	return size, []string{wfile}, nil
+	return size, []string{file.Path}, nil
 }
 
 // ExtractLZ4 extracts an LZ4-compressed file. A single file.
@@ -189,18 +225,24 @@ func ExtractLZ4(xFile *XFile) (size int64, filesList []string, err error) {
 	}
 	defer compressedFile.Close()
 
+	file := &file{
+		Data:     lz4.NewReader(compressedFile),
+		FileMode: xFile.FileMode,
+		DirMode:  xFile.DirMode,
+	}
+
 	// Get the absolute path of the file being written.
-	wfile, err := xFile.clean(xFile.FilePath, ".lz4")
+	file.Path, err = xFile.clean(xFile.FilePath, ".lz4")
 	if err != nil {
 		return 0, nil, err
 	}
 
-	size, err = writeFile(wfile, lz4.NewReader(compressedFile), xFile.FileMode, xFile.DirMode)
+	size, err = xFile.write(file)
 	if err != nil {
 		return size, nil, err
 	}
 
-	return size, []string{wfile}, nil
+	return size, []string{file.Path}, nil
 }
 
 // ExtractSnappy extracts a snappy-compressed file. A single file.
@@ -211,18 +253,24 @@ func ExtractSnappy(xFile *XFile) (size int64, filesList []string, err error) {
 	}
 	defer compressedFile.Close()
 
+	file := &file{
+		Data:     snappy.NewReader(compressedFile),
+		FileMode: xFile.FileMode,
+		DirMode:  xFile.DirMode,
+	}
+
 	// Get the absolute path of the file being written.
-	wfile, err := xFile.clean(xFile.FilePath, ".snappy", ".sz")
+	file.Path, err = xFile.clean(xFile.FilePath, ".snappy", ".sz")
 	if err != nil {
 		return 0, nil, err
 	}
 
-	size, err = writeFile(wfile, snappy.NewReader(compressedFile), xFile.FileMode, xFile.DirMode)
+	size, err = xFile.write(file)
 	if err != nil {
 		return size, nil, err
 	}
 
-	return size, []string{wfile}, nil
+	return size, []string{file.Path}, nil
 }
 
 // ExtractS2 extracts a Snappy2-compressed file. A single file.
@@ -233,18 +281,24 @@ func ExtractS2(xFile *XFile) (size int64, filesList []string, err error) {
 	}
 	defer compressedFile.Close()
 
+	file := &file{
+		Data:     s2.NewReader(compressedFile),
+		FileMode: xFile.FileMode,
+		DirMode:  xFile.DirMode,
+	}
+
 	// Get the absolute path of the file being written.
-	wfile, err := xFile.clean(xFile.FilePath, ".s2")
+	file.Path, err = xFile.clean(xFile.FilePath, ".s2")
 	if err != nil {
 		return 0, nil, err
 	}
 
-	size, err = writeFile(wfile, s2.NewReader(compressedFile), xFile.FileMode, xFile.DirMode)
+	size, err = xFile.write(file)
 	if err != nil {
 		return size, nil, err
 	}
 
-	return size, []string{wfile}, nil
+	return size, []string{file.Path}, nil
 }
 
 // ExtractBrotli extracts a Brotli-compressed file. A single file.
@@ -255,18 +309,24 @@ func ExtractBrotli(xFile *XFile) (size int64, filesList []string, err error) {
 	}
 	defer compressedFile.Close()
 
+	file := &file{
+		Data:     brotli.NewReader(compressedFile),
+		FileMode: xFile.FileMode,
+		DirMode:  xFile.DirMode,
+	}
+
 	// Get the absolute path of the file being written.
-	wfile, err := xFile.clean(xFile.FilePath, ".brotli", ".br")
+	file.Path, err = xFile.clean(xFile.FilePath, ".brotli", ".br")
 	if err != nil {
 		return 0, nil, err
 	}
 
-	size, err = writeFile(wfile, brotli.NewReader(compressedFile), xFile.FileMode, xFile.DirMode)
+	size, err = xFile.write(file)
 	if err != nil {
 		return size, nil, err
 	}
 
-	return size, []string{wfile}, nil
+	return size, []string{file.Path}, nil
 }
 
 // ExtractBzip extracts a bzip2-compressed file. That is, a single file.
@@ -277,18 +337,24 @@ func ExtractBzip(xFile *XFile) (size int64, filesList []string, err error) {
 	}
 	defer compressedFile.Close()
 
+	file := &file{
+		Data:     bzip2.NewReader(compressedFile),
+		FileMode: xFile.FileMode,
+		DirMode:  xFile.DirMode,
+	}
+
 	// Get the absolute path of the file being written.
-	wfile, err := xFile.clean(xFile.FilePath, ".bz", ".bz2")
+	file.Path, err = xFile.clean(xFile.FilePath, ".bz", ".bz2")
 	if err != nil {
 		return 0, nil, err
 	}
 
-	size, err = writeFile(wfile, bzip2.NewReader(compressedFile), xFile.FileMode, xFile.DirMode)
+	size, err = xFile.write(file)
 	if err != nil {
 		return size, nil, err
 	}
 
-	return size, []string{wfile}, nil
+	return size, []string{file.Path}, nil
 }
 
 // ExtractGzip extracts a gzip-compressed file. That is, a single file.
@@ -305,16 +371,23 @@ func ExtractGzip(xFile *XFile) (size int64, filesList []string, err error) {
 	}
 	defer zipReader.Close()
 
+	file := &file{
+		Data:     zipReader,
+		FileMode: xFile.FileMode,
+		DirMode:  xFile.DirMode,
+		Mtime:    zipReader.ModTime,
+	}
+
 	// Get the absolute path of the file being written.
-	wfile, err := xFile.clean(xFile.FilePath, ".gz")
+	file.Path, err = xFile.clean(xFile.FilePath, ".gz")
 	if err != nil {
 		return 0, nil, err
 	}
 
-	size, err = writeFile(wfile, zipReader, xFile.FileMode, xFile.DirMode)
+	size, err = xFile.write(file)
 	if err != nil {
 		return size, nil, err
 	}
 
-	return size, []string{wfile}, nil
+	return size, []string{file.Path}, nil
 }

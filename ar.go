@@ -28,34 +28,42 @@ func (x *XFile) unAr(reader io.Reader) (int64, []string, error) {
 
 	for {
 		header, err := arReader.Next()
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
 
-		switch {
-		case errors.Is(err, io.EOF):
-			return size, files, nil
-		case err != nil:
 			return size, files, fmt.Errorf("%s: arReader.Next: %w", x.FilePath, err)
-		case header == nil:
-			return size, files, fmt.Errorf("%w: %s", ErrInvalidHead, x.FilePath)
 		}
 
-		wfile, err := x.clean(header.Name)
-		if err != nil {
+		file := &file{
+			Data:     arReader,
+			FileMode: os.FileMode(header.Mode), //nolint:gosec // what else ya gonna do with this?
+			DirMode:  x.DirMode,
+			Mtime:    header.ModTime,
+		}
+
+		if file.Path, err = x.clean(header.Name); err != nil {
 			return 0, files, err
 		}
 
-		if !strings.HasPrefix(wfile, x.OutputDir) {
+		if !strings.HasPrefix(file.Path, x.OutputDir) {
 			// The file being written is trying to write outside of our base path. Malicious archive?
-			return size, files, fmt.Errorf("%s: %w: %s (from: %s)", x.FilePath, ErrInvalidPath, wfile, header.Name)
+			return size, files, fmt.Errorf("%s: %w: %s (from: %s)", x.FilePath, ErrInvalidPath, file.Path, header.Name)
 		}
 
 		// ar format does not store directory paths. Flat list of files.
-		//nolint:gosec // we are not overflowing an integer with this conversion.
-		fSize, err := writeFile(wfile, arReader, os.FileMode(header.Mode), x.DirMode)
+
+		fSize, err := x.write(file)
 		if err != nil {
 			return size, files, err
 		}
 
-		files = append(files, wfile)
+		files = append(files, file.Path)
 		size += fSize
 	}
+
+	files, err := x.cleanup(files)
+
+	return size, files, err
 }
