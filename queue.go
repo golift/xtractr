@@ -396,19 +396,52 @@ func (x *Xtractr) deleteOriginals(resp *Response) {
 	}
 }
 
+// getTempFolderFinalName returns the name of the final output folder when stored in the temp folder.
+func (x *Xtractr) getTempFolderFinalName(resp *Response) string {
+	// If the name is taken, try up to 999 different names.
+	const tryNames = 999
+
+	if _, err := os.Stat(resp.Output); err != nil {
+		return "" // the output folder was deleted?!
+	}
+
+	newName := strings.TrimSuffix(strings.TrimRight(resp.Output, `/\`), x.config.Suffix)
+	// If the original thing we extracted was an archive (not a dir), remove the suffix from the output folder.
+	if IsArchiveFile(resp.X.Name) {
+		newName = strings.TrimSuffix(newName, filepath.Ext(newName))
+	}
+
+	if IsArchiveFile(newName) { // We do it twice in case of `tar.gz` etc.
+		newName = strings.TrimSuffix(newName, filepath.Ext(newName))
+	}
+
+	if _, err := os.Stat(newName); x.config.TryNames && err == nil {
+		for i := range tryNames {
+			loopName := newName + fmt.Sprint(".", i)
+			if _, err := os.Stat(loopName); err != nil {
+				return loopName
+			}
+		}
+	}
+
+	if _, err := os.Stat(newName); err == nil {
+		return "" // it exists already?!
+	}
+
+	return newName
+}
+
 func (x *Xtractr) cleanTempFolder(resp *Response) {
-	noSuffix := strings.TrimSuffix(strings.TrimRight(resp.Output, `/\`), x.config.Suffix)
-	if _, err := os.Stat(noSuffix); err == nil {
-		return // it exists already?!
-	} else if _, err := os.Stat(resp.Output); err != nil {
+	newName := x.getTempFolderFinalName(resp)
+	if newName == "" {
 		return
 	}
 
-	if newFiles, err := x.MoveFiles(resp.Output, noSuffix, false); err != nil {
+	if newFiles, err := x.MoveFiles(resp.Output, newName, false); err != nil {
 		x.config.Printf("Error: Renaming Temporary Folder: %v", err)
 	} else {
-		x.config.Debugf("Renamed Temp Folder: %v -> %v", resp.Output, noSuffix)
-		resp.Output = noSuffix
+		x.config.Debugf("Renamed Temp Folder: %v -> %v", resp.Output, newName)
+		resp.Output = newName
 		resp.NewFiles = newFiles
 	}
 
