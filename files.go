@@ -10,8 +10,6 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/saintfish/chardet"
-	"golang.org/x/net/html/charset"
 	"golang.org/x/text/encoding"
 )
 
@@ -116,7 +114,8 @@ type XFile struct {
 	// (RAR/7z) Archive passwords (to try multiple).
 	Passwords []string
 	// If file names are not UTF8 encoded, pass your own encoder here.
-	Encoding encoding.Encoding
+	// Provide a function that takes in a file name and returns an encoder for it.
+	Encoder func(input *EncoderInput) *encoding.Decoder
 	// Logger allows printing debug messages.
 	log Logger
 }
@@ -455,6 +454,11 @@ func (x *Xtractr) Rename(oldpath, newpath string) error {
 // clean also decodes the file name using a provided decoder.
 // If trim length is > 0, then the suffixes are trimmed, and filepath removed.
 func (x *XFile) clean(filePath string, trim ...string) (string, error) {
+	filePath, err := x.decode(filePath)
+	if err != nil {
+		return "", err
+	}
+
 	if len(trim) != 0 {
 		filePath = filepath.Base(filePath)
 		for _, suffix := range trim {
@@ -462,32 +466,7 @@ func (x *XFile) clean(filePath string, trim ...string) (string, error) {
 		}
 	}
 
-	decoded, err := x.decode(filePath)
-	if err != nil {
-		return "", err
-	}
-
-	return filepath.Clean(filepath.Join(x.OutputDir, decoded)), nil
-}
-
-// decode a string using the provided decoder.
-func (x *XFile) decode(input string) (string, error) {
-	encoding := x.Encoding
-	if encoding == nil {
-		res, _ := chardet.NewTextDetector().DetectBest([]byte(input))
-		encoding, _ = charset.Lookup(res.Charset)
-	}
-
-	if encoding == nil {
-		return input, nil
-	}
-
-	output, err := encoding.NewDecoder().String(input)
-	if err != nil {
-		return "", fmt.Errorf("decoding file name: %w", err)
-	}
-
-	return output, nil
+	return filepath.Clean(filepath.Join(x.OutputDir, filePath)), nil
 }
 
 // AllExcept can be used as an input to ExcludeSuffix in a Filter.

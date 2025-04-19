@@ -15,12 +15,10 @@ require (
 	github.com/nwaples/rardecode v1.1.3
 	github.com/peterebden/ar v0.0.0-20241106141004-20dc11b778e8
 	github.com/pierrec/lz4/v4 v4.1.22
-	github.com/saintfish/chardet v0.0.0-20230101081208-5e3ef4b5456d
 	github.com/sshaman1101/dcompress v0.0.0-20200109162717-50436a6332de
 	github.com/stretchr/testify v1.10.0
 	github.com/therootcompany/xz v1.0.1
 	github.com/ulikunitz/xz v0.5.12
-	golang.org/x/net v0.39.0
 	golang.org/x/text v0.24.0
 )
 
