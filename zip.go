@@ -3,9 +3,9 @@ package xtractr
 import (
 	"archive/zip"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 /* How to extract a ZIP file. */
@@ -37,35 +37,44 @@ func ExtractZIP(xFile *XFile) (size int64, filesList []string, err error) {
 }
 
 func (x *XFile) unzip(zipFile *zip.File) (int64, string, error) {
-	wfile := x.clean(zipFile.Name)
-	if !strings.HasPrefix(wfile, x.OutputDir) {
-		// The file being written is trying to write outside of our base path. Malicious archive?
-		return 0, wfile, fmt.Errorf("%s: %w: %s (from: %s)", zipFile.FileInfo().Name(), ErrInvalidPath, wfile, zipFile.Name)
-	}
-
-	if zipFile.FileInfo().IsDir() {
-		x.Debugf("Writing archived directory: %s", wfile)
-
-		if err := os.MkdirAll(wfile, x.DirMode); err != nil {
-			return 0, wfile, fmt.Errorf("making zipFile dir: %w", err)
-		}
-
-		return 0, wfile, nil
-	}
-
-	x.Debugf("Writing archived file: %s (packed: %d, unpacked: %d)", wfile,
-		zipFile.CompressedSize64, zipFile.UncompressedSize64)
-
 	zFile, err := zipFile.Open()
 	if err != nil {
-		return 0, wfile, fmt.Errorf("zipFile.Open: %w", err)
+		return 0, zipFile.Name, fmt.Errorf("zipFile.Open: %w", err)
 	}
 	defer zFile.Close()
 
-	s, err := writeFile(wfile, zFile, x.FileMode, x.DirMode)
-	if err != nil {
-		return s, wfile, fmt.Errorf("%s: %w: %s (from: %s)", zipFile.FileInfo().Name(), err, wfile, zipFile.Name)
+	file := &file{
+		Path:     x.clean(zipFile.Name),
+		Data:     zFile,
+		FileMode: zipFile.Mode(),
+		DirMode:  x.DirMode,
+		Mtime:    zipFile.Modified,
+		Atime:    time.Now(),
 	}
 
-	return s, wfile, nil
+	if !strings.HasPrefix(file.Path, x.OutputDir) {
+		// The file being written is trying to write outside of our base path. Malicious archive?
+		err := fmt.Errorf("%s: %w: %s (from: %s)", zipFile.FileInfo().Name(), ErrInvalidPath, file.Path, zipFile.Name)
+		return 0, file.Path, err
+	}
+
+	if zipFile.FileInfo().IsDir() {
+		x.Debugf("Writing archived directory: %s", file.Path)
+
+		if err := x.mkDir(file.Path, zipFile.Mode(), zipFile.Modified); err != nil {
+			return 0, file.Path, fmt.Errorf("making zipFile dir: %w", err)
+		}
+
+		return 0, file.Path, nil
+	}
+
+	x.Debugf("Writing archived file: %s (packed: %d, unpacked: %d)", file.Path,
+		zipFile.CompressedSize64, zipFile.UncompressedSize64)
+
+	s, err := x.write(file)
+	if err != nil {
+		return s, file.Path, fmt.Errorf("%s: %w: %s (from: %s)", zipFile.FileInfo().Name(), err, file.Path, zipFile.Name)
+	}
+
+	return s, file.Path, nil
 }

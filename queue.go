@@ -315,7 +315,7 @@ func (x *Xtractr) decompressArchives(resp *Response) error {
 // Returns list of archive files extracted, size of data written and files written.
 func (x *Xtractr) processArchive(filename string, resp *Response) (int64, []string, []string, error) {
 	if err := os.MkdirAll(resp.Output, x.config.DirMode); err != nil {
-		return 0, nil, nil, fmt.Errorf("os.MkdirAll: %w", err)
+		return 0, nil, nil, fmt.Errorf("making output dir: %w", err)
 	}
 
 	x.config.Debugf("Extracting File: %v to %v", filename, resp.Output)
