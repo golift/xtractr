@@ -317,7 +317,8 @@ func (x *XFile) Extract() (size int64, filesList, archiveList []string, err erro
 // Returns size of extracted data, list of extracted files, list of archives processed, and/or error.
 func ExtractFile(xFile *XFile) (size int64, filesList, archiveList []string, err error) {
 	sName := strings.ToLower(xFile.FilePath)
-	xFile.moveFiles = parseConfig(&Config{}).MoveFiles // just borrowing this...
+	// just borrowing this... Has to go into an interface to avoid a cycle.
+	xFile.moveFiles = parseConfig(&Config{Logger: xFile.log}).MoveFiles
 
 	for _, ext := range extension2function {
 		if strings.HasSuffix(sName, ext.Extension) {
@@ -546,11 +547,12 @@ func (x *XFile) squashRoot(files []string) ([]string, error) {
 	roots := map[string]bool{}
 	//nolint:mnd
 	for _, path := range files {
+		// Remove the output dir suffix, then split on `/` (or `\`) and get the first item.
 		roots[strings.SplitN(strings.TrimPrefix(path, x.OutputDir), string(filepath.Separator), 2)[0]] = true
 	}
 
-	if len(roots) == 1 {
-		for root := range roots { // there's only 1.
+	if len(roots) == 1 { // only 1 root folder...
+		for root := range roots { // ...move it's content up a level.
 			return x.moveFiles(filepath.Join(x.OutputDir, root), x.OutputDir, false)
 		}
 	}
