@@ -112,8 +112,13 @@ type XFile struct {
 	Password string
 	// (RAR/7z) Archive passwords (to try multiple).
 	Passwords []string
+	// If the archive only has one directory in the root, then setting
+	// this true will cause the extracted content to be moved into the
+	// output folder, and the root folder in the archive to be removed.
+	SquashRoot bool
 	// Logger allows printing debug messages.
-	log Logger
+	log       Logger
+	moveFiles func(fromPath, toPath string, overwrite bool) ([]string, error)
 }
 
 // Filter is the input to find compressed files.
@@ -313,6 +318,8 @@ func (x *XFile) Extract() (size int64, filesList, archiveList []string, err erro
 // Returns size of extracted data, list of extracted files, list of archives processed, and/or error.
 func ExtractFile(xFile *XFile) (size int64, filesList, archiveList []string, err error) {
 	sName := strings.ToLower(xFile.FilePath)
+	// just borrowing this... Has to go into an interface to avoid a cycle.
+	xFile.moveFiles = parseConfig(&Config{Logger: xFile.log}).MoveFiles
 
 	for _, ext := range extension2function {
 		if strings.HasSuffix(sName, ext.Extension) {
@@ -539,6 +546,38 @@ func (a ArchiveList) List() []string {
 // SetLogger sets the logger interface on an XFile. Useful when you need to debug what it's doing.
 func (x *XFile) SetLogger(logger Logger) {
 	x.log = logger
+}
+
+// cleanup runs after a successful extract.
+// The intent it to move files into their final location.
+func (x *XFile) cleanup(files []string) ([]string, error) {
+	files, err := x.squashRoot(files)
+	if err != nil {
+		return files, err
+	}
+
+	return files, nil
+}
+
+func (x *XFile) squashRoot(files []string) ([]string, error) {
+	if !x.SquashRoot {
+		return files, nil
+	}
+
+	roots := map[string]bool{}
+	//nolint:mnd
+	for _, path := range files {
+		// Remove the output dir suffix, then split on `/` (or `\`) and get the first item.
+		roots[strings.SplitN(strings.TrimPrefix(path, x.OutputDir), string(filepath.Separator), 2)[0]] = true
+	}
+
+	if len(roots) == 1 { // only 1 root folder...
+		for root := range roots { // ...move it's content up a level.
+			return x.moveFiles(filepath.Join(x.OutputDir, root), x.OutputDir, false)
+		}
+	}
+
+	return files, nil
 }
 
 func (x *XFile) safeDirMode(current os.FileMode) os.FileMode {

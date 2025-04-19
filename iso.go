@@ -69,7 +69,9 @@ func (x *XFile) uniso(isoFile *iso9660.File, parent string) (int64, []string, er
 		files = append(files, childFiles...)
 	}
 
-	return size, files, nil
+	files, err = x.cleanup(files)
+
+	return size, files, err
 }
 
 func (x *XFile) unisofile(isoFile *iso9660.File, wfile string) (int64, []string, error) {

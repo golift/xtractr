@@ -126,6 +126,10 @@ func parseConfig(config *Config) *Xtractr {
 		config.Suffix = DefaultSuffix
 	}
 
+	if config.Logger == nil {
+		config.Logger = NoLogger()
+	}
+
 	return &Xtractr{
 		config: config,
 		done:   make(chan struct{}),
