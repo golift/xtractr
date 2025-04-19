@@ -30,12 +30,16 @@ func ExtractXZ(xFile *XFile) (size int64, filesList []string, err error) {
 		return 0, nil, fmt.Errorf("xz.NewReader: %w", err)
 	}
 
-	// Get the absolute path of the file being written.
 	file := &file{
-		Path:     xFile.clean(xFile.FilePath, ".xz"),
 		Data:     zipReader,
 		FileMode: xFile.FileMode,
 		DirMode:  xFile.DirMode,
+	}
+
+	// Get the absolute path of the file being written.
+	file.Path, err = xFile.clean(xFile.FilePath, ".xz")
+	if err != nil {
+		return 0, nil, err
 	}
 
 	size, err = xFile.write(file)
@@ -60,12 +64,16 @@ func ExtractZlib(xFile *XFile) (size int64, filesList []string, err error) {
 	}
 	defer zipReader.Close()
 
-	// Get the absolute path of the file being written.
 	file := &file{
-		Path:     xFile.clean(xFile.FilePath, ".zz", ".zlib"),
 		Data:     zipReader,
 		FileMode: xFile.FileMode,
 		DirMode:  xFile.DirMode,
+	}
+
+	// Get the absolute path of the file being written.
+	file.Path, err = xFile.clean(xFile.FilePath, ".zz", ".zlib")
+	if err != nil {
+		return 0, nil, err
 	}
 
 	size, err = xFile.write(file)
@@ -89,12 +97,16 @@ func ExtractLZMA(xFile *XFile) (size int64, filesList []string, err error) {
 		return 0, nil, fmt.Errorf("lzma.NewReader: %w", err)
 	}
 
-	// Get the absolute path of the file being written.
 	file := &file{
-		Path:     xFile.clean(xFile.FilePath, ".lzma", ".lz", ".lzip"),
 		Data:     zipReader,
 		FileMode: xFile.FileMode,
 		DirMode:  xFile.DirMode,
+	}
+
+	// Get the absolute path of the file being written.
+	file.Path, err = xFile.clean(xFile.FilePath, ".lzma", ".lz", ".lzip")
+	if err != nil {
+		return 0, nil, err
 	}
 
 	size, err = xFile.write(file)
@@ -118,12 +130,16 @@ func ExtractLZMA2(xFile *XFile) (size int64, filesList []string, err error) {
 		return 0, nil, fmt.Errorf("lzma.NewReader2: %w", err)
 	}
 
-	// Get the absolute path of the file being written.
 	file := &file{
-		Path:     xFile.clean(xFile.FilePath, ".lzma", ".lzma2"),
 		Data:     zipReader,
 		FileMode: xFile.FileMode,
 		DirMode:  xFile.DirMode,
+	}
+
+	// Get the absolute path of the file being written.
+	file.Path, err = xFile.clean(xFile.FilePath, ".lzma", ".lzma2")
+	if err != nil {
+		return 0, nil, err
 	}
 
 	size, err = xFile.write(file)
@@ -148,12 +164,16 @@ func ExtractZstandard(xFile *XFile) (size int64, filesList []string, err error) 
 	}
 	defer zipReader.Close()
 
-	// Get the absolute path of the file being written.
 	file := &file{
-		Path:     xFile.clean(xFile.FilePath, ".zstd", ".zst"),
 		Data:     zipReader,
 		FileMode: xFile.FileMode,
 		DirMode:  xFile.DirMode,
+	}
+
+	// Get the absolute path of the file being written.
+	file.Path, err = xFile.clean(xFile.FilePath, ".zstd", ".zst")
+	if err != nil {
+		return 0, nil, err
 	}
 
 	size, err = xFile.write(file)
@@ -177,12 +197,16 @@ func ExtractLZW(xFile *XFile) (size int64, filesList []string, err error) {
 		return 0, nil, fmt.Errorf("lzw.NewReader: %w", err)
 	}
 
-	// Get the absolute path of the file being written.
 	file := &file{
-		Path:     xFile.clean(xFile.FilePath, ".Z"),
 		Data:     zipReader,
 		FileMode: xFile.FileMode,
 		DirMode:  xFile.DirMode,
+	}
+
+	// Get the absolute path of the file being written.
+	file.Path, err = xFile.clean(xFile.FilePath, ".Z")
+	if err != nil {
+		return 0, nil, err
 	}
 
 	size, err = xFile.write(file)
@@ -201,12 +225,16 @@ func ExtractLZ4(xFile *XFile) (size int64, filesList []string, err error) {
 	}
 	defer compressedFile.Close()
 
-	// Get the absolute path of the file being written.
 	file := &file{
-		Path:     xFile.clean(xFile.FilePath, ".lz4"),
 		Data:     lz4.NewReader(compressedFile),
 		FileMode: xFile.FileMode,
 		DirMode:  xFile.DirMode,
+	}
+
+	// Get the absolute path of the file being written.
+	file.Path, err = xFile.clean(xFile.FilePath, ".lz4")
+	if err != nil {
+		return 0, nil, err
 	}
 
 	size, err = xFile.write(file)
@@ -225,12 +253,16 @@ func ExtractSnappy(xFile *XFile) (size int64, filesList []string, err error) {
 	}
 	defer compressedFile.Close()
 
-	// Get the absolute path of the file being written.
 	file := &file{
-		Path:     xFile.clean(xFile.FilePath, ".snappy", ".sz"),
 		Data:     snappy.NewReader(compressedFile),
 		FileMode: xFile.FileMode,
 		DirMode:  xFile.DirMode,
+	}
+
+	// Get the absolute path of the file being written.
+	file.Path, err = xFile.clean(xFile.FilePath, ".snappy", ".sz")
+	if err != nil {
+		return 0, nil, err
 	}
 
 	size, err = xFile.write(file)
@@ -249,12 +281,16 @@ func ExtractS2(xFile *XFile) (size int64, filesList []string, err error) {
 	}
 	defer compressedFile.Close()
 
-	// Get the absolute path of the file being written.
 	file := &file{
-		Path:     xFile.clean(xFile.FilePath, ".s2"),
 		Data:     s2.NewReader(compressedFile),
 		FileMode: xFile.FileMode,
 		DirMode:  xFile.DirMode,
+	}
+
+	// Get the absolute path of the file being written.
+	file.Path, err = xFile.clean(xFile.FilePath, ".s2")
+	if err != nil {
+		return 0, nil, err
 	}
 
 	size, err = xFile.write(file)
@@ -273,12 +309,16 @@ func ExtractBrotli(xFile *XFile) (size int64, filesList []string, err error) {
 	}
 	defer compressedFile.Close()
 
-	// Get the absolute path of the file being written.
 	file := &file{
-		Path:     xFile.clean(xFile.FilePath, ".brotli", ".br"),
 		Data:     brotli.NewReader(compressedFile),
 		FileMode: xFile.FileMode,
 		DirMode:  xFile.DirMode,
+	}
+
+	// Get the absolute path of the file being written.
+	file.Path, err = xFile.clean(xFile.FilePath, ".brotli", ".br")
+	if err != nil {
+		return 0, nil, err
 	}
 
 	size, err = xFile.write(file)
@@ -297,12 +337,16 @@ func ExtractBzip(xFile *XFile) (size int64, filesList []string, err error) {
 	}
 	defer compressedFile.Close()
 
-	// Get the absolute path of the file being written.
 	file := &file{
-		Path:     xFile.clean(xFile.FilePath, ".bz", ".bz2"),
 		Data:     bzip2.NewReader(compressedFile),
 		FileMode: xFile.FileMode,
 		DirMode:  xFile.DirMode,
+	}
+
+	// Get the absolute path of the file being written.
+	file.Path, err = xFile.clean(xFile.FilePath, ".bz", ".bz2")
+	if err != nil {
+		return 0, nil, err
 	}
 
 	size, err = xFile.write(file)
@@ -327,13 +371,17 @@ func ExtractGzip(xFile *XFile) (size int64, filesList []string, err error) {
 	}
 	defer zipReader.Close()
 
-	// Get the absolute path of the file being written.
 	file := &file{
-		Path:     xFile.clean(xFile.FilePath, ".gz"),
 		Data:     zipReader,
 		FileMode: xFile.FileMode,
 		DirMode:  xFile.DirMode,
 		Mtime:    zipReader.ModTime,
+	}
+
+	// Get the absolute path of the file being written.
+	file.Path, err = xFile.clean(xFile.FilePath, ".gz")
+	if err != nil {
+		return 0, nil, err
 	}
 
 	size, err = xFile.write(file)

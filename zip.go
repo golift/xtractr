@@ -46,12 +46,15 @@ func (x *XFile) unzip(zipFile *zip.File) (int64, string, error) {
 	defer zFile.Close()
 
 	file := &file{
-		Path:     x.clean(zipFile.Name),
 		Data:     zFile,
 		FileMode: zipFile.Mode(),
 		DirMode:  x.DirMode,
 		Mtime:    zipFile.Modified,
 		Atime:    time.Now(),
+	}
+
+	if file.Path, err = x.clean(zipFile.Name); err != nil {
+		return 0, file.Path, err
 	}
 
 	if !strings.HasPrefix(file.Path, x.OutputDir) {

@@ -19,6 +19,7 @@ require (
 	github.com/stretchr/testify v1.10.0
 	github.com/therootcompany/xz v1.0.1
 	github.com/ulikunitz/xz v0.5.12
+	golang.org/x/text v0.24.0
 )
 
 require (
@@ -28,9 +29,9 @@ require (
 	github.com/hashicorp/errwrap v1.1.0 // indirect
 	github.com/hashicorp/go-multierror v1.1.1 // indirect
 	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
+	github.com/kr/text v0.2.0 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	go4.org v0.0.0-20230225012048-214862532bf5 // indirect
 	golang.org/x/crypto v0.37.0 // indirect
-	golang.org/x/text v0.24.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

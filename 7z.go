@@ -92,12 +92,15 @@ func (x *XFile) un7zip(zipFile *sevenzip.File) (int64, string, error) {
 	defer zFile.Close()
 
 	file := &file{
-		Path:     x.clean(zipFile.Name),
 		Data:     zFile,
 		FileMode: zipFile.Mode(),
 		DirMode:  x.DirMode,
 		Mtime:    zipFile.Modified,
 		Atime:    zipFile.Accessed,
+	}
+
+	if file.Path, err = x.clean(zipFile.Name); err != nil {
+		return 0, file.Path, err
 	}
 
 	if !strings.HasPrefix(file.Path, x.OutputDir) {

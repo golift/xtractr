@@ -135,12 +135,16 @@ func (x *XFile) untar(reader io.Reader) (int64, []string, error) {
 
 func (x *XFile) untarFile(header *tar.Header, tarReader *tar.Reader) (int64, error) {
 	file := &file{
-		Path:     x.clean(header.Name),
 		Data:     tarReader,
 		FileMode: header.FileInfo().Mode(),
 		DirMode:  x.DirMode,
 		Mtime:    header.ChangeTime,
 		Atime:    header.AccessTime,
+	}
+
+	var err error
+	if file.Path, err = x.clean(header.Name); err != nil {
+		return 0, err
 	}
 
 	if header.Format != tar.FormatGNU && header.Format != tar.FormatPAX {

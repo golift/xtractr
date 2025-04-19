@@ -76,11 +76,15 @@ func (x *XFile) uniso(isoFile *iso9660.File, parent string) (int64, []string, er
 
 func (x *XFile) unisofile(isoFile *iso9660.File, wfile string) (int64, []string, error) {
 	file := &file{
-		Path:     x.clean(wfile),
 		Data:     isoFile.Reader(),
 		FileMode: isoFile.Mode(),
 		DirMode:  x.DirMode,
 		Mtime:    isoFile.ModTime(),
+	}
+
+	var err error
+	if file.Path, err = x.clean(wfile); err != nil {
+		return 0, nil, err
 	}
 
 	//nolint:gocritic // this 1-argument filepath.Join removes a ./ prefix should there be one.

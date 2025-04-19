@@ -37,11 +37,14 @@ func (x *XFile) unAr(reader io.Reader) (int64, []string, error) {
 		}
 
 		file := &file{
-			Path:     x.clean(header.Name),
 			Data:     arReader,
 			FileMode: os.FileMode(header.Mode), //nolint:gosec // what else ya gonna do with this?
 			DirMode:  x.DirMode,
 			Mtime:    header.ModTime,
+		}
+
+		if file.Path, err = x.clean(header.Name); err != nil {
+			return 0, files, err
 		}
 
 		if !strings.HasPrefix(file.Path, x.OutputDir) {

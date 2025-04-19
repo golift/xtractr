@@ -65,11 +65,15 @@ func (x *XFile) uncpio(reader io.Reader) (int64, []string, error) {
 
 func (x *XFile) uncpioFile(cpioFile *cpio.Header, cpioReader *cpio.Reader) (int64, error) {
 	file := &file{
-		Path:     x.clean(cpioFile.Name),
 		Data:     cpioReader,
 		FileMode: cpioFile.FileInfo().Mode(),
 		DirMode:  x.DirMode,
 		Mtime:    cpioFile.ModTime,
+	}
+
+	var err error
+	if file.Path, err = x.clean(cpioFile.Name); err != nil {
+		return 0, err
 	}
 
 	if !strings.HasPrefix(file.Path, x.OutputDir) {
