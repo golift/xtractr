@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 )
 
 // ArchiveList is the value returned when searching for compressed files.
@@ -351,7 +352,7 @@ func (x *Xtractr) MoveFiles(fromPath, toPath string, overwrite bool) ([]string, 
 	x.config.Debugf("Moving files: %v (%d files) -> %v", fromPath, len(files), toPath)
 
 	if err := os.MkdirAll(toPath, x.config.DirMode); err != nil {
-		return nil, fmt.Errorf("os.MkdirAll: %w", err)
+		return nil, fmt.Errorf("making final dir: %w", err)
 	}
 
 	for _, file := range files {
@@ -400,24 +401,43 @@ func (x *Xtractr) DeleteFiles(files ...string) {
 	}
 }
 
-// writeFile writes a file from an io reader, making sure all parent directories exist.
-func writeFile(fpath string, fdata io.Reader, fMode, dMode os.FileMode) (int64, error) {
-	if err := os.MkdirAll(filepath.Dir(fpath), dMode); err != nil {
-		return 0, fmt.Errorf("os.MkdirAll: %w", err)
+type file struct {
+	Path     string
+	Data     io.Reader
+	FileMode os.FileMode
+	DirMode  os.FileMode
+	Mtime    time.Time
+	Atime    time.Time
+}
+
+func (x *XFile) mkDir(path string, mode os.FileMode, mtime time.Time) error {
+	defer os.Chtimes(path, time.Time{}, mtime)
+	return os.MkdirAll(path, x.safeDirMode(mode)) //nolint:wrapcheck
+}
+
+// write a file from an io reader, making sure all parent directories exist.
+func (x *XFile) write(file *file) (int64, error) {
+	if err := x.mkDir(filepath.Dir(file.Path), file.DirMode, file.Mtime); err != nil {
+		return 0, fmt.Errorf("writing archived file '%s' parent folder: %w", filepath.Base(file.Path), err)
 	}
 
-	fout, err := os.OpenFile(fpath, os.O_RDWR|os.O_CREATE|os.O_TRUNC, fMode)
+	fout, err := os.OpenFile(file.Path, os.O_RDWR|os.O_CREATE|os.O_TRUNC, x.safeFileMode(file.FileMode))
 	if err != nil {
-		return 0, fmt.Errorf("os.OpenFile: %w", err)
+		return 0, fmt.Errorf("opening archived file for writing: %w", err)
 	}
 	defer fout.Close()
 
-	s, err := io.Copy(fout, fdata)
+	size, err := io.Copy(fout, file.Data)
 	if err != nil {
-		return s, fmt.Errorf("copying io: %w", err)
+		return size, fmt.Errorf("copying archived file '%s' io: %w", file.Path, err)
 	}
 
-	return s, nil
+	// If this sucks, make it a defer and ignore the error, like xFile.mkDir().
+	if err = os.Chtimes(file.Path, file.Atime, file.Mtime); err != nil {
+		return size, fmt.Errorf("changing archived file times: %w", err)
+	}
+
+	return size, nil
 }
 
 // Rename is an attempt to deal with "invalid cross link device" on weird file systems.
@@ -558,4 +578,24 @@ func (x *XFile) squashRoot(files []string) ([]string, error) {
 	}
 
 	return files, nil
+}
+
+func (x *XFile) safeDirMode(current os.FileMode) os.FileMode {
+	if current.Perm() == 0 {
+		return x.DirMode
+	}
+
+	const minimum = 0o700 // ensure owner has read/write/exec on folders.
+
+	return current | minimum
+}
+
+func (x *XFile) safeFileMode(current os.FileMode) os.FileMode {
+	if current.Perm() == 0 {
+		return x.FileMode
+	}
+
+	const minimum = 0o400 // ensure owner has read access to the file.
+
+	return current | minimum
 }

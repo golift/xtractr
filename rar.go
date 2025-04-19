@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -90,34 +89,41 @@ func (x *XFile) unrar(rarReader *rardecode.ReadCloser) (int64, []string, error) 
 			return size, files, fmt.Errorf("rarReader.Next: %w", err)
 		}
 
-		wfile := x.clean(header.Name)
+		file := &file{
+			Path:     x.clean(header.Name),
+			Data:     rarReader,
+			FileMode: header.Mode(),
+			DirMode:  x.DirMode,
+			Mtime:    header.ModificationTime,
+			Atime:    header.AccessTime,
+		}
 		//nolint:gocritic // this 1-argument filepath.Join removes a ./ prefix should there be one.
-		if !strings.HasPrefix(wfile, filepath.Join(x.OutputDir)) {
+		if !strings.HasPrefix(file.Path, filepath.Join(x.OutputDir)) {
 			// The file being written is trying to write outside of our base path. Malicious archive?
 			return size, files, fmt.Errorf("%s: %w: %s != %s (from: %s)",
-				x.FilePath, ErrInvalidPath, wfile, x.OutputDir, header.Name)
+				x.FilePath, ErrInvalidPath, file.Path, x.OutputDir, header.Name)
 		}
 
 		if header.IsDir {
-			x.Debugf("Writing archived directory: %s", wfile)
+			x.Debugf("Writing archived directory: %s", file.Path)
 
-			if err = os.MkdirAll(wfile, x.DirMode); err != nil {
-				return size, files, fmt.Errorf("os.MkdirAll: %w", err)
+			if err = x.mkDir(file.Path, header.Mode(), header.ModificationTime); err != nil {
+				return size, files, fmt.Errorf("making rar file dir: %w", err)
 			}
 
 			continue
 		}
 
-		x.Debugf("Writing archived file: %s (packed: %d, unpacked: %d)", wfile, header.PackedSize, header.UnPackedSize)
+		x.Debugf("Writing archived file: %s (packed: %d, unpacked: %d)", file.Path, header.PackedSize, header.UnPackedSize)
 
-		fSize, err := writeFile(wfile, rarReader, x.FileMode, x.DirMode)
+		fSize, err := x.write(file)
 		if err != nil {
 			return size, files, err
 		}
 
-		files = append(files, wfile)
+		files = append(files, file.Path)
 		size += fSize
-		x.Debugf("Wrote archived file: %s (%d bytes), total: %d files and %d bytes", wfile, fSize, len(files), size)
+		x.Debugf("Wrote archived file: %s (%d bytes), total: %d files and %d bytes", file.Path, fSize, len(files), size)
 	}
 
 	files, err := x.cleanup(files)

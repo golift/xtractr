@@ -64,14 +64,21 @@ func (x *XFile) uncpio(reader io.Reader) (int64, []string, error) {
 }
 
 func (x *XFile) uncpioFile(cpioFile *cpio.Header, cpioReader *cpio.Reader) (int64, error) {
-	wfile := x.clean(cpioFile.Name)
-	if !strings.HasPrefix(wfile, x.OutputDir) {
+	file := &file{
+		Path:     x.clean(cpioFile.Name),
+		Data:     cpioReader,
+		FileMode: cpioFile.FileInfo().Mode(),
+		DirMode:  x.DirMode,
+		Mtime:    cpioFile.ModTime,
+	}
+
+	if !strings.HasPrefix(file.Path, x.OutputDir) {
 		// The file being written is trying to write outside of the base path. Malicious archive?
-		return 0, fmt.Errorf("%s: %w: %s (from: %s)", cpioFile.FileInfo().Name(), ErrInvalidPath, wfile, cpioFile.Name)
+		return 0, fmt.Errorf("%s: %w: %s (from: %s)", cpioFile.FileInfo().Name(), ErrInvalidPath, file.Path, cpioFile.Name)
 	}
 
 	if cpioFile.Mode.IsDir() || cpioFile.FileInfo().IsDir() {
-		if err := os.MkdirAll(wfile, x.DirMode); err != nil {
+		if err := x.mkDir(file.Path, cpioFile.FileInfo().Mode(), cpioFile.ModTime); err != nil {
 			return 0, fmt.Errorf("making cpio dir: %w", err)
 		}
 
@@ -80,9 +87,9 @@ func (x *XFile) uncpioFile(cpioFile *cpio.Header, cpioReader *cpio.Reader) (int6
 
 	// This turns hard links into symlinks.
 	if cpioFile.Linkname != "" {
-		err := os.Symlink(cpioFile.Linkname, wfile)
+		err := os.Symlink(cpioFile.Linkname, file.Path)
 		if err != nil {
-			return 0, fmt.Errorf("%s symlink: %w: %s (from: %s)", cpioFile.FileInfo().Name(), err, wfile, cpioFile.Name)
+			return 0, fmt.Errorf("%s symlink: %w: %s (from: %s)", cpioFile.FileInfo().Name(), err, file.Path, cpioFile.Name)
 		}
 
 		return 0, nil
@@ -90,9 +97,9 @@ func (x *XFile) uncpioFile(cpioFile *cpio.Header, cpioReader *cpio.Reader) (int6
 
 	// This should turn non-regular files into empty files.
 	// ie. sockets, block, character and fifo devices.
-	s, err := writeFile(wfile, cpioReader, x.FileMode, x.DirMode)
+	s, err := x.write(file)
 	if err != nil {
-		return s, fmt.Errorf("%s: %w: %s (from: %s)", cpioFile.FileInfo().Name(), err, wfile, cpioFile.Name)
+		return s, fmt.Errorf("%s: %w: %s (from: %s)", cpioFile.FileInfo().Name(), err, file.Path, cpioFile.Name)
 	}
 
 	return s, nil
