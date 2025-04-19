@@ -564,11 +564,12 @@ func (x *XFile) squashRoot(files []string) ([]string, error) {
 		return files, nil
 	}
 
-	roots := map[string]bool{}
-	//nolint:mnd
+	roots := map[string]struct{}{}
+
 	for _, path := range files {
 		// Remove the output dir suffix, then split on `/` (or `\`) and get the first item.
-		roots[strings.SplitN(strings.TrimPrefix(path, x.OutputDir), string(filepath.Separator), 2)[0]] = true
+		newRoot := strings.TrimPrefix(strings.TrimPrefix(path, x.OutputDir), string(filepath.Separator))
+		roots[strings.SplitN(newRoot, string(filepath.Separator), 2)[0]] = struct{}{} //nolint:mnd
 	}
 
 	if len(roots) == 1 { // only 1 root folder...
