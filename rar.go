@@ -13,7 +13,7 @@ import (
 )
 
 // ExtractRAR attempts to extract a file as a rar file.
-func ExtractRAR(xFile *XFile) (size int64, filesList, archiveList []string, err error) {
+func ExtractRAR(xFile *XFile) (size uint64, filesList, archiveList []string, err error) {
 	if len(xFile.Passwords) == 0 && xFile.Password == "" {
 		return extractRAR(xFile)
 	}
@@ -55,29 +55,54 @@ func ExtractRAR(xFile *XFile) (size int64, filesList, archiveList []string, err 
 }
 
 // extractRAR extracts a rar file. to a destination. This wraps github.com/nwaples/rardecode.
-func extractRAR(xFile *XFile) (int64, []string, []string, error) {
+func extractRAR(xFile *XFile) (uint64, []string, []string, error) {
 	rarReader, err := rardecode.OpenReader(xFile.FilePath, xFile.Password)
+	if err != nil {
+		return 0, nil, nil, fmt.Errorf("rardecode.OpenReader: %w", err)
+	}
+
+	defer xFile.newProgress(getUncompressedRarSize(rarReader)).done() // this closes rarReader
+
+	rarReader, err = rardecode.OpenReader(xFile.FilePath, xFile.Password) // open it again.
 	if err != nil {
 		return 0, nil, nil, fmt.Errorf("rardecode.OpenReader: %w", err)
 	}
 	defer rarReader.Close()
 
-	size, files, err := xFile.unrar(rarReader)
+	files, err := xFile.unrar(rarReader)
 	if err != nil {
 		lastFile := xFile.FilePath
 		if volumes := rarReader.Volumes(); len(volumes) > 0 {
 			lastFile = volumes[len(volumes)-1]
 		}
 
-		return size, files, rarReader.Volumes(), fmt.Errorf("%s: %w", lastFile, err)
+		return xFile.prog.Wrote, files, rarReader.Volumes(), fmt.Errorf("%s: %w", lastFile, err)
 	}
 
-	return size, files, rarReader.Volumes(), nil
+	return xFile.prog.Wrote, files, rarReader.Volumes(), nil
 }
 
-func (x *XFile) unrar(rarReader *rardecode.ReadCloser) (int64, []string, error) {
+func getUncompressedRarSize(rarReader *rardecode.ReadCloser) (total, compressed uint64, count int) {
+	defer rarReader.Close()
+
+	for {
+		header, err := rarReader.Next()
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return total, 0, count
+			}
+
+			return total, 0, count
+		}
+
+		total += uint64(header.UnPackedSize)
+		// compressed += uint64(header.PackedSize)
+		count++
+	}
+}
+
+func (x *XFile) unrar(rarReader *rardecode.ReadCloser) ([]string, error) {
 	files := []string{}
-	size := int64(0)
 
 	for {
 		header, err := rarReader.Next()
@@ -86,7 +111,7 @@ func (x *XFile) unrar(rarReader *rardecode.ReadCloser) (int64, []string, error) 
 				break
 			}
 
-			return size, files, fmt.Errorf("rarReader.Next: %w", err)
+			return files, fmt.Errorf("rarReader.Next: %w", err)
 		}
 
 		file := &file{
@@ -100,7 +125,7 @@ func (x *XFile) unrar(rarReader *rardecode.ReadCloser) (int64, []string, error) 
 		//nolint:gocritic // this 1-argument filepath.Join removes a ./ prefix should there be one.
 		if !strings.HasPrefix(file.Path, filepath.Join(x.OutputDir)) {
 			// The file being written is trying to write outside of our base path. Malicious archive?
-			return size, files, fmt.Errorf("%s: %w: %s != %s (from: %s)",
+			return files, fmt.Errorf("%s: %w: %s != %s (from: %s)",
 				x.FilePath, ErrInvalidPath, file.Path, x.OutputDir, header.Name)
 		}
 
@@ -108,25 +133,24 @@ func (x *XFile) unrar(rarReader *rardecode.ReadCloser) (int64, []string, error) 
 			x.Debugf("Writing archived directory: %s", file.Path)
 
 			if err = x.mkDir(file.Path, header.Mode(), header.ModificationTime); err != nil {
-				return size, files, fmt.Errorf("making rar file dir: %w", err)
+				return files, fmt.Errorf("making rar file dir: %w", err)
 			}
 
 			continue
 		}
 
-		x.Debugf("Writing archived file: %s (packed: %d, unpacked: %d)", file.Path, header.PackedSize, header.UnPackedSize)
+		x.Debugf("Writing archived file: %s (packed: %d, unpacked: %d)",
+			file.Path, header.PackedSize, header.UnPackedSize)
 
 		fSize, err := x.write(file)
 		if err != nil {
-			return size, files, err
+			return files, err
 		}
 
 		files = append(files, file.Path)
-		size += fSize
-		x.Debugf("Wrote archived file: %s (%d bytes), total: %d files and %d bytes", file.Path, fSize, len(files), size)
+		x.Debugf("Wrote archived file: %s (%d bytes), total: %d files and %d bytes",
+			file.Path, fSize, x.prog.Files, x.prog.Wrote)
 	}
 
-	files, err := x.cleanup(files)
-
-	return size, files, err
+	return x.cleanup(files)
 }

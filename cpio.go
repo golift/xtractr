@@ -13,57 +13,65 @@ import (
 )
 
 // ExtractCPIOGzip extracts a gzip-compressed cpio archive (cpgz).
-func ExtractCPIOGzip(xFile *XFile) (size int64, filesList []string, err error) {
-	compressedFile, err := os.Open(xFile.FilePath)
+func ExtractCPIOGzip(xFile *XFile) (size uint64, filesList []string, err error) {
+	compressedFile, stat, err := openStatFile(xFile.FilePath)
 	if err != nil {
-		return 0, nil, fmt.Errorf("os.Open: %w", err)
+		return 0, nil, err
 	}
 	defer compressedFile.Close()
 
-	zipStream, err := gzip.NewReader(compressedFile)
+	defer xFile.newProgress(0, uint64(stat.Size()), 0).done()
+
+	zipStream, err := gzip.NewReader(xFile.prog.reader(compressedFile))
 	if err != nil {
 		return 0, nil, fmt.Errorf("gzip.NewReader: %w", err)
 	}
 	defer zipStream.Close()
 
-	return xFile.uncpio(zipStream)
+	files, err := xFile.uncpio(zipStream)
+
+	return xFile.prog.Wrote, files, err
 }
 
 // ExtractCPIO extracts a .cpio file.
-func ExtractCPIO(xFile *XFile) (size int64, filesList []string, err error) {
-	fileReader, err := os.Open(xFile.FilePath)
+func ExtractCPIO(xFile *XFile) (size uint64, filesList []string, err error) {
+	fileReader, stat, err := openStatFile(xFile.FilePath)
 	if err != nil {
-		return 0, nil, fmt.Errorf("os.Open: %w", err)
+		return 0, nil, err
 	}
 	defer fileReader.Close()
 
-	return xFile.uncpio(fileReader)
+	defer xFile.newProgress(uint64(stat.Size()), uint64(stat.Size()), 0).done()
+
+	files, err := xFile.uncpio(xFile.prog.reader(fileReader))
+
+	return xFile.prog.Wrote, files, err
 }
 
-func (x *XFile) uncpio(reader io.Reader) (int64, []string, error) {
+func (x *XFile) uncpio(reader io.Reader) ([]string, error) {
 	zipReader := cpio.NewReader(reader)
 	files := []string{}
-	size := int64(0)
 
 	for {
 		zipFile, err := zipReader.Next()
 		if errors.Is(err, io.EOF) {
-			return size, files, nil
+			return files, nil
 		} else if err != nil {
-			return 0, nil, fmt.Errorf("cpio Next() failed: %w", err)
+			return nil, fmt.Errorf("cpio Next() failed: %w", err)
 		}
 
 		fSize, err := x.uncpioFile(zipFile, zipReader)
 		if err != nil {
-			return size, files, fmt.Errorf("%s: %w", x.FilePath, err)
+			return files, fmt.Errorf("%s: %w", x.FilePath, err)
 		}
 
 		files = append(files, filepath.Join(x.OutputDir, zipFile.Name))
-		size += fSize
+		x.Debugf("Wrote archived file: %s (%d bytes), total: %d files and %d bytes",
+			zipFile.Name, fSize, x.prog.Files, x.prog.Wrote)
 	}
 }
 
-func (x *XFile) uncpioFile(cpioFile *cpio.Header, cpioReader *cpio.Reader) (int64, error) {
+func (x *XFile) uncpioFile(cpioFile *cpio.Header, cpioReader *cpio.Reader) (uint64, error) {
 	file := &file{
 		Path:     x.clean(cpioFile.Name),
 		Data:     cpioReader,

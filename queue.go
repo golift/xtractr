@@ -52,7 +52,7 @@ type Response struct {
 	// Extract Started (false) or Finished (true).
 	Done bool
 	// Size of data written.
-	Size int64
+	Size uint64
 	// Temporary output folder.
 	Output string
 	// Items still in queue.
@@ -313,7 +313,7 @@ func (x *Xtractr) decompressArchives(resp *Response) error {
 
 // processArchives extracts one archive at a time.
 // Returns list of archive files extracted, size of data written and files written.
-func (x *Xtractr) processArchive(filename string, resp *Response) (int64, []string, []string, error) {
+func (x *Xtractr) processArchive(filename string, resp *Response) (uint64, []string, []string, error) {
 	if err := os.MkdirAll(resp.Output, x.config.DirMode); err != nil {
 		return 0, nil, nil, fmt.Errorf("making output dir: %w", err)
 	}
