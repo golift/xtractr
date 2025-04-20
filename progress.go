@@ -44,7 +44,7 @@ func (p *Progress) Percent() (perc float64) {
 
 // ArchiveProgress is a helper/example function you can use in your code to print extraction percentages.
 // @every - Should be a number between 1 and 50 or so. This controls how often to print the percentage.
-// The values 1, 2, 5, 10, and 20 work best.
+// The values 1, 2, 4, 5, 10, 20 and 25 work best.
 // @exit - If exit is true, then the for loop exit and the process returns when Progress.Done is true.
 // Set `exit` true if you want a separate printer for each archive. A good reason is parallel extractions.
 func ArchiveProgress(every float64, progress chan Progress, exit bool) {
@@ -64,7 +64,6 @@ func ArchiveProgress(every float64, progress chan Progress, exit bool) {
 
 		if perc = prog.Percent(); perc == maxPercent && last < maxPercent {
 			fmt.Printf("%.00f%%\n", perc)
-
 			last = maxPercent
 		}
 

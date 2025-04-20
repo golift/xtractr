@@ -21,15 +21,15 @@ var (
 
 // ExtractRPM extract a file as a RedHat Package Manager file.
 func ExtractRPM(xFile *XFile) (size uint64, filesList []string, err error) {
-	osFile, stat, err := openStatFile(xFile.FilePath)
+	rpmFile, stat, err := openStatFile(xFile.FilePath)
 	if err != nil {
 		return 0, nil, err
 	}
-	defer osFile.Close()
+	defer rpmFile.Close()
 
 	defer xFile.newProgress(0, uint64(stat.Size()), 0).done()
 
-	files, err := xFile.extractRPM(xFile.prog.reader(osFile))
+	files, err := xFile.extractRPM(xFile.prog.reader(rpmFile))
 
 	return xFile.prog.Wrote, files, err
 }
@@ -91,14 +91,12 @@ func (x *XFile) unrpm(reader io.Reader, format string) (filesList []string, err 
 	// Check the archive format of the payload
 	switch format {
 	case "cpio":
-		filesList, err = x.uncpio(reader)
+		return x.uncpio(reader)
 	case "tar":
-		filesList, err = x.untar(reader)
+		return x.untar(reader)
 	case "ar":
-		filesList, err = x.unAr(reader)
+		return x.unAr(reader)
 	default:
 		return nil, fmt.Errorf("%w: %s", ErrUnsupportedRPMArchiveFmt, format)
 	}
-
-	return filesList, err
 }
