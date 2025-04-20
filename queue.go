@@ -80,8 +80,6 @@ type Response struct {
 	Error error
 	// Copied from input data.
 	X *Xtract
-	// Progress information about the extraction.
-	Progress Progress
 }
 
 // Extract is how external code begins an extraction process against a path.
