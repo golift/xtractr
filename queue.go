@@ -31,7 +31,7 @@ type Xtract struct {
 	RecurseISO bool
 	// Folder to extract data. Default is same level as SearchPath with a suffix.
 	ExtractTo string
-	// Leave files in temporary folder? false=move files back to Searchpath
+	// Leave files in temporary folder? false=move files back to Filter.Path
 	// Moving files back will cause the "extracted files" returned to only contain top-level items.
 	TempFolder bool
 	// Delete Archives after successful extraction? Be careful.
@@ -42,11 +42,20 @@ type Xtract struct {
 	CBFunction func(*Response)
 	// Callback Channel, msg sent twice per queued item.
 	CBChannel chan *Response
+	// Progress is called periodically during file extraction.
+	// Contains info about the progress of the extraction.
+	// This is not called if an Updates channel is also provided.
+	// Shared by all archive file extractions that occur with this Xtract.
+	Progress func(Progress)
+	// If an Updates channel is provided, all Progress updates are sent to it.
+	// Contains info about the progress of the extraction.
+	// Shared by all archive file extractions that occur with this Xtract.
+	Updates chan Progress
 }
 
 // Response is sent to the call-back function. The first CBFunction call is just
 // a notification that the extraction has started. You can determine it's the first
-// call by chcking Response.Done. false = started, true = finished. When done=false
+// call by checking Response.Done. false = started, true = finished. When done=false
 // the only other meaningful data provided is the re.Archives, re.Output and re.Queue.
 type Response struct {
 	// Extract Started (false) or Finished (true).
@@ -71,6 +80,8 @@ type Response struct {
 	Error error
 	// Copied from input data.
 	X *Xtract
+	// Progress information about the extraction.
+	Progress Progress
 }
 
 // Extract is how external code begins an extraction process against a path.
@@ -328,6 +339,8 @@ func (x *Xtractr) processArchive(filename string, resp *Response) (uint64, []str
 		Passwords: resp.X.Passwords,
 		Password:  resp.X.Password,
 		log:       x.config.Logger,
+		Updates:   resp.X.Updates,
+		Progress:  resp.X.Progress,
 	})
 	if err != nil {
 		x.DeleteFiles(resp.Output) // clean up the mess after an error and bail.
