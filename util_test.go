@@ -14,7 +14,7 @@ import (
 type testFilesInfo struct {
 	srcFilesDir  string
 	dstFilesDir  string
-	dataSize     int64
+	dataSize     uint64
 	fileCount    int
 	archiveCount int
 }

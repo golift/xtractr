@@ -33,7 +33,7 @@ func makeZipFile(t *testing.T) testFilesInfo {
 	t.Helper()
 
 	const (
-		dataSize     = int64(21)
+		dataSize     = uint64(21)
 		fileCount    = 5
 		archiveCount = 1
 	)

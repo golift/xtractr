@@ -23,7 +23,7 @@ func TestIso(t *testing.T) {
 		require.NoError(t, err, "failed to cleanup writer")
 	}()
 
-	size := int64(0)
+	size := uint64(0)
 	walkErr := filepath.Walk(testFilesInfo.srcFilesDir, func(path string, info os.FileInfo, err error) error {
 		require.NoError(t, err, "unexpected")
 
@@ -37,7 +37,7 @@ func TestIso(t *testing.T) {
 
 		fStat, err := fileToAdd.Stat()
 		require.NoError(t, err, "failed to stat file")
-		size += fStat.Size()
+		size += uint64(fStat.Size())
 
 		err = writer.AddFile(fileToAdd, strings.TrimPrefix(fileToAdd.Name(), testFilesInfo.srcFilesDir))
 		require.NoError(t, err, "failed to add file")

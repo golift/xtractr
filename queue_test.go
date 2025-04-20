@@ -23,7 +23,7 @@ var filesInTestArchive = []string{
 
 const (
 	testFile     = "test_data/archive.rar"
-	testDataSize = int64(20770)
+	testDataSize = uint64(20770)
 )
 
 type testLogger struct{ t *testing.T }
