@@ -178,6 +178,8 @@ func (x *Xtractr) decompressFolders(resp *Response) error {
 				DeleteOrig: resp.X.DeleteOrig,
 				TempFolder: resp.X.TempFolder,
 				LogFile:    resp.X.LogFile,
+				Updates:    resp.X.Updates,
+				Progress:   resp.X.Progress,
 			},
 			Started:  resp.Started,
 			Output:   output,
@@ -273,6 +275,8 @@ func (x *Xtractr) decompressFiles(resp *Response) error {
 		X: &Xtract{
 			Password:  resp.X.Password,
 			Passwords: resp.X.Passwords,
+			Progress:  resp.X.Progress,
+			Updates:   resp.X.Updates,
 		},
 		Started:  resp.Started,
 		Output:   resp.Output,

@@ -76,10 +76,10 @@ func extractRAR(xFile *XFile) (uint64, []string, []string, error) {
 			lastFile = volumes[len(volumes)-1]
 		}
 
-		return xFile.prog.Wrote, files, rarReader.Volumes(), fmt.Errorf("%s: %w", lastFile, err)
+		return xFile.prog.Wrote, files, []string{xFile.FilePath}, fmt.Errorf("%s: %w", lastFile, err)
 	}
 
-	return xFile.prog.Wrote, files, rarReader.Volumes(), nil
+	return xFile.prog.Wrote, files, []string{xFile.FilePath}, nil
 }
 
 func getUncompressedRarSize(rarReader *rardecode.ReadCloser) (total, compressed uint64, count int) {

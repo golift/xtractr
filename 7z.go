@@ -60,7 +60,7 @@ func extract7z(xFile *XFile) (uint64, []string, []string, error) {
 	for _, zipFile := range sevenZip.File {
 		fSize, wfile, err := xFile.un7zip(zipFile)
 		if err != nil {
-			return xFile.prog.Wrote, files, sevenZip.Volumes(), fmt.Errorf("%s: %w", xFile.FilePath, err)
+			return xFile.prog.Wrote, files, []string{xFile.FilePath}, fmt.Errorf("%s: %w", xFile.FilePath, err)
 		}
 
 		files = append(files, filepath.Join(xFile.OutputDir, zipFile.Name))
@@ -70,7 +70,7 @@ func extract7z(xFile *XFile) (uint64, []string, []string, error) {
 
 	files, err = xFile.cleanup(files)
 
-	return xFile.prog.Wrote, files, sevenZip.Volumes(), err
+	return xFile.prog.Wrote, files, []string{xFile.FilePath}, err
 }
 
 func getUncompressed7zSize(reader *sevenzip.ReadCloser) (total, compressed uint64, count int) {

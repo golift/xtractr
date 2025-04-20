@@ -64,6 +64,7 @@ func ArchiveProgress(every float64, progress chan Progress, exit bool) {
 
 		if perc = prog.Percent(); perc == maxPercent && last < maxPercent {
 			fmt.Printf("%.00f%%\n", perc)
+
 			last = maxPercent
 		}
 
@@ -75,7 +76,7 @@ func ArchiveProgress(every float64, progress chan Progress, exit bool) {
 }
 
 func (x *XFile) newProgress(total, compressed uint64, count int) *Progress {
-	x.prog = &Progress{Total: total, Compressed: compressed, Count: count, send: func() {}}
+	x.prog = &Progress{Total: total, Compressed: compressed, Count: count, send: func() {}, XFile: x}
 
 	if x.Progress != nil {
 		x.prog.send = func() { x.Progress(*x.prog) }
