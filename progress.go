@@ -48,7 +48,7 @@ func (p *Progress) Percent() (perc float64) {
 // @reset - If set true, a `\r` is printed before each line, which will reset it on most terminals.
 // @exit - If exit is true, then the for loop exit and the process returns when Progress.Done is true.
 // Set `exit` true if you want a separate printer for each archive. A good reason is parallel extractions.
-func ArchiveProgress(every float64, progress chan Progress, reset, exit bool) {
+func ArchiveProgress(every float64, progress chan Progress, reset, exit bool) { //nolint:cyclop
 	var (
 		perc, last float64
 		pre        string
@@ -80,11 +80,13 @@ func ArchiveProgress(every float64, progress chan Progress, reset, exit bool) {
 
 		if perc = prog.Percent(); perc == maxPercent && last < maxPercent {
 			last = maxPercent
+
 			fmt.Printf(mod, pre, perc)
 		}
 
 		if last == 0 && perc == 0 || perc > last+every {
 			last = perc + extra // we add extra so 0% only prints once.
+
 			fmt.Printf(mod, pre, perc)
 		}
 	}
