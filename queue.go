@@ -96,6 +96,8 @@ func (x *Xtractr) Extract(extract *Xtract) (int, error) {
 	return queueSize, nil
 }
 
+const fsSyncDelay = 10 * time.Second
+
 // processQueue runs in a go routine, 'x.Parallel' times,
 // and watches for things to extract.
 func (x *Xtractr) processQueue() {
@@ -364,6 +366,7 @@ func (x *Xtractr) cleanupProcessedArchives(resp *Response) error {
 	var err error
 
 	if !resp.X.TempFolder {
+		time.Sleep(fsSyncDelay) // Wait for file system to catch up/sync.
 		// If TempFolder is false then move the files back to the original location.
 		resp.NewFiles, err = x.MoveFiles(resp.Output, resp.X.Path, false)
 	}
