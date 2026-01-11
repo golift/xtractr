@@ -23,6 +23,7 @@ type testFilesInfo struct {
 // about the created files and directories.
 func createTestFiles(t *testing.T) *testFilesInfo {
 	t.Helper()
+
 	const (
 		loremIpsum = `Lorem ipsum dolor sit amet, consectetur adipiscing elit, 
 sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.
@@ -60,9 +61,12 @@ proident, sunt in culpa qui officia deserunt mollit anim id est laborum.`
 	require.NoError(t, os.MkdirAll(srcFilesDir, 0o700))
 
 	var destFilesDir string
+
 	for _, file := range testFiles {
 		fullPath := filepath.Join(srcFilesDir, file)
+
 		var err error
+
 		switch {
 		case file[len(file)-1] == '/':
 			err = os.MkdirAll(fullPath, 0o700)
@@ -71,6 +75,7 @@ proident, sunt in culpa qui officia deserunt mollit anim id est laborum.`
 		default:
 			err = os.WriteFile(fullPath, randomDigits, 0o600)
 		}
+
 		require.NoError(t, err)
 
 		destFilesDir = filepath.Join(testDataDir, "out")
@@ -88,6 +93,7 @@ proident, sunt in culpa qui officia deserunt mollit anim id est laborum.`
 
 func safeCloser(t *testing.T, c io.Closer) {
 	t.Helper()
+
 	err := c.Close()
 	require.NoError(t, err)
 }

@@ -109,7 +109,8 @@ func (x *XFile) un7zip(zipFile *sevenzip.File) (int64, string, error) {
 	if zipFile.FileInfo().IsDir() {
 		x.Debugf("Writing archived directory: %s", file.Path)
 
-		if err := x.mkDir(file.Path, zipFile.Mode(), zipFile.Modified); err != nil {
+		err := x.mkDir(file.Path, zipFile.Mode(), zipFile.Modified)
+		if err != nil {
 			return 0, file.Path, fmt.Errorf("making zipFile dir: %w", err)
 		}
 

@@ -107,7 +107,8 @@ func (x *XFile) unrar(rarReader *rardecode.ReadCloser) (int64, []string, error) 
 		if header.IsDir {
 			x.Debugf("Writing archived directory: %s", file.Path)
 
-			if err = x.mkDir(file.Path, header.Mode(), header.ModificationTime); err != nil {
+			err = x.mkDir(file.Path, header.Mode(), header.ModificationTime)
+			if err != nil {
 				return size, files, fmt.Errorf("making rar file dir: %w", err)
 			}
 
