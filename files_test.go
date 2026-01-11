@@ -58,6 +58,7 @@ func TestFindCompressedFiles(t *testing.T) {
 
 	// Test 1
 	total := 0
+
 	paths := xtractr.FindCompressedFiles(xtractr.Filter{Path: base})
 	for folder, files := range paths {
 		total += len(files)

@@ -46,6 +46,7 @@ func getUncompressedIsoSize(image *iso9660.Image) (total, _ uint64, count int) {
 	}
 
 	var loop func(isoFile *iso9660.File)
+
 	loop = func(isoFile *iso9660.File) {
 		count++
 
@@ -81,7 +82,8 @@ func (x *XFile) uniso(isoFile *iso9660.File, parent string) (uint64, []string, e
 		return x.unisofile(isoFile, itemName)
 	}
 
-	if err := x.mkDir(filepath.Join(x.OutputDir, itemName), isoFile.Mode(), isoFile.ModTime()); err != nil {
+	err := x.mkDir(filepath.Join(x.OutputDir, itemName), isoFile.Mode(), isoFile.ModTime())
+	if err != nil {
 		return 0, nil, fmt.Errorf("making iso directory %s: %w", isoFile.Name(), err)
 	}
 

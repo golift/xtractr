@@ -15,18 +15,18 @@ import (
 func TestZip(t *testing.T) {
 	t.Parallel()
 
-	zip := makeZipFile(t)
+	zipFile := makeZipFile(t)
 
 	size, files, archives, err := xtractr.ExtractFile(&xtractr.XFile{
-		FilePath:  zip.srcFilesDir,
-		OutputDir: filepath.Clean(zip.dstFilesDir),
+		FilePath:  zipFile.srcFilesDir,
+		OutputDir: filepath.Clean(zipFile.dstFilesDir),
 		FileMode:  0o600,
 		DirMode:   0o700,
 	})
 	require.NoError(t, err)
-	assert.Equal(t, zip.dataSize, size)
-	assert.Len(t, files, zip.fileCount)
-	assert.Len(t, archives, zip.archiveCount)
+	assert.Equal(t, zipFile.dataSize, size)
+	assert.Len(t, files, zipFile.fileCount)
+	assert.Len(t, archives, zipFile.archiveCount)
 }
 
 func makeZipFile(t *testing.T) testFilesInfo {
@@ -49,6 +49,7 @@ func makeZipFile(t *testing.T) testFilesInfo {
 	name := t.TempDir()
 
 	zipFile, err := os.Create(filepath.Join(name, "archive.zip"))
+
 	require.NoError(t, err)
 	defer safeCloser(t, zipFile)
 

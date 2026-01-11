@@ -73,6 +73,7 @@ func ArchiveProgress(every float64, progress chan Progress, reset, exit bool) { 
 
 		if prog.Done {
 			fmt.Println()
+
 			last = 0 // reset for the next archive.
 
 			continue

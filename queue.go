@@ -16,14 +16,15 @@ import (
 // The CBFunction is called again when the extraction finishes w/ Response.Done=true.
 // The CBFunction channel works the exact same way, except it's a channel instead of a blocking function.
 type Xtract struct {
+	// Folder path and filters describing where and how to find archives.
+	Filter
+
 	// Unused in this app; exposed for calling library.
 	Name string
 	// Archive password. Only supported with RAR and 7zip files. Prepended to Passwords.
 	Password string
 	// Archive passwords (try multiple). Only supported with RAR and 7zip files.
 	Passwords []string
-	// Folder path and filters describing where and how to find archives.
-	Filter
 	// Set DisableRecursion to true if you want to avoid extracting archives inside archives.
 	DisableRecursion bool
 	// Set RecurseISO to true if you want to recursively extract archives in ISO files.
@@ -260,7 +261,8 @@ func weExtractedAnISO(resp *Response) bool {
 // This extracts everything in the search path then (optionally)
 // checks the output path for more archives that were just decompressed.
 func (x *Xtractr) decompressFiles(resp *Response) error {
-	if err := x.decompressArchives(resp); err != nil {
+	err := x.decompressArchives(resp)
+	if err != nil {
 		return err
 	}
 
@@ -284,7 +286,7 @@ func (x *Xtractr) decompressFiles(resp *Response) error {
 		Output:   resp.Output,
 		Archives: resp.Extras,
 	}
-	err := x.decompressArchives(nre)
+	err = x.decompressArchives(nre)
 	// Combine the new Response with the existing response.
 	resp.Extras = nre.Archives
 	resp.Size += nre.Size
@@ -329,7 +331,8 @@ func (x *Xtractr) decompressArchives(resp *Response) error {
 // processArchives extracts one archive at a time.
 // Returns list of archive files extracted, size of data written and files written.
 func (x *Xtractr) processArchive(filename string, resp *Response) (uint64, []string, []string, error) {
-	if err := os.MkdirAll(resp.Output, x.config.DirMode); err != nil {
+	err := os.MkdirAll(resp.Output, x.config.DirMode)
+	if err != nil {
 		return 0, nil, nil, fmt.Errorf("making output dir: %w", err)
 	}
 
@@ -392,12 +395,13 @@ func (x *Xtractr) createLogFile(resp *Response) {
 	tmpFile := filepath.Join(resp.Output, x.config.Suffix+"."+filepath.Base(resp.X.Path)+".txt")
 	resp.NewFiles = append(resp.NewFiles, tmpFile)
 
-	msg := []byte(fmt.Sprintf("# %s - this file may be removed with the extracted data\n---\n"+
+	msg := fmt.Appendf(nil, "# %s - this file may be removed with the extracted data\n---\n"+
 		"archives:%s\nextras:%v\nfrom_path:%s\ntemp_path:%s\nrelocated:%v\ntime:%v\nfiles:\n  - %v\n",
 		x.config.Suffix, resp.Archives, resp.Extras, resp.X.Path, resp.Output, !resp.X.TempFolder, time.Now(),
-		strings.Join(resp.NewFiles, "\n  - ")))
+		strings.Join(resp.NewFiles, "\n  - "))
 
-	if err := os.WriteFile(tmpFile, msg, x.config.FileMode); err != nil {
+	err := os.WriteFile(tmpFile, msg, x.config.FileMode)
+	if err != nil {
 		x.config.Printf("Error: Creating Temporary Tracking File: %v", err)
 	}
 }
@@ -419,7 +423,8 @@ func (x *Xtractr) getTempFolderFinalName(resp *Response) string {
 	// If the name is taken, try up to 999 different names.
 	const tryNames = 999
 
-	if _, err := os.Stat(resp.Output); err != nil {
+	_, err := os.Stat(resp.Output)
+	if err != nil {
 		return "" // the output folder was deleted?!
 	}
 
@@ -433,16 +438,20 @@ func (x *Xtractr) getTempFolderFinalName(resp *Response) string {
 		newName = strings.TrimSuffix(newName, filepath.Ext(newName))
 	}
 
-	if _, err := os.Stat(newName); x.config.TryNames && err == nil {
+	_, err = os.Stat(newName)
+	if x.config.TryNames && err == nil {
 		for i := range tryNames {
 			loopName := newName + fmt.Sprint(".", i)
-			if _, err := os.Stat(loopName); err != nil {
+
+			_, err = os.Stat(loopName)
+			if err != nil {
 				return loopName
 			}
 		}
 	}
 
-	if _, err := os.Stat(newName); err == nil {
+	_, err = os.Stat(newName)
+	if err == nil {
 		return "" // it exists already?!
 	}
 
@@ -455,7 +464,8 @@ func (x *Xtractr) cleanTempFolder(resp *Response) {
 		return
 	}
 
-	if newFiles, err := x.MoveFiles(resp.Output, newName, false); err != nil {
+	newFiles, err := x.MoveFiles(resp.Output, newName, false)
+	if err != nil {
 		x.config.Printf("Error: Renaming Temporary Folder: %v", err)
 	} else {
 		x.config.Debugf("Renamed Temp Folder: %v -> %v", resp.Output, newName)

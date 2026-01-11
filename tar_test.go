@@ -75,37 +75,46 @@ func TestTar(t *testing.T) {
 
 func writeTar(sourceDir string, destWriter io.Writer) error {
 	tarWriter := tar.NewWriter(destWriter)
+
 	outErr := filepath.Walk(sourceDir, func(path string, info os.FileInfo, _ error) error {
 		if info.Mode().IsDir() {
 			return nil
 		}
+
 		relativePath := path[len(sourceDir):]
 		if relativePath == "" {
 			return nil
 		}
+
 		fileReader, err := os.Open(path)
 		if err != nil {
 			return fmt.Errorf("failed to open file: %w", err)
 		}
 		defer fileReader.Close()
 
-		h, err := tar.FileInfoHeader(info, relativePath)
+		header, err := tar.FileInfoHeader(info, relativePath)
 		if err != nil {
 			return fmt.Errorf("failed to create tar header: %w", err)
 		}
-		h.Name = relativePath
-		if err = tarWriter.WriteHeader(h); err != nil {
+
+		header.Name = relativePath
+
+		err = tarWriter.WriteHeader(header)
+		if err != nil {
 			return fmt.Errorf("failed to write tar header: %w", err)
 		}
-		if _, err := io.Copy(tarWriter, fileReader); err != nil {
+
+		_, err = io.Copy(tarWriter, fileReader)
+		if err != nil {
 			return fmt.Errorf("failed to copy file (%s) into tar header: %w", fileReader.Name(), err)
 		}
+
 		return nil
 	})
-
 	if outErr == nil {
 		return nil
 	}
+
 	return fmt.Errorf("failed to walk source directory: %w", outErr)
 }
 
@@ -113,6 +122,7 @@ func (c *tarCompressor) Compress(t *testing.T, sourceDir, destBase string) error
 	t.Helper()
 
 	tarFile, err := os.Create(destBase + ".tar")
+
 	require.NoError(t, err)
 	defer safeCloser(t, tarFile)
 
@@ -126,10 +136,12 @@ func (c *tarZCompressor) Compress(t *testing.T, _, destBase string) error {
 	// Windows. So, we use a pre-compressed file from test_data.
 	tarZFilename := destBase + ".tar.z"
 	tarZDestFile, err := os.Create(tarZFilename)
+
 	require.NoError(t, err)
 	defer safeCloser(t, tarZDestFile)
 
 	tarZTestFile, err := os.Open("test_data/archive.tar.Z")
+
 	require.NoError(t, err)
 	defer safeCloser(t, tarZTestFile)
 
@@ -142,13 +154,16 @@ func (c *tarZCompressor) Compress(t *testing.T, _, destBase string) error {
 
 func (c *tarBzipCompressor) Compress(t *testing.T, sourceDir, destBase string) error {
 	t.Helper()
+
 	tarBZ2Filename := destBase + ".tar.bz2"
 
 	tarBZ2File, err := os.Create(tarBZ2Filename)
+
 	require.NoError(t, err)
 	defer safeCloser(t, tarBZ2File)
 
 	bzip2Writer, err := bzip2.NewWriter(tarBZ2File, &bzip2.WriterConfig{Level: bzip2.BestSpeed})
+
 	require.NoError(t, err)
 	defer safeCloser(t, bzip2Writer)
 
@@ -160,13 +175,16 @@ func (c *tarBzipCompressor) Compress(t *testing.T, sourceDir, destBase string) e
 
 func (c *tarXZCompressor) Compress(t *testing.T, sourceDir, destBase string) error {
 	t.Helper()
+
 	tarXZFilename := destBase + ".tar.xz"
 
 	tarXZFile, err := os.Create(tarXZFilename)
+
 	require.NoError(t, err)
 	defer safeCloser(t, tarXZFile)
 
 	xzWriter, err := xz.NewWriter(tarXZFile)
+
 	require.NoError(t, err)
 	defer safeCloser(t, xzWriter)
 
@@ -178,13 +196,16 @@ func (c *tarXZCompressor) Compress(t *testing.T, sourceDir, destBase string) err
 
 func (c *tarGzipCompressor) Compress(t *testing.T, sourceDir, destBase string) error {
 	t.Helper()
+
 	tarGZFilename := destBase + ".tar.gz"
 
 	tarGZFile, err := os.Create(tarGZFilename)
+
 	require.NoError(t, err)
 	defer safeCloser(t, tarGZFile)
 
 	gzipWriter := gzip.NewWriter(tarGZFile)
+
 	require.NoError(t, err)
 	defer safeCloser(t, gzipWriter)
 

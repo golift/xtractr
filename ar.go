@@ -19,7 +19,8 @@ func ExtractAr(xFile *XFile) (size uint64, filesList []string, err error) {
 
 	defer xFile.newProgress(getUncompressedArSize(arFile)).done() // this closes arFile
 
-	if arFile, err = os.Open(xFile.FilePath); err != nil {
+	arFile, err = os.Open(xFile.FilePath)
+	if err != nil {
 		return 0, nil, fmt.Errorf("os.Open: %w", err)
 	}
 

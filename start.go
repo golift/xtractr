@@ -18,6 +18,9 @@ const (
 // Config is the input data to configure the Xtract queue. Fill this out and
 // pass it into NewQueue() to create a queue for archive extractions.
 type Config struct {
+	// Logs are sent to this Logger.
+	Logger
+
 	// Size of the extraction channel buffer. Default=1000.
 	// Use -1 for unbuffered channel. Not recommend.
 	BuffSize int
@@ -33,15 +36,13 @@ type Config struct {
 	TryNames bool
 	// The suffix used for temporary folders.
 	Suffix string
-	// Logs are sent to this Logger.
-	Logger
 }
 
 // Logger allows this library to write logs.
 // Use this to capture them in your own flow.
 type Logger interface {
-	Printf(format string, v ...interface{})
-	Debugf(format string, v ...interface{})
+	Printf(format string, v ...any)
+	Debugf(format string, v ...any)
 }
 
 // Xtractr is what you get from NewQueue(). This is the main app struct.
@@ -68,12 +69,14 @@ var (
 // This is where to start if you're creating an extractor queue.
 // You must provide a Logger in the config, everything else is optional.
 func NewQueue(config *Config) *Xtractr {
-	x := parseConfig(config)
-	if err := x.Start(); err != nil {
+	app := parseConfig(config)
+
+	err := app.Start()
+	if err != nil {
 		panic(err)
 	}
 
-	return x
+	return app
 }
 
 // Start restarts the queue. This can be called only after you call Stop().

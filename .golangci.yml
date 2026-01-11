@@ -1,4 +1,4 @@
-version: "2"
+version: '2'
 linters:
   default: all
   disable:
@@ -8,6 +8,7 @@ linters:
     - depguard
     - nonamedreturns
     - forbidigo
+    - wsl
   exclusions:
     rules:
       - linters:
@@ -35,15 +36,15 @@ linters:
       check-blank: false
       disable-default-exclusions: false
       exclude-functions:
-      - (*os.File).Close
-      - os.RemoveAll
-      - os.Remove
-      - os.Chtimes
-      - (io.Closer).Close
-      - (*compress/gzip.Reader).Close
-      - (*archive/zip.ReadCloser).Close
-      - (*github.com/bodgit/sevenzip.ReadCloser).Close
-      - (*github.com/nwaples/rardecode.ReadCloser).Close
+        - (*os.File).Close
+        - os.RemoveAll
+        - os.Remove
+        - os.Chtimes
+        - (io.Closer).Close
+        - (*compress/gzip.Reader).Close
+        - (*archive/zip.ReadCloser).Close
+        - (*github.com/bodgit/sevenzip.ReadCloser).Close
+        - (*github.com/nwaples/rardecode/v2.ReadCloser).Close
 
 issues:
   max-issues-per-linter: 0
@@ -55,4 +56,3 @@ formatters:
     - gofmt
     - gofumpt
     - goimports
-

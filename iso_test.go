@@ -18,6 +18,7 @@ func TestIso(t *testing.T) {
 	testFilesInfo := createTestFiles(t)
 	writer, err := iso9660.NewWriter()
 	require.NoError(t, err, "failed to create writer")
+
 	defer func() {
 		err = writer.Cleanup()
 		require.NoError(t, err, "failed to cleanup writer")
@@ -32,11 +33,13 @@ func TestIso(t *testing.T) {
 		}
 
 		fileToAdd, err := os.Open(path)
+
 		require.NoError(t, err, "failed to open file")
 		defer safeCloser(t, fileToAdd)
 
 		fStat, err := fileToAdd.Stat()
 		require.NoError(t, err, "failed to stat file")
+
 		size += uint64(fStat.Size())
 
 		err = writer.AddFile(fileToAdd, strings.TrimPrefix(fileToAdd.Name(), testFilesInfo.srcFilesDir))
@@ -49,6 +52,7 @@ func TestIso(t *testing.T) {
 	isoFileName := filepath.Join(testFilesInfo.dstFilesDir, "archive.iso")
 
 	isoFile, err := os.Create(isoFileName)
+
 	require.NoError(t, err, "failed to create ISO file")
 	defer safeCloser(t, isoFile)
 
