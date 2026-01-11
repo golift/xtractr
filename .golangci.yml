@@ -42,7 +42,7 @@ linters:
         - (*compress/gzip.Reader).Close
         - (*archive/zip.ReadCloser).Close
         - (*github.com/bodgit/sevenzip.ReadCloser).Close
-        - (*github.com/nwaples/rardecode.ReadCloser).Close
+        - (*github.com/nwaples/rardecode/v2.ReadCloser).Close
 
 issues:
   max-issues-per-linter: 0
