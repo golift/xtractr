@@ -5,9 +5,11 @@ package xtractr
 import (
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 )
@@ -183,12 +185,8 @@ func Difference(slice1, slice2 []string) []string {
 	for _, s2p := range slice2 {
 		var found bool
 
-		for _, s1 := range slice1 {
-			if s1 == s2p {
-				found = true
-
-				break
-			}
+		if slices.Contains(slice1, s2p) {
+			found = true
 		}
 
 		if !found { // String not found, so it's a new string, add it to the diff.
@@ -230,9 +228,12 @@ func findCompressedFiles(path string, filter *Filter, depth int) ArchiveList {
 	}
 	defer dir.Close()
 
-	if info, err := dir.Stat(); err != nil {
+	info, err := dir.Stat()
+	if err != nil {
 		return nil // unreadable folder?
-	} else if !info.IsDir() && IsArchiveFile(path) {
+	}
+
+	if !info.IsDir() && IsArchiveFile(path) {
 		return ArchiveList{path: {path}} // passed in an archive file; send it back out.
 	}
 
@@ -287,9 +288,7 @@ func getCompressedFiles(path string, filter *Filter, fileList []os.FileInfo, dep
 		case lowerName == "" || lowerName[0] == '.':
 			continue // ignore empty names and dot files/folders.
 		case file.IsDir(): // Recurse.
-			for k, v := range findCompressedFiles(filepath.Join(path, file.Name()), filter, depth+1) {
-				files[k] = v
-			}
+			maps.Copy(files, findCompressedFiles(filepath.Join(path, file.Name()), filter, depth+1))
 		case strings.HasSuffix(lowerName, ".rar"):
 			hasParts := regexp.MustCompile(`.*\.part\d+\.rar$`)
 			partOne := regexp.MustCompile(`.*\.part0*1\.rar$`)
@@ -345,13 +344,15 @@ func (x *Xtractr) MoveFiles(fromPath, toPath string, overwrite bool) ([]string, 
 	}
 
 	// If the "to path" is an existing archive file, remove the suffix to make a directory.
-	if _, err := os.Stat(toPath); err == nil && IsArchiveFile(toPath) {
+	_, err = os.Stat(toPath)
+	if err == nil && IsArchiveFile(toPath) {
 		toPath = strings.TrimSuffix(toPath, filepath.Ext(toPath))
 	}
 
 	x.config.Debugf("Moving files: %v (%d files) -> %v", fromPath, len(files), toPath)
 
-	if err := os.MkdirAll(toPath, x.config.DirMode); err != nil {
+	err = os.MkdirAll(toPath, x.config.DirMode)
+	if err != nil {
 		return nil, fmt.Errorf("making final dir: %w", err)
 	}
 
@@ -391,7 +392,8 @@ func (x *Xtractr) MoveFiles(fromPath, toPath string, overwrite bool) ([]string, 
 // DeleteFiles obliterates things and logs. Use with caution.
 func (x *Xtractr) DeleteFiles(files ...string) {
 	for _, file := range files {
-		if err := os.RemoveAll(file); err != nil {
+		err := os.RemoveAll(file)
+		if err != nil {
 			x.config.Printf("Error: Deleting %v: %v", file, err)
 
 			continue
@@ -410,39 +412,10 @@ type file struct {
 	Atime    time.Time
 }
 
-func (x *XFile) mkDir(path string, mode os.FileMode, mtime time.Time) error {
-	defer os.Chtimes(path, time.Time{}, mtime)
-	return os.MkdirAll(path, x.safeDirMode(mode)) //nolint:wrapcheck
-}
-
-// write a file from an io reader, making sure all parent directories exist.
-func (x *XFile) write(file *file) (int64, error) {
-	if err := x.mkDir(filepath.Dir(file.Path), file.DirMode, file.Mtime); err != nil {
-		return 0, fmt.Errorf("writing archived file '%s' parent folder: %w", filepath.Base(file.Path), err)
-	}
-
-	fout, err := os.OpenFile(file.Path, os.O_RDWR|os.O_CREATE|os.O_TRUNC, x.safeFileMode(file.FileMode))
-	if err != nil {
-		return 0, fmt.Errorf("opening archived file for writing: %w", err)
-	}
-	defer fout.Close()
-
-	size, err := io.Copy(fout, file.Data)
-	if err != nil {
-		return size, fmt.Errorf("copying archived file '%s' io: %w", file.Path, err)
-	}
-
-	// If this sucks, make it a defer and ignore the error, like xFile.mkDir().
-	if err = os.Chtimes(file.Path, file.Atime, file.Mtime); err != nil {
-		return size, fmt.Errorf("changing archived file times: %w", err)
-	}
-
-	return size, nil
-}
-
 // Rename is an attempt to deal with "invalid cross link device" on weird file systems.
 func (x *Xtractr) Rename(oldpath, newpath string) error {
-	if err := os.Rename(oldpath, newpath); err == nil {
+	err := os.Rename(oldpath, newpath)
+	if err == nil {
 		return nil
 	}
 
@@ -470,19 +443,6 @@ func (x *Xtractr) Rename(oldpath, newpath string) error {
 	_ = os.Remove(oldpath)
 
 	return nil
-}
-
-// clean returns an absolute path for a file inside the OutputDir.
-// If trim length is > 0, then the suffixes are trimmed, and filepath removed.
-func (x *XFile) clean(filePath string, trim ...string) string {
-	if len(trim) != 0 {
-		filePath = filepath.Base(filePath)
-		for _, suffix := range trim {
-			filePath = strings.TrimSuffix(filePath, suffix)
-		}
-	}
-
-	return filepath.Clean(filepath.Join(x.OutputDir, filePath))
 }
 
 // AllExcept can be used as an input to ExcludeSuffix in a Filter.
@@ -599,4 +559,49 @@ func (x *XFile) safeFileMode(current os.FileMode) os.FileMode {
 	const minimum = 0o400 // ensure owner has read access to the file.
 
 	return current | minimum
+}
+
+func (x *XFile) mkDir(path string, mode os.FileMode, mtime time.Time) error {
+	defer os.Chtimes(path, time.Time{}, mtime)
+	return os.MkdirAll(path, x.safeDirMode(mode)) //nolint:wrapcheck
+}
+
+// write a file from an io reader, making sure all parent directories exist.
+func (x *XFile) write(file *file) (int64, error) {
+	err := x.mkDir(filepath.Dir(file.Path), file.DirMode, file.Mtime)
+	if err != nil {
+		return 0, fmt.Errorf("writing archived file '%s' parent folder: %w", filepath.Base(file.Path), err)
+	}
+
+	fout, err := os.OpenFile(file.Path, os.O_RDWR|os.O_CREATE|os.O_TRUNC, x.safeFileMode(file.FileMode))
+	if err != nil {
+		return 0, fmt.Errorf("opening archived file for writing: %w", err)
+	}
+	defer fout.Close()
+
+	size, err := io.Copy(fout, file.Data)
+	if err != nil {
+		return size, fmt.Errorf("copying archived file '%s' io: %w", file.Path, err)
+	}
+
+	// If this sucks, make it a defer and ignore the error, like xFile.mkDir().
+	err = os.Chtimes(file.Path, file.Atime, file.Mtime)
+	if err != nil {
+		return size, fmt.Errorf("changing archived file times: %w", err)
+	}
+
+	return size, nil
+}
+
+// clean returns an absolute path for a file inside the OutputDir.
+// If trim length is > 0, then the suffixes are trimmed, and filepath removed.
+func (x *XFile) clean(filePath string, trim ...string) string {
+	if len(trim) != 0 {
+		filePath = filepath.Base(filePath)
+		for _, suffix := range trim {
+			filePath = strings.TrimSuffix(filePath, suffix)
+		}
+	}
+
+	return filepath.Clean(filepath.Join(x.OutputDir, filePath))
 }

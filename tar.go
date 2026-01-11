@@ -156,7 +156,8 @@ func (x *XFile) untarFile(header *tar.Header, tarReader *tar.Reader) (int64, err
 	if header.Typeflag == tar.TypeDir {
 		x.Debugf("Writing archived directory: %s", file.Path)
 
-		if err := x.mkDir(file.Path, header.FileInfo().Mode(), header.ModTime); err != nil {
+		err := x.mkDir(file.Path, header.FileInfo().Mode(), header.ModTime)
+		if err != nil {
 			return 0, fmt.Errorf("making tar file dir: %w", err)
 		}
 

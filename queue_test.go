@@ -28,7 +28,7 @@ const (
 
 type testLogger struct{ t *testing.T }
 
-func (l *testLogger) Debugf(msg string, format ...interface{}) {
+func (l *testLogger) Debugf(msg string, format ...any) {
 	l.t.Helper()
 
 	msg = "[DEBUG] " + msg
@@ -36,7 +36,7 @@ func (l *testLogger) Debugf(msg string, format ...interface{}) {
 	log.Printf(msg, format...)
 }
 
-func (l *testLogger) Printf(msg string, format ...interface{}) {
+func (l *testLogger) Printf(msg string, format ...any) {
 	l.t.Helper()
 
 	msg = "[INFO] " + msg
