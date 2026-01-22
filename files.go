@@ -26,7 +26,7 @@ type archive struct {
 }
 
 // Interface is a common interface for extracting compressed or non-compressed files or archives.
-type Interface func(x *XFile) (size int64, filesList, archiveList []string, err error)
+type Interface func(x *XFile) (size uint64, filesList, archiveList []string, err error)
 
 // https://github.com/golift/xtractr/issues/44
 //
@@ -82,8 +82,8 @@ var extension2function = []archive{
 // ChngInt converts the smaller return interface into an ExtractInterface.
 // Functions with multi-part archive files return four values. Other functions return only 3.
 // This ChngInt function makes both interfaces compatible.
-func ChngInt(smallFn func(*XFile) (int64, []string, error)) Interface {
-	return func(xFile *XFile) (int64, []string, []string, error) {
+func ChngInt(smallFn func(*XFile) (uint64, []string, error)) Interface {
+	return func(xFile *XFile) (uint64, []string, []string, error) {
 		size, files, err := smallFn(xFile)
 		return size, files, []string{xFile.FilePath}, err
 	}
@@ -114,6 +114,13 @@ type XFile struct {
 	Password string
 	// (RAR/7z) Archive passwords (to try multiple).
 	Passwords []string
+	// Progress is called periodically during file extraction.
+	// Contains info about the progress of the extraction.
+	// This is not called if an Updates channel is also provided.
+	Progress func(Progress)
+	// If an Updates channel is provided, all Progress updates are sent to it.
+	// Contains info about the progress of the extraction.
+	Updates chan Progress
 	// If the archive only has one directory in the root, then setting
 	// this true will cause the extracted content to be moved into the
 	// output folder, and the root folder in the archive to be removed.
@@ -121,6 +128,7 @@ type XFile struct {
 	// Logger allows printing debug messages.
 	log       Logger
 	moveFiles func(fromPath, toPath string, overwrite bool) ([]string, error)
+	prog      *Progress
 }
 
 // Filter is the input to find compressed files.
@@ -309,13 +317,13 @@ func getCompressedFiles(path string, filter *Filter, fileList []os.FileInfo, dep
 
 // Extract calls the correct procedure for the type of file being extracted.
 // Returns size of extracted data, list of extracted files, and/or error.
-func (x *XFile) Extract() (size int64, filesList, archiveList []string, err error) {
+func (x *XFile) Extract() (size uint64, filesList, archiveList []string, err error) {
 	return ExtractFile(x)
 }
 
 // ExtractFile calls the correct procedure for the type of file being extracted.
 // Returns size of extracted data, list of extracted files, list of archives processed, and/or error.
-func ExtractFile(xFile *XFile) (size int64, filesList, archiveList []string, err error) {
+func ExtractFile(xFile *XFile) (size uint64, filesList, archiveList []string, err error) {
 	sName := strings.ToLower(xFile.FilePath)
 	// just borrowing this... Has to go into an interface to avoid a cycle.
 	xFile.moveFiles = parseConfig(&Config{Logger: xFile.log}).MoveFiles
@@ -561,13 +569,28 @@ func (x *XFile) safeFileMode(current os.FileMode) os.FileMode {
 	return current | minimum
 }
 
+func openStatFile(path string) (*os.File, os.FileInfo, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, nil, fmt.Errorf("os.Open: %w", err)
+	}
+
+	stat, err := file.Stat()
+	if err != nil {
+		_ = file.Close()
+		return nil, nil, fmt.Errorf("file.Stat: %w", err)
+	}
+
+	return file, stat, nil
+}
+
 func (x *XFile) mkDir(path string, mode os.FileMode, mtime time.Time) error {
 	defer os.Chtimes(path, time.Time{}, mtime)
 	return os.MkdirAll(path, x.safeDirMode(mode)) //nolint:wrapcheck
 }
 
 // write a file from an io reader, making sure all parent directories exist.
-func (x *XFile) write(file *file) (int64, error) {
+func (x *XFile) write(file *file) (uint64, error) {
 	err := x.mkDir(filepath.Dir(file.Path), file.DirMode, file.Mtime)
 	if err != nil {
 		return 0, fmt.Errorf("writing archived file '%s' parent folder: %w", filepath.Base(file.Path), err)
@@ -579,18 +602,18 @@ func (x *XFile) write(file *file) (int64, error) {
 	}
 	defer fout.Close()
 
-	size, err := io.Copy(fout, file.Data)
+	size, err := io.Copy(x.prog.writer(fout), file.Data)
 	if err != nil {
-		return size, fmt.Errorf("copying archived file '%s' io: %w", file.Path, err)
+		return uint64(size), fmt.Errorf("copying archived file '%s' io: %w", file.Path, err)
 	}
 
 	// If this sucks, make it a defer and ignore the error, like xFile.mkDir().
 	err = os.Chtimes(file.Path, file.Atime, file.Mtime)
 	if err != nil {
-		return size, fmt.Errorf("changing archived file times: %w", err)
+		return uint64(size), fmt.Errorf("changing archived file times: %w", err)
 	}
 
-	return size, nil
+	return uint64(size), nil
 }
 
 // clean returns an absolute path for a file inside the OutputDir.

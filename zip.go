@@ -11,34 +11,45 @@ import (
 /* How to extract a ZIP file. */
 
 // ExtractZIP extracts a zip file.. to a destination. Simple enough.
-func ExtractZIP(xFile *XFile) (size int64, filesList []string, err error) {
+func ExtractZIP(xFile *XFile) (size uint64, filesList []string, err error) {
 	zipReader, err := zip.OpenReader(xFile.FilePath)
 	if err != nil {
 		return 0, nil, fmt.Errorf("zip.OpenReader: %w", err)
 	}
 	defer zipReader.Close()
 
+	defer xFile.newProgress(getUncompressedZipSize(zipReader)).done()
+
 	files := []string{}
-	size = int64(0)
 
 	for _, zipFile := range zipReader.File {
 		fSize, wfile, err := xFile.unzip(zipFile)
 		if err != nil {
-			return size, files, fmt.Errorf("%s: %w", xFile.FilePath, err)
+			return xFile.prog.Wrote, files, fmt.Errorf("%s: %w", xFile.FilePath, err)
 		}
 
 		//nolint:gosec // this is safe because we clean the paths.
 		files = append(files, filepath.Join(xFile.OutputDir, zipFile.Name))
-		size += fSize
-		xFile.Debugf("Wrote archived file: %s (%d bytes), total: %d files and %d bytes", wfile, fSize, len(files), size)
+		xFile.Debugf("Wrote archived file: %s (%d bytes), total: %d files and %d bytes",
+			wfile, fSize, xFile.prog.Files, xFile.prog.Wrote)
 	}
 
 	files, err = xFile.cleanup(files)
 
-	return size, files, err
+	return xFile.prog.Wrote, files, err
 }
 
-func (x *XFile) unzip(zipFile *zip.File) (int64, string, error) {
+func getUncompressedZipSize(zipReader *zip.ReadCloser) (total, compressed uint64, count int) {
+	for _, zipFile := range zipReader.File {
+		total += zipFile.UncompressedSize64
+		// compressed += zipFile.CompressedSize64
+		count++
+	}
+
+	return total, 0, count
+}
+
+func (x *XFile) unzip(zipFile *zip.File) (uint64, string, error) {
 	zFile, err := zipFile.Open()
 	if err != nil {
 		return 0, zipFile.Name, fmt.Errorf("zipFile.Open: %w", err)

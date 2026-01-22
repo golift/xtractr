@@ -7,6 +7,7 @@ linters:
     - exhaustruct
     - depguard
     - nonamedreturns
+    - forbidigo
     - wsl
   exclusions:
     rules:
@@ -21,6 +22,7 @@ linters:
     gosec:
       excludes:
         - G304
+        - G115
     gocritic:
       enable-all: true
       disabled-checks:
@@ -31,8 +33,8 @@ linters:
           checkExported: true
     errcheck:
       check-type-assertions: true
-      check-blank: true
-      disable-default-exclusions: true
+      check-blank: false
+      disable-default-exclusions: false
       exclude-functions:
         - (*os.File).Close
         - os.RemoveAll

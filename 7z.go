@@ -10,7 +10,7 @@ import (
 
 // Extract7z extracts a 7zip archive.
 // Volumes: https://github.com/bodgit/sevenzip/issues/54
-func Extract7z(xFile *XFile) (size int64, filesList, archiveList []string, err error) {
+func Extract7z(xFile *XFile) (size uint64, filesList, archiveList []string, err error) {
 	if len(xFile.Passwords) == 0 && xFile.Password == "" {
 		return extract7z(xFile)
 	}
@@ -41,50 +41,51 @@ func Extract7z(xFile *XFile) (size int64, filesList, archiveList []string, err e
 	return 0, nil, nil, nil
 }
 
-func extract7z(xFile *XFile) (int64, []string, []string, error) {
-	var (
-		sevenZip *sevenzip.ReadCloser
-		err      error
-	)
-
-	if xFile.Password != "" {
-		sevenZip, err = sevenzip.OpenReaderWithPassword(xFile.FilePath, xFile.Password)
-	} else {
-		sevenZip, err = sevenzip.OpenReader(xFile.FilePath)
-	}
-
+func extract7z(xFile *XFile) (uint64, []string, []string, error) {
+	sevenZip, err := sevenzip.OpenReaderWithPassword(xFile.FilePath, xFile.Password)
 	if err != nil {
 		return 0, nil, nil, fmt.Errorf("%s: os.Open: %w", xFile.FilePath, err)
 	}
 
+	defer xFile.newProgress(getUncompressed7zSize(sevenZip)).done() // this closes sevenZip
+
+	sevenZip, err = sevenzip.OpenReaderWithPassword(xFile.FilePath, xFile.Password)
+	if err != nil {
+		return 0, nil, nil, fmt.Errorf("%s: os.Open: %w", xFile.FilePath, err)
+	}
 	defer sevenZip.Close()
 
 	files := []string{}
-	size := int64(0)
 
 	for _, zipFile := range sevenZip.File {
 		fSize, wfile, err := xFile.un7zip(zipFile)
 		if err != nil {
-			lastFile := xFile.FilePath
-			/* // https://github.com/bodgit/sevenzip/issues/54
-			// We can probably never get the file with the error.
-			if volumes := sevenZip.Volumes(); len(volumes) > 0 {
-				lastFile = volumes[len(volumes)-1]
-			} */
-			return size, files, sevenZip.Volumes(), fmt.Errorf("%s: %w", lastFile, err)
+			return xFile.prog.Wrote, files, []string{xFile.FilePath}, fmt.Errorf("%s: %w", xFile.FilePath, err)
 		}
 
 		files = append(files, filepath.Join(xFile.OutputDir, zipFile.Name))
-		size += fSize
-		xFile.Debugf("Wrote archived file: %s (%d bytes), total: %d files and %d bytes", wfile, fSize, len(files), size)
+		xFile.Debugf("Wrote archived file: %s (%d bytes), total: %d files and %d bytes",
+			wfile, fSize, xFile.prog.Files, xFile.prog.Wrote)
 	}
 
 	files, err = xFile.cleanup(files)
 
-	return size, files, sevenZip.Volumes(), err
+	return xFile.prog.Wrote, files, []string{xFile.FilePath}, err
 }
 
-func (x *XFile) un7zip(zipFile *sevenzip.File) (int64, string, error) {
+func getUncompressed7zSize(reader *sevenzip.ReadCloser) (total, compressed uint64, count int) {
+	defer reader.Close()
+
+	for _, zipFile := range reader.File {
+		total += zipFile.UncompressedSize
+		// compressed += uint64(zipFile.FileInfo().Size())
+		count++
+	}
+
+	return total, 0, count
+}
+
+func (x *XFile) un7zip(zipFile *sevenzip.File) (uint64, string, error) {
 	zFile, err := zipFile.Open()
 	if err != nil {
 		return 0, zipFile.Name, fmt.Errorf("zipFile.Open: %w", err)
