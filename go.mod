@@ -2,7 +2,7 @@ module golift.io/xtractr
 
 go 1.24.0
 
-toolchain go1.25.5
+toolchain go1.25.7
 
 require (
 	github.com/andybalholm/brotli v1.2.0
