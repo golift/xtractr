@@ -258,7 +258,7 @@ func findCompressedFiles(path string, filter *Filter, depth int) ArchiveList {
 		return nil
 	}
 
-	var fileList []os.FileInfo
+	fileList := make([]os.FileInfo, 0, len(names))
 
 	for _, name := range names {
 		if len(name) > 0 && name[0] == '.' {
