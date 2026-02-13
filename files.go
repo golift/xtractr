@@ -245,14 +245,6 @@ func findCompressedFiles(path string, filter *Filter, depth int) ArchiveList {
 		return ArchiveList{path: {path}} // passed in an archive file; send it back out.
 	}
 
-	// Use Readdirnames + individual Lstat instead of Readdir to handle
-	// filesystems where some directory entries are unreadable (e.g. macOS
-	// AppleDouble "._" metadata files on NFS/SMB mounts inside Docker
-	// containers). Readdir fails entirely when it encounters an entry it
-	// cannot stat, returning zero results. This approach reads only names
-	// first, skips dot-prefixed entries, then individually stats the rest,
-	// gracefully skipping any entries that cannot be read.
-	// See: https://github.com/Unpackerr/unpackerr/issues/541
 	names, err := dir.Readdirnames(-1)
 	if err != nil {
 		return nil
@@ -261,7 +253,7 @@ func findCompressedFiles(path string, filter *Filter, depth int) ArchiveList {
 	fileList := make([]os.FileInfo, 0, len(names))
 
 	for _, name := range names {
-		if len(name) > 0 && name[0] == '.' {
+		if len(name) == 0 || name[0] == '.' {
 			continue // skip dot files (including AppleDouble ._* entries)
 		}
 
