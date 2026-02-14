@@ -116,6 +116,7 @@ func TestFindCompressedFiles(t *testing.T) {
 	assert.Equal(t, 8, total, "When skipping the four ISOs, we have 8 archives remaining.")
 }
 
+//nolint:gosec
 func TestFindCompressedFilesSkipsDotFiles(t *testing.T) {
 	t.Parallel()
 
