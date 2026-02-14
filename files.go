@@ -245,7 +245,7 @@ func findCompressedFiles(path string, filter *Filter, depth int) ArchiveList {
 		return ArchiveList{path: {path}} // passed in an archive file; send it back out.
 	}
 
-	fileList := getFilteredArchiveList(path, dir)
+	fileList := getFilteredFileList(path, dir)
 	if len(fileList) == 0 {
 		return nil
 	}
@@ -253,7 +253,8 @@ func findCompressedFiles(path string, filter *Filter, depth int) ArchiveList {
 	return getCompressedFiles(path, filter, fileList, depth)
 }
 
-func getFilteredArchiveList(path string, dir *os.File) []os.FileInfo {
+// getFilteredFileList reads the directory and returns a list of readable files that are not dot files.
+func getFilteredFileList(path string, dir *os.File) []os.FileInfo {
 	names, _ := dir.Readdirnames(-1)
 	fileList := make([]os.FileInfo, 0, len(names))
 
@@ -522,7 +523,7 @@ func (a ArchiveList) Random() []string {
 
 // List returns all of the archives as a string slice.
 func (a ArchiveList) List() []string {
-	list := []string{}
+	list := make([]string, 0, len(a))
 
 	for _, files := range a {
 		list = append(list, files...)
