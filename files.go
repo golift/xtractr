@@ -245,8 +245,27 @@ func findCompressedFiles(path string, filter *Filter, depth int) ArchiveList {
 		return ArchiveList{path: {path}} // passed in an archive file; send it back out.
 	}
 
-	fileList, err := dir.Readdir(-1)
+	names, err := dir.Readdirnames(-1)
 	if err != nil {
+		return nil
+	}
+
+	fileList := make([]os.FileInfo, 0, len(names))
+
+	for _, name := range names {
+		if len(name) == 0 || name[0] == '.' {
+			continue // skip dot files (including AppleDouble ._* entries)
+		}
+
+		info, err := os.Lstat(filepath.Join(path, name))
+		if err != nil {
+			continue // skip entries we can't stat
+		}
+
+		fileList = append(fileList, info)
+	}
+
+	if len(fileList) == 0 {
 		return nil
 	}
 
