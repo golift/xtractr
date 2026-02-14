@@ -14,7 +14,7 @@ require (
 	github.com/klauspost/compress v1.18.4
 	github.com/nwaples/rardecode/v2 v2.2.2
 	github.com/peterebden/ar v0.0.0-20241106141004-20dc11b778e8
-	github.com/pierrec/lz4/v4 v4.1.23
+	github.com/pierrec/lz4/v4 v4.1.25
 	github.com/sshaman1101/dcompress v0.0.0-20200109162717-50436a6332de
 	github.com/stretchr/testify v1.11.1
 	github.com/therootcompany/xz v1.0.1
