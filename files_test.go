@@ -116,19 +116,18 @@ func TestFindCompressedFiles(t *testing.T) {
 	assert.Equal(t, 8, total, "When skipping the four ISOs, we have 8 archives remaining.")
 }
 
-//nolint:gosec
 func TestFindCompressedFilesSkipsDotFiles(t *testing.T) {
 	t.Parallel()
 
 	base := t.TempDir()
 
 	// Valid archive files that should be found.
-	require.NoError(t, os.WriteFile(filepath.Join(base, "file.rar"), []byte("content"), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(base, "file.zip"), []byte("content"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(base, "file.rar"), []byte("content"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(base, "file.zip"), []byte("content"), 0o600))
 	// Dot-prefixed files mimicking macOS AppleDouble metadata entries.
 	// These caused Readdir to fail on NFS/SMB mounts in Docker (Unpackerr/unpackerr#541).
-	require.NoError(t, os.WriteFile(filepath.Join(base, "._file.rar"), []byte("metadata"), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(base, ".DS_Store"), []byte("metadata"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(base, "._file.rar"), []byte("metadata"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(base, ".DS_Store"), []byte("metadata"), 0o600))
 
 	paths := xtractr.FindCompressedFiles(xtractr.Filter{Path: base})
 	assert.NotNil(t, paths, "archives should be found even when dot-prefixed files are present")
