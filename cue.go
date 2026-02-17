@@ -62,7 +62,9 @@ const cdFramesPerSecond = 75
 
 // toSamples converts a CUE timestamp to a sample position at the given sample rate.
 func (t cueTimestamp) toSamples(sampleRate uint32) uint64 {
-	totalSeconds := uint64(t.minutes)*60 + uint64(t.seconds)
+	const secondsPerMinute = 60
+
+	totalSeconds := uint64(t.minutes)*secondsPerMinute + uint64(t.seconds)
 	samples := totalSeconds * uint64(sampleRate)
 	// Add fractional second from CD frames.
 	samples += uint64(t.frames) * uint64(sampleRate) / cdFramesPerSecond
@@ -72,7 +74,7 @@ func (t cueTimestamp) toSamples(sampleRate uint32) uint64 {
 
 // ExtractCUE extracts individual tracks from a FLAC file referenced by a CUE sheet.
 // The xFile.FilePath should point to the .cue file.
-func ExtractCUE(xFile *XFile) (uint64, []string, []string, error) {
+func ExtractCUE(xFile *XFile) (size uint64, files, archives []string, err error) {
 	cue, timestamps, err := parseCueSheetFile(xFile.FilePath)
 	if err != nil {
 		return 0, nil, nil, fmt.Errorf("parsing cue sheet: %w", err)
@@ -83,7 +85,8 @@ func ExtractCUE(xFile *XFile) (uint64, []string, []string, error) {
 	audioPath := filepath.Join(cueDir, cue.File)
 
 	// Check that the audio file exists.
-	if _, err := os.Stat(audioPath); err != nil {
+	_, err = os.Stat(audioPath)
+	if err != nil {
 		return 0, nil, nil, fmt.Errorf("%w: %s", ErrAudioNotFound, audioPath)
 	}
 
@@ -93,15 +96,15 @@ func ExtractCUE(xFile *XFile) (uint64, []string, []string, error) {
 		return 0, nil, nil, fmt.Errorf("%w: %s", ErrUnsupportedAudio, ext)
 	}
 
-	size, files, err := splitFLAC(xFile, audioPath, cue, timestamps)
+	size, files, err = splitFLAC(xFile, audioPath, cue, timestamps)
 	if err != nil {
 		return 0, nil, nil, err
 	}
 
 	// The archive list includes both the CUE file and the FLAC file.
-	archiveList := []string{xFile.FilePath, audioPath}
+	archives = []string{xFile.FilePath, audioPath}
 
-	return size, files, archiveList, nil
+	return size, files, archives, nil
 }
 
 // parseCueSheetFile parses a CUE sheet from a file path and returns the sheet plus raw timestamps.
@@ -116,7 +119,7 @@ func parseCueSheetFile(path string) (*CueSheet, []cueTimestamp, error) {
 }
 
 // parseCueSheet parses a CUE sheet from an io.Reader.
-func parseCueSheet(reader io.Reader) (*CueSheet, []cueTimestamp, error) {
+func parseCueSheet(reader io.Reader) (*CueSheet, []cueTimestamp, error) { //nolint:gocognit,cyclop,funlen
 	cue := &CueSheet{}
 	scanner := bufio.NewScanner(reader)
 	timestamps := []cueTimestamp{}
@@ -191,7 +194,8 @@ func parseCueSheet(reader io.Reader) (*CueSheet, []cueTimestamp, error) {
 		}
 	}
 
-	if err := scanner.Err(); err != nil {
+	err := scanner.Err()
+	if err != nil {
 		return nil, nil, fmt.Errorf("reading cue sheet: %w", err)
 	}
 
@@ -224,13 +228,13 @@ func splitCueLine(line string) (string, string) {
 }
 
 // unquoteCue removes surrounding double quotes from a CUE sheet value.
-func unquoteCue(s string) string {
-	s = strings.TrimSpace(s)
-	if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' { //nolint:mnd
-		return s[1 : len(s)-1]
+func unquoteCue(val string) string {
+	val = strings.TrimSpace(val)
+	if len(val) >= 2 && val[0] == '"' && val[len(val)-1] == '"' {
+		return val[1 : len(val)-1]
 	}
 
-	return s
+	return val
 }
 
 // parseCueFileCmd parses the FILE command arguments: "filename.flac" WAVE.
@@ -305,13 +309,16 @@ func parseCueTime(s string) cueTimestamp {
 }
 
 // splitFLAC splits a FLAC file into individual tracks based on CUE sheet data.
+//
+//nolint:funlen
 func splitFLAC(xFile *XFile, audioPath string, cue *CueSheet, timestamps []cueTimestamp) (uint64, []string, error) {
 	// Open and parse the FLAC file.
 	stream, err := flac.Open(audioPath)
 	if err != nil {
 		return 0, nil, fmt.Errorf("opening flac file: %w", err)
 	}
-	defer stream.Close()
+
+	defer func() { _ = stream.Close() }()
 
 	sampleRate := stream.Info.SampleRate
 	totalSamples := stream.Info.NSamples
@@ -333,7 +340,8 @@ func splitFLAC(xFile *XFile, audioPath string, cue *CueSheet, timestamps []cueTi
 	}
 
 	// Ensure output directory exists.
-	if err := os.MkdirAll(xFile.OutputDir, xFile.DirMode); err != nil {
+	err = os.MkdirAll(xFile.OutputDir, xFile.DirMode)
+	if err != nil {
 		return 0, nil, fmt.Errorf("creating output directory: %w", err)
 	}
 
@@ -369,6 +377,7 @@ func splitFLAC(xFile *XFile, audioPath string, cue *CueSheet, timestamps []cueTi
 		}
 
 		totalSize += size
+
 		files = append(files, outputPath)
 		xFile.Debugf("Wrote track %d: %s (%d bytes)", track.Number, outputPath, size)
 	}
@@ -391,7 +400,7 @@ func readAllFrames(stream *flac.Stream) ([]flacFrame, error) {
 	)
 
 	for {
-		f, err := stream.ParseNext()
+		parsed, err := stream.ParseNext()
 		if errors.Is(err, io.EOF) {
 			break
 		}
@@ -400,9 +409,9 @@ func readAllFrames(stream *flac.Stream) ([]flacFrame, error) {
 			return nil, fmt.Errorf("parsing flac frame: %w", err)
 		}
 
-		nsamples := uint64(f.Subframes[0].NSamples)
+		nsamples := uint64(parsed.Subframes[0].NSamples)
 		frames = append(frames, flacFrame{
-			frame:       f,
+			frame:       parsed,
 			sampleStart: samplePos,
 			sampleEnd:   samplePos + nsamples,
 		})
@@ -414,7 +423,7 @@ func readAllFrames(stream *flac.Stream) ([]flacFrame, error) {
 
 // writeTrackFLAC writes a subset of FLAC frames to a new FLAC file for a single track.
 // Frames are split at sample boundaries when they span track boundaries.
-func writeTrackFLAC(
+func writeTrackFLAC( //nolint:funlen
 	outputPath string,
 	srcInfo *meta.StreamInfo,
 	allFrames []flacFrame,
@@ -442,39 +451,41 @@ func writeTrackFLAC(
 
 	enc, err := flac.NewEncoder(outFile, trackInfo)
 	if err != nil {
-		outFile.Close()
+		_ = outFile.Close()
 		return 0, fmt.Errorf("creating flac encoder: %w", err)
 	}
 
 	for idx := range allFrames {
-		ff := &allFrames[idx]
+		srcFrame := &allFrames[idx]
 		// Skip frames entirely outside the track range.
-		if ff.sampleEnd <= startSample || ff.sampleStart >= endSample {
+		if srcFrame.sampleEnd <= startSample || srcFrame.sampleStart >= endSample {
 			continue
 		}
 
 		// Determine which portion of this frame belongs to the track.
-		clipStart := max(ff.sampleStart, startSample)
-		clipEnd := min(ff.sampleEnd, endSample)
+		clipStart := max(srcFrame.sampleStart, startSample)
+		clipEnd := min(srcFrame.sampleEnd, endSample)
 
-		origSamples := int(ff.sampleEnd - ff.sampleStart)
-		offsetInFrame := int(clipStart - ff.sampleStart)
+		origSamples := int(srcFrame.sampleEnd - srcFrame.sampleStart)
+		offsetInFrame := int(clipStart - srcFrame.sampleStart)
 		samplesToTake := int(clipEnd - clipStart)
 
 		if samplesToTake <= 0 {
 			continue
 		}
 
-		outFrame := buildOutputFrame(ff.frame, offsetInFrame, samplesToTake, origSamples)
+		outFrame := buildOutputFrame(srcFrame.frame, offsetInFrame, samplesToTake, origSamples)
 
-		if err := enc.WriteFrame(outFrame); err != nil {
-			outFile.Close()
+		err = enc.WriteFrame(outFrame)
+		if err != nil {
+			_ = outFile.Close()
 			return 0, fmt.Errorf("writing flac frame: %w", err)
 		}
 	}
 
 	// enc.Close() also closes the underlying file via io.Closer.
-	if err := enc.Close(); err != nil {
+	err = enc.Close()
+	if err != nil {
 		return 0, fmt.Errorf("closing flac encoder: %w", err)
 	}
 

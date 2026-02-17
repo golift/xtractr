@@ -28,6 +28,7 @@ func generateTestFLAC(t *testing.T, path string, totalSamples uint64) {
 
 	outFile, err := os.Create(path)
 	require.NoError(t, err, "creating test FLAC file")
+
 	defer outFile.Close()
 
 	info := &meta.StreamInfo{
@@ -53,14 +54,14 @@ func generateTestFLAC(t *testing.T, path string, totalSamples uint64) {
 		leftSamples := make([]int32, blockSize)
 		rightSamples := make([]int32, blockSize)
 
-		for i := uint64(0); i < blockSize; i++ {
+		for i := range blockSize {
 			sampleNum := samplesWritten + i
 			val := int32(16000 * math.Sin(2*math.Pi*440*float64(sampleNum)/float64(testSampleRate)))
 			leftSamples[i] = val
 			rightSamples[i] = val
 		}
 
-		f := &frame.Frame{
+		audioFrame := &frame.Frame{
 			Header: frame.Header{
 				HasFixedBlockSize: false,
 				BlockSize:         uint16(blockSize),
@@ -88,7 +89,8 @@ func generateTestFLAC(t *testing.T, path string, totalSamples uint64) {
 			},
 		}
 
-		require.NoError(t, enc.WriteFrame(f), "writing FLAC frame")
+		require.NoError(t, enc.WriteFrame(audioFrame), "writing FLAC frame")
+
 		samplesWritten += blockSize
 	}
 
@@ -116,16 +118,29 @@ func TestCueExtractCUE(t *testing.T) {
 	require.NoError(t, err, "opening generated FLAC file")
 	assert.Equal(t, uint32(testSampleRate), stream.Info.SampleRate)
 	assert.Equal(t, uint8(testNChannels), stream.Info.NChannels)
-	stream.Close()
+	require.NoError(t, stream.Close())
 
-	cueContent := "PERFORMER \"Test Artist\"\nTITLE \"Test Album\"\nFILE \"album.flac\" WAVE\n  TRACK 01 AUDIO\n    TITLE \"First Song\"\n    INDEX 01 00:00:00\n  TRACK 02 AUDIO\n    TITLE \"Second Song\"\n    INDEX 01 01:00:00\n  TRACK 03 AUDIO\n    TITLE \"Third Song\"\n    INDEX 01 02:00:00\n"
+	cueContent := strings.Join([]string{
+		`PERFORMER "Test Artist"`,
+		`TITLE "Test Album"`,
+		`FILE "album.flac" WAVE`,
+		`  TRACK 01 AUDIO`,
+		`    TITLE "First Song"`,
+		`    INDEX 01 00:00:00`,
+		`  TRACK 02 AUDIO`,
+		`    TITLE "Second Song"`,
+		`    INDEX 01 01:00:00`,
+		`  TRACK 03 AUDIO`,
+		`    TITLE "Third Song"`,
+		`    INDEX 01 02:00:00`,
+	}, "\n") + "\n"
 	cuePath := filepath.Join(tmpDir, "album.cue")
-	require.NoError(t, os.WriteFile(cuePath, []byte(cueContent), 0o644))
+	require.NoError(t, os.WriteFile(cuePath, []byte(cueContent), 0o600))
 
 	xFile := &xtractr.XFile{
 		FilePath:  cuePath,
 		OutputDir: outputDir,
-		FileMode:  0o644,
+		FileMode:  0o600,
 		DirMode:   0o755,
 	}
 
@@ -133,7 +148,7 @@ func TestCueExtractCUE(t *testing.T) {
 	require.NoError(t, err, "extracting CUE+FLAC")
 
 	assert.Len(t, files, 3, "expected 3 extracted track files")
-	assert.Greater(t, size, uint64(0), "total size should be > 0")
+	assert.Positive(t, size, "total size should be > 0")
 	assert.Len(t, archiveList, 2, "archive list should contain cue and flac files")
 	assert.Contains(t, archiveList, cuePath)
 	assert.Contains(t, archiveList, flacPath)
@@ -150,8 +165,8 @@ func TestCueExtractCUE(t *testing.T) {
 		require.NoError(t, err, "opening track FLAC file: %s", files[idx])
 		assert.Equal(t, uint32(testSampleRate), trackStream.Info.SampleRate)
 		assert.Equal(t, uint8(testNChannels), trackStream.Info.NChannels)
-		assert.Greater(t, trackStream.Info.NSamples, uint64(0), "track should have samples")
-		trackStream.Close()
+		assert.Positive(t, trackStream.Info.NSamples, "track should have samples")
+		require.NoError(t, trackStream.Close())
 	}
 }
 
@@ -165,14 +180,24 @@ func TestCueExtractViaExtractFile(t *testing.T) {
 	flacPath := filepath.Join(tmpDir, "album.flac")
 	generateTestFLAC(t, flacPath, totalSamples)
 
-	cueContent := "PERFORMER \"Artist\"\nTITLE \"Album\"\nFILE \"album.flac\" WAVE\n  TRACK 01 AUDIO\n    TITLE \"Track One\"\n    INDEX 01 00:00:00\n  TRACK 02 AUDIO\n    TITLE \"Track Two\"\n    INDEX 01 00:15:00\n"
+	cueContent := strings.Join([]string{
+		`PERFORMER "Artist"`,
+		`TITLE "Album"`,
+		`FILE "album.flac" WAVE`,
+		`  TRACK 01 AUDIO`,
+		`    TITLE "Track One"`,
+		`    INDEX 01 00:00:00`,
+		`  TRACK 02 AUDIO`,
+		`    TITLE "Track Two"`,
+		`    INDEX 01 00:15:00`,
+	}, "\n") + "\n"
 	cuePath := filepath.Join(tmpDir, "album.cue")
-	require.NoError(t, os.WriteFile(cuePath, []byte(cueContent), 0o644))
+	require.NoError(t, os.WriteFile(cuePath, []byte(cueContent), 0o600))
 
 	xFile := &xtractr.XFile{
 		FilePath:  cuePath,
 		OutputDir: outputDir,
-		FileMode:  0o644,
+		FileMode:  0o600,
 		DirMode:   0o755,
 	}
 
@@ -180,7 +205,7 @@ func TestCueExtractViaExtractFile(t *testing.T) {
 	require.NoError(t, err, "ExtractFile with .cue")
 	assert.Len(t, files, 2)
 	assert.Len(t, archiveList, 2)
-	assert.Greater(t, size, uint64(0))
+	assert.Positive(t, size)
 }
 
 func TestCueMissingFlac(t *testing.T) {
@@ -189,18 +214,23 @@ func TestCueMissingFlac(t *testing.T) {
 	tmpDir := t.TempDir()
 	outputDir := filepath.Join(tmpDir, "output")
 
-	cueContent := "FILE \"nonexistent.flac\" WAVE\n  TRACK 01 AUDIO\n    TITLE \"Track\"\n    INDEX 01 00:00:00\n"
+	cueContent := strings.Join([]string{
+		`FILE "nonexistent.flac" WAVE`,
+		`  TRACK 01 AUDIO`,
+		`    TITLE "Track"`,
+		`    INDEX 01 00:00:00`,
+	}, "\n") + "\n"
 	cuePath := filepath.Join(tmpDir, "test.cue")
-	require.NoError(t, os.WriteFile(cuePath, []byte(cueContent), 0o644))
+	require.NoError(t, os.WriteFile(cuePath, []byte(cueContent), 0o600))
 
 	xFile := &xtractr.XFile{
 		FilePath:  cuePath,
 		OutputDir: outputDir,
-		FileMode:  0o644,
+		FileMode:  0o600,
 		DirMode:   0o755,
 	}
 
-	_, _, _, err := xtractr.ExtractCUE(xFile)
+	_, _, _, err := xtractr.ExtractCUE(xFile) //nolint:dogsled
 	assert.ErrorIs(t, err, xtractr.ErrAudioNotFound)
 }
 
@@ -211,20 +241,25 @@ func TestCueUnsupportedFormat(t *testing.T) {
 	outputDir := filepath.Join(tmpDir, "output")
 
 	wavPath := filepath.Join(tmpDir, "album.wav")
-	require.NoError(t, os.WriteFile(wavPath, []byte("fake"), 0o644))
+	require.NoError(t, os.WriteFile(wavPath, []byte("fake"), 0o600))
 
-	cueContent := "FILE \"album.wav\" WAVE\n  TRACK 01 AUDIO\n    TITLE \"Track\"\n    INDEX 01 00:00:00\n"
+	cueContent := strings.Join([]string{
+		`FILE "album.wav" WAVE`,
+		`  TRACK 01 AUDIO`,
+		`    TITLE "Track"`,
+		`    INDEX 01 00:00:00`,
+	}, "\n") + "\n"
 	cuePath := filepath.Join(tmpDir, "test.cue")
-	require.NoError(t, os.WriteFile(cuePath, []byte(cueContent), 0o644))
+	require.NoError(t, os.WriteFile(cuePath, []byte(cueContent), 0o600))
 
 	xFile := &xtractr.XFile{
 		FilePath:  cuePath,
 		OutputDir: outputDir,
-		FileMode:  0o644,
+		FileMode:  0o600,
 		DirMode:   0o755,
 	}
 
-	_, _, _, err := xtractr.ExtractCUE(xFile)
+	_, _, _, err := xtractr.ExtractCUE(xFile) //nolint:dogsled
 	assert.ErrorIs(t, err, xtractr.ErrUnsupportedAudio)
 }
 
@@ -238,14 +273,22 @@ func TestCueTimestampConversion(t *testing.T) {
 	flacPath := filepath.Join(tmpDir, "album.flac")
 	generateTestFLAC(t, flacPath, totalSamples)
 
-	cueContent := "FILE \"album.flac\" WAVE\n  TRACK 01 AUDIO\n    TITLE \"A\"\n    INDEX 01 00:00:00\n  TRACK 02 AUDIO\n    TITLE \"B\"\n    INDEX 01 05:15:37\n"
+	cueContent := strings.Join([]string{
+		`FILE "album.flac" WAVE`,
+		`  TRACK 01 AUDIO`,
+		`    TITLE "A"`,
+		`    INDEX 01 00:00:00`,
+		`  TRACK 02 AUDIO`,
+		`    TITLE "B"`,
+		`    INDEX 01 05:15:37`,
+	}, "\n") + "\n"
 	cuePath := filepath.Join(tmpDir, "test.cue")
-	require.NoError(t, os.WriteFile(cuePath, []byte(cueContent), 0o644))
+	require.NoError(t, os.WriteFile(cuePath, []byte(cueContent), 0o600))
 
 	xFile := &xtractr.XFile{
 		FilePath:  cuePath,
 		OutputDir: outputDir,
-		FileMode:  0o644,
+		FileMode:  0o600,
 		DirMode:   0o755,
 	}
 
@@ -255,6 +298,7 @@ func TestCueTimestampConversion(t *testing.T) {
 
 	stream1, err := flac.Open(files[0])
 	require.NoError(t, err)
+
 	defer stream1.Close()
 
 	expectedTrack1Samples := uint64((5*60+15)*testSampleRate) + uint64(37*testSampleRate/75)
@@ -263,6 +307,7 @@ func TestCueTimestampConversion(t *testing.T) {
 
 	stream2, err := flac.Open(files[1])
 	require.NoError(t, err)
+
 	defer stream2.Close()
 
 	expectedTrack2Samples := totalSamples - expectedTrack1Samples
@@ -280,14 +325,24 @@ func TestCueSpecialCharacters(t *testing.T) {
 	flacPath := filepath.Join(tmpDir, "album.flac")
 	generateTestFLAC(t, flacPath, totalSamples)
 
-	cueContent := "PERFORMER \"Test/Artist\"\nTITLE \"Test: Album?\"\nFILE \"album.flac\" WAVE\n  TRACK 01 AUDIO\n    TITLE \"Song With / Slash\"\n    INDEX 01 00:00:00\n  TRACK 02 AUDIO\n    TITLE \"Song: With <Special> Chars?\"\n    INDEX 01 00:05:00\n"
+	cueContent := strings.Join([]string{
+		`PERFORMER "Test/Artist"`,
+		`TITLE "Test: Album?"`,
+		`FILE "album.flac" WAVE`,
+		`  TRACK 01 AUDIO`,
+		`    TITLE "Song With / Slash"`,
+		`    INDEX 01 00:00:00`,
+		`  TRACK 02 AUDIO`,
+		`    TITLE "Song: With <Special> Chars?"`,
+		`    INDEX 01 00:05:00`,
+	}, "\n") + "\n"
 	cuePath := filepath.Join(tmpDir, "test.cue")
-	require.NoError(t, os.WriteFile(cuePath, []byte(cueContent), 0o644))
+	require.NoError(t, os.WriteFile(cuePath, []byte(cueContent), 0o600))
 
 	xFile := &xtractr.XFile{
 		FilePath:  cuePath,
 		OutputDir: outputDir,
-		FileMode:  0o644,
+		FileMode:  0o600,
 		DirMode:   0o755,
 	}
 
@@ -309,14 +364,24 @@ func TestCueREMComments(t *testing.T) {
 	flacPath := filepath.Join(tmpDir, "album.flac")
 	generateTestFLAC(t, flacPath, totalSamples)
 
-	cueContent := "REM GENRE \"Rock\"\nREM DATE 2024\nREM DISCID 12345678\nPERFORMER \"Artist\"\nTITLE \"Album\"\nFILE \"album.flac\" WAVE\n  TRACK 01 AUDIO\n    TITLE \"Song\"\n    INDEX 01 00:00:00\n"
+	cueContent := strings.Join([]string{
+		`REM GENRE "Rock"`,
+		`REM DATE 2024`,
+		`REM DISCID 12345678`,
+		`PERFORMER "Artist"`,
+		`TITLE "Album"`,
+		`FILE "album.flac" WAVE`,
+		`  TRACK 01 AUDIO`,
+		`    TITLE "Song"`,
+		`    INDEX 01 00:00:00`,
+	}, "\n") + "\n"
 	cuePath := filepath.Join(tmpDir, "test.cue")
-	require.NoError(t, os.WriteFile(cuePath, []byte(cueContent), 0o644))
+	require.NoError(t, os.WriteFile(cuePath, []byte(cueContent), 0o600))
 
 	xFile := &xtractr.XFile{
 		FilePath:  cuePath,
 		OutputDir: outputDir,
-		FileMode:  0o644,
+		FileMode:  0o600,
 		DirMode:   0o755,
 	}
 
