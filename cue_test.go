@@ -299,20 +299,18 @@ func TestCueTimestampConversion(t *testing.T) {
 	stream1, err := flac.Open(files[0])
 	require.NoError(t, err)
 
-	defer stream1.Close()
-
 	expectedTrack1Samples := uint64((5*60+15)*testSampleRate) + uint64(37*testSampleRate/75)
 	assert.Equal(t, expectedTrack1Samples, stream1.Info.NSamples,
 		"Track 1 should have the expected number of samples based on CUE timestamp")
+	require.NoError(t, stream1.Close())
 
 	stream2, err := flac.Open(files[1])
 	require.NoError(t, err)
 
-	defer stream2.Close()
-
 	expectedTrack2Samples := totalSamples - expectedTrack1Samples
 	assert.Equal(t, expectedTrack2Samples, stream2.Info.NSamples,
 		"Track 2 should have the remaining samples")
+	require.NoError(t, stream2.Close())
 }
 
 func TestCueSpecialCharacters(t *testing.T) {
