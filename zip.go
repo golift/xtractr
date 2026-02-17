@@ -42,7 +42,6 @@ func ExtractZIP(xFile *XFile) (size uint64, filesList []string, err error) {
 			return xFile.prog.Wrote, files, fmt.Errorf("%s: %w", xFile.FilePath, err)
 		}
 
-		//nolint:gosec // this is safe because we clean the paths.
 		files = append(files, filepath.Join(xFile.OutputDir, decodedName))
 		xFile.Debugf("Wrote archived file: %s (%d bytes), total: %d files and %d bytes",
 			wfile, fSize, xFile.prog.Files, xFile.prog.Wrote)
@@ -57,7 +56,7 @@ func ExtractZIP(xFile *XFile) (size uint64, filesList []string, err error) {
 // attempts to detect their character encoding. It uses chardet for initial
 // candidates, then validates and scores each one. Returns nil if no non-UTF8
 // filenames are found or no suitable decoder can be determined.
-func detectZipEncoding(xFile *XFile, entries []*zip.File) *encoding.Decoder {
+func detectZipEncoding(xFile *XFile, entries []*zip.File) *encoding.Decoder { //nolint:cyclop,funlen
 	var rawNames []string
 
 	for _, f := range entries {
@@ -146,18 +145,27 @@ func detectZipEncoding(xFile *XFile, entries []*zip.File) *encoding.Decoder {
 // GBK/GB-18030 is most common because Chinese Windows is the largest source
 // of non-UTF8 zip files. Shift-JIS is next (Japanese Windows). These are
 // preferred over less common encodings when all other signals are equal.
+// Encoding preference scores for tiebreaking. Higher = more commonly seen in non-UTF8 zips.
+const (
+	prefGBK     = 5 // Chinese Windows is the largest source of non-UTF8 zip files
+	prefShiftJS = 4 // Japanese Windows
+	prefBig5    = 3 // Traditional Chinese
+	prefEUCKR   = 2 // Korean
+	prefEUCJP   = 1 // Japanese (less common than Shift-JIS in zips)
+)
+
 func encodingPreference(charset string) int {
 	switch strings.ToLower(charset) {
 	case "gb-2312", "gb2312", "gbk", "gb18030", "gb-18030":
-		return 5
+		return prefGBK
 	case "shift_jis", "shift-jis":
-		return 4
+		return prefShiftJS
 	case "big5", "big-5":
-		return 3
+		return prefBig5
 	case "euc-kr":
-		return 2
+		return prefEUCKR
 	case "euc-jp":
-		return 1
+		return prefEUCJP
 	default:
 		return 0
 	}
@@ -168,97 +176,106 @@ func encodingPreference(charset string) int {
 func decodeAll(decoder *encoding.Decoder, names []string) ([]string, bool) {
 	decoded := make([]string, len(names))
 
-	for i, name := range names {
+	for idx, name := range names {
 		d, err := decoder.String(name)
 		if err != nil || !utf8.ValidString(d) {
 			return nil, false
 		}
 
-		decoded[i] = d
+		decoded[idx] = d
 	}
 
 	return decoded, true
 }
 
+// Script scoring constants for disambiguating CJK encodings.
+const (
+	scoreKanaBonus      = 200 // kana is an unambiguous marker for Japanese
+	scoreHangulBonus    = 150 // pure Hangul is a clear marker for Korean
+	scoreMixedHangulCJK = 50  // mixed Hangul + CJK is suspicious (likely wrong encoding)
+	scorePureCJK        = 100 // pure CJK Unified: consistent Chinese text
+	scorePercentDivisor = 100 // used to compute percentage-based scores
+	maxASCII            = 0x80
+)
+
 // scriptConsistencyScore examines decoded filenames and returns a score based
 // on how consistent the non-ASCII characters are within known Unicode blocks.
 // Higher scores indicate text that looks like a natural writing system rather
 // than garbled characters from a wrong encoding.
-func scriptConsistencyScore(decoded []string) int {
-	var (
-		cjkUnified int // CJK Unified Ideographs (U+4E00-U+9FFF)
-		hiragana   int // Japanese Hiragana (U+3040-U+309F)
-		katakana   int // Japanese Katakana (U+30A0-U+30FF)
-		hangul     int // Korean Hangul Syllables (U+AC00-U+D7AF)
-		latin      int // Latin Extended (U+00C0-U+024F)
-		other      int // everything else non-ASCII
-	)
+func scriptConsistencyScore(decoded []string) int { //nolint:cyclop
+	counts := countScriptRunes(decoded)
 
-	for _, name := range decoded {
-		for _, r := range name {
-			switch {
-			case r < 0x80:
-				// ASCII - ignore for scoring
-			case r >= 0x4E00 && r <= 0x9FFF:
-				cjkUnified++
-			case r >= 0x3040 && r <= 0x309F:
-				hiragana++
-			case r >= 0x30A0 && r <= 0x30FF:
-				katakana++
-			case r >= 0xAC00 && r <= 0xD7AF:
-				hangul++
-			case r >= 0x00C0 && r <= 0x024F:
-				latin++
-			default:
-				other++
-			}
-		}
-	}
-
-	total := cjkUnified + hiragana + katakana + hangul + latin + other
+	total := counts.cjk + counts.hiragana + counts.katakana + counts.hangul + counts.latin + counts.other
 	if total == 0 {
 		return 0
 	}
 
-	kana := hiragana + katakana
+	kana := counts.hiragana + counts.katakana
 
 	// Kana characters are unambiguous markers for Japanese text.
 	// When decoded text contains kana, that encoding is almost certainly correct.
 	if kana > 0 {
-		return 200 + kana*100/total
+		return scoreKanaBonus + kana*scorePercentDivisor/total
 	}
 
 	// Pure Hangul (no CJK mix) is a clear marker for Korean.
-	if hangul > 0 && cjkUnified == 0 {
-		return 150 + hangul*100/total
+	if counts.hangul > 0 && counts.cjk == 0 {
+		return scoreHangulBonus + counts.hangul*scorePercentDivisor/total
 	}
 
 	// Mixed Hangul + CJK is suspicious - usually means wrong encoding
 	// (e.g., GBK bytes decoded as EUC-KR).
-	if hangul > 0 && cjkUnified > 0 {
-		return 50
+	if counts.hangul > 0 && counts.cjk > 0 {
+		return scoreMixedHangulCJK
 	}
 
 	// Pure CJK Unified: consistent Chinese text (GBK/Big5).
-	if cjkUnified > 0 && other == 0 && latin == 0 {
-		return 100
+	if counts.cjk > 0 && counts.other == 0 && counts.latin == 0 {
+		return scorePureCJK
 	}
 
 	// General consistency score.
-	dominant := cjkUnified
-	if kana > dominant {
-		dominant = kana
+	dominant := max(counts.latin, max(counts.hangul, max(kana, counts.cjk)))
+
+	return dominant * scorePercentDivisor / total
+}
+
+// scriptCounts holds per-script character counts from decoded filenames.
+type scriptCounts struct {
+	cjk      int // CJK Unified Ideographs (U+4E00-U+9FFF)
+	hiragana int // Japanese Hiragana (U+3040-U+309F)
+	katakana int // Japanese Katakana (U+30A0-U+30FF)
+	hangul   int // Korean Hangul Syllables (U+AC00-U+D7AF)
+	latin    int // Latin Extended (U+00C0-U+024F)
+	other    int // everything else non-ASCII
+}
+
+// countScriptRunes classifies non-ASCII runes in the decoded names by Unicode block.
+func countScriptRunes(decoded []string) scriptCounts { //nolint:cyclop
+	var counts scriptCounts
+
+	for _, name := range decoded {
+		for _, char := range name {
+			switch {
+			case char < maxASCII:
+				// ASCII - ignore for scoring
+			case char >= 0x4E00 && char <= 0x9FFF:
+				counts.cjk++
+			case char >= 0x3040 && char <= 0x309F:
+				counts.hiragana++
+			case char >= 0x30A0 && char <= 0x30FF:
+				counts.katakana++
+			case char >= 0xAC00 && char <= 0xD7AF:
+				counts.hangul++
+			case char >= 0x00C0 && char <= 0x024F:
+				counts.latin++
+			default:
+				counts.other++
+			}
+		}
 	}
 
-	if hangul > dominant {
-		dominant = hangul
-	}
-
-	if latin > dominant {
-		dominant = latin
-	}
-
-	return dominant * 100 / total
+	return counts
 }
 
 // decodeZipFilename decodes a zip entry filename if it's non-UTF8 and a decoder is available.
@@ -280,7 +297,7 @@ func decodeZipFilename(name string, nonUTF8 bool, decoder *encoding.Decoder) str
 }
 
 // charsetToEncoding maps charset names returned by chardet to golang.org/x/text encodings.
-func charsetToEncoding(charset string) encoding.Encoding { //nolint:cyclop
+func charsetToEncoding(charset string) encoding.Encoding { //nolint:cyclop,funlen,ireturn
 	switch strings.ToLower(charset) {
 	case "gb-2312", "gb2312", "gbk", "gb18030", "gb-18030":
 		return simplifiedchinese.GBK
@@ -333,10 +350,6 @@ func getUncompressedZipSize(zipReader *zip.ReadCloser) (total, compressed uint64
 	}
 
 	return total, 0, count
-}
-
-func (x *XFile) unzip(zipFile *zip.File) (uint64, string, error) {
-	return x.unzipWithName(zipFile, zipFile.Name)
 }
 
 func (x *XFile) unzipWithName(zipFile *zip.File, name string) (uint64, string, error) {
