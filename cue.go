@@ -385,25 +385,30 @@ type flacFrame struct {
 }
 
 // readFLACFile opens a FLAC file, reads all frames, and closes the file.
-// Closing immediately after reading ensures the file handle is released
-// before any cleanup runs (important on Windows).
+// We open and close the os.File ourselves because flac.Open wraps the reader
+// in bufio.NewReader, which loses the io.Closer interface and prevents
+// flac.Stream.Close from actually closing the underlying file handle.
+// This matters on Windows where open handles block file deletion.
 func readFLACFile(audioPath string) (*meta.StreamInfo, []flacFrame, error) {
-	stream, err := flac.Open(audioPath)
+	file, err := os.Open(audioPath)
 	if err != nil {
 		return nil, nil, fmt.Errorf("opening flac file: %w", err)
+	}
+
+	stream, err := flac.New(file)
+	if err != nil {
+		_ = file.Close()
+		return nil, nil, fmt.Errorf("parsing flac file: %w", err)
 	}
 
 	info := stream.Info
 	frames, err := readAllFrames(stream)
 
-	closeErr := stream.Close()
+	// Always close the file handle, regardless of readAllFrames result.
+	_ = file.Close()
 
 	if err != nil {
 		return nil, nil, err
-	}
-
-	if closeErr != nil {
-		return nil, nil, fmt.Errorf("closing flac file: %w", closeErr)
 	}
 
 	return info, frames, nil

@@ -29,8 +29,6 @@ func generateTestFLAC(t *testing.T, path string, totalSamples uint64) {
 	outFile, err := os.Create(path)
 	require.NoError(t, err, "creating test FLAC file")
 
-	defer outFile.Close()
-
 	info := &meta.StreamInfo{
 		BlockSizeMin:  testBlockSize,
 		BlockSizeMax:  testBlockSize,
@@ -94,6 +92,7 @@ func generateTestFLAC(t *testing.T, path string, totalSamples uint64) {
 		samplesWritten += blockSize
 	}
 
+	// enc.Close() also closes the underlying outFile via io.Closer.
 	require.NoError(t, enc.Close(), "closing FLAC encoder")
 }
 
@@ -114,11 +113,16 @@ func TestCueExtractCUE(t *testing.T) {
 	flacPath := filepath.Join(tmpDir, "album.flac")
 	generateTestFLAC(t, flacPath, totalSamples)
 
-	stream, err := flac.Open(flacPath)
-	require.NoError(t, err, "opening generated FLAC file")
-	assert.Equal(t, uint32(testSampleRate), stream.Info.SampleRate)
-	assert.Equal(t, uint8(testNChannels), stream.Info.NChannels)
-	require.NoError(t, stream.Close())
+	// Open the file ourselves and close it explicitly. flac.Open/ParseFile wrap
+	// the reader in bufio.NewReader which prevents Stream.Close from releasing
+	// the file handle (the io.Closer interface is lost by the wrapper).
+	verifyFile, err := os.Open(flacPath)
+	require.NoError(t, err, "opening generated FLAC file for verification")
+	verifyStream, err := flac.New(verifyFile)
+	require.NoError(t, err, "parsing generated FLAC file")
+	assert.Equal(t, uint32(testSampleRate), verifyStream.Info.SampleRate)
+	assert.Equal(t, uint8(testNChannels), verifyStream.Info.NChannels)
+	require.NoError(t, verifyFile.Close())
 
 	cueContent := strings.Join([]string{
 		`PERFORMER "Test Artist"`,
@@ -161,12 +165,14 @@ func TestCueExtractCUE(t *testing.T) {
 
 	for idx, expectedName := range expectedNames {
 		assert.Equal(t, filepath.Join(outputDir, expectedName), files[idx])
-		trackStream, err := flac.Open(files[idx])
+		trackFile, err := os.Open(files[idx])
 		require.NoError(t, err, "opening track FLAC file: %s", files[idx])
+		trackStream, err := flac.New(trackFile)
+		require.NoError(t, err, "parsing track FLAC file: %s", files[idx])
 		assert.Equal(t, uint32(testSampleRate), trackStream.Info.SampleRate)
 		assert.Equal(t, uint8(testNChannels), trackStream.Info.NChannels)
 		assert.Positive(t, trackStream.Info.NSamples, "track should have samples")
-		require.NoError(t, trackStream.Close())
+		require.NoError(t, trackFile.Close())
 	}
 }
 
@@ -296,21 +302,25 @@ func TestCueTimestampConversion(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, files, 2)
 
-	stream1, err := flac.Open(files[0])
+	file1, err := os.Open(files[0])
+	require.NoError(t, err)
+	stream1, err := flac.New(file1)
 	require.NoError(t, err)
 
 	expectedTrack1Samples := uint64((5*60+15)*testSampleRate) + uint64(37*testSampleRate/75)
 	assert.Equal(t, expectedTrack1Samples, stream1.Info.NSamples,
 		"Track 1 should have the expected number of samples based on CUE timestamp")
-	require.NoError(t, stream1.Close())
+	require.NoError(t, file1.Close())
 
-	stream2, err := flac.Open(files[1])
+	file2, err := os.Open(files[1])
+	require.NoError(t, err)
+	stream2, err := flac.New(file2)
 	require.NoError(t, err)
 
 	expectedTrack2Samples := totalSamples - expectedTrack1Samples
 	assert.Equal(t, expectedTrack2Samples, stream2.Info.NSamples,
 		"Track 2 should have the remaining samples")
-	require.NoError(t, stream2.Close())
+	require.NoError(t, file2.Close())
 }
 
 func TestCueSpecialCharacters(t *testing.T) {
