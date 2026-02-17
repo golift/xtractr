@@ -309,19 +309,17 @@ func parseCueTime(s string) cueTimestamp {
 }
 
 // splitFLAC splits a FLAC file into individual tracks based on CUE sheet data.
-//
-//nolint:funlen
 func splitFLAC(xFile *XFile, audioPath string, cue *CueSheet, timestamps []cueTimestamp) (uint64, []string, error) {
-	// Open and parse the FLAC file.
-	stream, err := flac.Open(audioPath)
+	// Open, parse, and read all frames from the FLAC file.
+	// We close the stream immediately after reading to release the file handle,
+	// which is important on Windows where open handles block TempDir cleanup.
+	streamInfo, allFrames, err := readFLACFile(audioPath)
 	if err != nil {
-		return 0, nil, fmt.Errorf("opening flac file: %w", err)
+		return 0, nil, err
 	}
 
-	defer func() { _ = stream.Close() }()
-
-	sampleRate := stream.Info.SampleRate
-	totalSamples := stream.Info.NSamples
+	sampleRate := streamInfo.SampleRate
+	totalSamples := streamInfo.NSamples
 
 	// Convert CUE timestamps to sample positions.
 	trackStarts := make([]uint64, len(cue.Tracks))
@@ -347,12 +345,6 @@ func splitFLAC(xFile *XFile, audioPath string, cue *CueSheet, timestamps []cueTi
 
 	defer xFile.newProgress(0, 0, len(cue.Tracks)).done()
 
-	// Read all frames from the FLAC file.
-	allFrames, err := readAllFrames(stream)
-	if err != nil {
-		return 0, nil, fmt.Errorf("reading flac frames: %w", err)
-	}
-
 	var (
 		totalSize uint64
 		files     []string
@@ -371,7 +363,7 @@ func splitFLAC(xFile *XFile, audioPath string, cue *CueSheet, timestamps []cueTi
 		outputName := formatTrackFilename(track)
 		outputPath := filepath.Join(xFile.OutputDir, outputName)
 
-		size, err := writeTrackFLAC(outputPath, stream.Info, allFrames, startSample, endSample, xFile.FileMode)
+		size, err := writeTrackFLAC(outputPath, streamInfo, allFrames, startSample, endSample, xFile.FileMode)
 		if err != nil {
 			return totalSize, files, fmt.Errorf("writing track %d: %w", track.Number, err)
 		}
@@ -390,6 +382,31 @@ type flacFrame struct {
 	frame       *frame.Frame
 	sampleStart uint64
 	sampleEnd   uint64
+}
+
+// readFLACFile opens a FLAC file, reads all frames, and closes the file.
+// Closing immediately after reading ensures the file handle is released
+// before any cleanup runs (important on Windows).
+func readFLACFile(audioPath string) (*meta.StreamInfo, []flacFrame, error) {
+	stream, err := flac.Open(audioPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("opening flac file: %w", err)
+	}
+
+	info := stream.Info
+	frames, err := readAllFrames(stream)
+
+	closeErr := stream.Close()
+
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if closeErr != nil {
+		return nil, nil, fmt.Errorf("closing flac file: %w", closeErr)
+	}
+
+	return info, frames, nil
 }
 
 // readAllFrames reads all audio frames from a FLAC stream.
