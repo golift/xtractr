@@ -9,6 +9,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/text/encoding/japanese"
+	"golang.org/x/text/encoding/simplifiedchinese"
 	"golift.io/xtractr"
 )
 
@@ -74,5 +76,176 @@ func makeZipFile(t *testing.T) testFilesInfo {
 		dataSize:     dataSize,
 		fileCount:    fileCount,
 		archiveCount: archiveCount,
+	}
+}
+
+// createNonUTF8ZipFile creates a zip archive containing files whose names are
+// encoded in the specified charset. The NonUTF8 flag is set on each entry to
+// simulate archives created by tools that use legacy encodings (e.g., WinRAR
+// on a Chinese locale system).
+func createNonUTF8ZipFile(t *testing.T, dir string, encodedNames [][]byte, content []byte) string {
+	t.Helper()
+
+	zipPath := filepath.Join(dir, "non_utf8.zip")
+
+	f, err := os.Create(zipPath)
+	require.NoError(t, err)
+
+	defer safeCloser(t, f)
+
+	zw := zip.NewWriter(f)
+	defer safeCloser(t, zw)
+
+	for _, rawName := range encodedNames {
+		header := &zip.FileHeader{
+			Name:     string(rawName),
+			Method:   zip.Deflate,
+			NonUTF8:  true,
+		}
+
+		w, err := zw.CreateHeader(header)
+		require.NoError(t, err)
+
+		_, err = w.Write(content)
+		require.NoError(t, err)
+	}
+
+	return zipPath
+}
+
+func TestZipNonUTF8_GB2312(t *testing.T) {
+	t.Parallel()
+
+	// Encode Chinese filenames in GBK (superset of GB2312).
+	encoder := simplifiedchinese.GBK.NewEncoder()
+
+	chineseNames := []string{"测试文件.txt", "数据目录/报告.txt"}
+	encodedNames := make([][]byte, len(chineseNames))
+
+	for i, name := range chineseNames {
+		encoded, err := encoder.Bytes([]byte(name))
+		require.NoError(t, err)
+		encodedNames[i] = encoded
+	}
+
+	tmpDir := t.TempDir()
+	content := []byte("hello")
+	zipPath := createNonUTF8ZipFile(t, tmpDir, encodedNames, content)
+
+	outDir := filepath.Join(tmpDir, "out")
+	require.NoError(t, os.MkdirAll(outDir, 0o700))
+
+	size, files, err := xtractr.ExtractZIP(&xtractr.XFile{
+		FilePath:  zipPath,
+		OutputDir: outDir,
+		FileMode:  0o600,
+		DirMode:   0o700,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, uint64(len(content)*len(chineseNames)), size)
+	assert.Len(t, files, len(chineseNames))
+
+	// Verify extracted filenames are valid UTF-8 Chinese text.
+	for i, file := range files {
+		base := filepath.Base(file)
+		expected := filepath.Base(chineseNames[i])
+		assert.Equal(t, expected, base,
+			"extracted filename should be properly decoded Chinese text")
+	}
+
+	// Verify the files actually exist on disk with the correct names.
+	for _, name := range chineseNames {
+		fullPath := filepath.Join(outDir, name)
+		_, err := os.Stat(fullPath)
+		assert.NoError(t, err, "decoded file should exist on disk: %s", fullPath)
+	}
+}
+
+func TestZipNonUTF8_ShiftJIS(t *testing.T) {
+	t.Parallel()
+
+	// Encode Japanese filenames in Shift-JIS.
+	encoder := japanese.ShiftJIS.NewEncoder()
+
+	japaneseNames := []string{"テスト.txt", "データ.txt"}
+	encodedNames := make([][]byte, len(japaneseNames))
+
+	for i, name := range japaneseNames {
+		encoded, err := encoder.Bytes([]byte(name))
+		require.NoError(t, err)
+		encodedNames[i] = encoded
+	}
+
+	tmpDir := t.TempDir()
+	content := []byte("hello")
+	zipPath := createNonUTF8ZipFile(t, tmpDir, encodedNames, content)
+
+	outDir := filepath.Join(tmpDir, "out")
+	require.NoError(t, os.MkdirAll(outDir, 0o700))
+
+	size, files, err := xtractr.ExtractZIP(&xtractr.XFile{
+		FilePath:  zipPath,
+		OutputDir: outDir,
+		FileMode:  0o600,
+		DirMode:   0o700,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, uint64(len(content)*len(japaneseNames)), size)
+	assert.Len(t, files, len(japaneseNames))
+
+	// Verify extracted filenames are valid UTF-8 Japanese text.
+	for i, file := range files {
+		base := filepath.Base(file)
+		expected := filepath.Base(japaneseNames[i])
+		assert.Equal(t, expected, base,
+			"extracted filename should be properly decoded Japanese text")
+	}
+}
+
+func TestZipUTF8FilenamesUnchanged(t *testing.T) {
+	t.Parallel()
+
+	// Ensure that archives with UTF-8 filenames (including CJK characters
+	// that are already valid UTF-8) are not mangled by the detection logic.
+	utf8Names := []string{"readme.txt", "日本語.txt", "中文.txt"}
+
+	tmpDir := t.TempDir()
+
+	zipPath := filepath.Join(tmpDir, "utf8.zip")
+
+	f, err := os.Create(zipPath)
+	require.NoError(t, err)
+
+	zw := zip.NewWriter(f)
+
+	content := []byte("data")
+
+	for _, name := range utf8Names {
+		// Default Create sets UTF-8 flag.
+		w, err := zw.Create(name)
+		require.NoError(t, err)
+
+		_, err = w.Write(content)
+		require.NoError(t, err)
+	}
+
+	require.NoError(t, zw.Close())
+	require.NoError(t, f.Close())
+
+	outDir := filepath.Join(tmpDir, "out")
+	require.NoError(t, os.MkdirAll(outDir, 0o700))
+
+	_, files, err := xtractr.ExtractZIP(&xtractr.XFile{
+		FilePath:  zipPath,
+		OutputDir: outDir,
+		FileMode:  0o600,
+		DirMode:   0o700,
+	})
+	require.NoError(t, err)
+	assert.Len(t, files, len(utf8Names))
+
+	for i, file := range files {
+		assert.Equal(t, utf8Names[i], filepath.Base(file),
+			"UTF-8 filenames must not be altered")
 	}
 }
