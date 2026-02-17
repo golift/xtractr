@@ -77,6 +77,7 @@ var extension2function = []archive{
 	{Extension: ".zst", Extract: ChngInt(ExtractZstandard)},
 	{Extension: ".zstd", Extract: ChngInt(ExtractZstandard)},
 	{Extension: ".zz", Extract: ChngInt(ExtractZlib)},
+	{Extension: ".cue", Extract: ExtractCUE},
 }
 
 // ChngInt converts the smaller return interface into an ExtractInterface.
