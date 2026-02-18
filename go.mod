@@ -22,7 +22,7 @@ require (
 	github.com/therootcompany/xz v1.0.1
 	github.com/ulikunitz/xz v0.5.15
 	golang.org/x/text v0.34.0
-	golift.io/udf v0.0.0-20260218034104-1c191798cf43
+	golift.io/udf v0.0.0-20260218035133-e5277c72ee4b
 )
 
 require (
