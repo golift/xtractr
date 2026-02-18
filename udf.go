@@ -38,8 +38,6 @@ func extractUDF(xFile *XFile, ra io.ReaderAt) (uint64, []string, error) {
 }
 
 // getUncompressedUDFSize calculates the total size of all files in a UDF volume.
-//
-
 func getUncompressedUDFSize(udfImage *udf.Udf) (total, _ uint64, count int) {
 	var walk func(fe *udf.FileEntry)
 
@@ -71,14 +69,15 @@ func getUncompressedUDFSize(udfImage *udf.Udf) (total, _ uint64, count int) {
 }
 
 func (x *XFile) unUDF(udfImage *udf.Udf, fe *udf.FileEntry, parent string) (uint64, []string, error) {
-	var files []string
-
-	var totalSize uint64
-
 	entries, err := udfImage.ReadDir(fe)
 	if err != nil {
 		return 0, nil, fmt.Errorf("reading UDF directory: %w", err)
 	}
+
+	var (
+		files     = make([]string, 0, len(entries))
+		totalSize uint64
+	)
 
 	for i := range entries {
 		size, entryFiles, err := x.unUDFEntry(udfImage, &entries[i], parent)
