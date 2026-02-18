@@ -1,7 +1,6 @@
 package xtractr
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,8 +10,8 @@ import (
 )
 
 // ExtractISO writes an ISO's contents to disk.
-// If the image is not a valid ISO9660 volume (e.g. UDF-only), it falls back
-// to the UDF reader automatically.
+// It tries UDF first (which preserves full filenames), then falls back
+// to ISO9660 (with Joliet support) if UDF parsing fails.
 func ExtractISO(xFile *XFile) (size uint64, filesList []string, err error) {
 	openISO, err := os.Open(xFile.FilePath) // os.Open on purpose.
 	if err != nil {
@@ -20,14 +19,18 @@ func ExtractISO(xFile *XFile) (size uint64, filesList []string, err error) {
 	}
 	defer openISO.Close()
 
+	// Try UDF first — it preserves full-length filenames.
+	size, filesList, udfErr := extractUDF(xFile, openISO)
+	if udfErr == nil {
+		xFile.Debugf("Extracted %s via UDF path", xFile.FilePath)
+		return size, filesList, nil
+	}
+
+	xFile.Debugf("UDF extraction failed for %s, falling back to ISO9660: %v", xFile.FilePath, udfErr)
+
+	// Fall back to ISO9660 (now with Joliet support for full filenames).
 	image, isoErr := iso9660.OpenImage(openISO)
-
-	// If ISO9660 parsing fails with UDF error or other issues, try UDF.
 	if isoErr != nil {
-		if errors.Is(isoErr, iso9660.ErrUDFNotSupported) || isUDFCandidate(isoErr) {
-			return extractUDF(xFile, openISO)
-		}
-
 		return 0, nil, fmt.Errorf("failed to open iso image: %s: %w", xFile.FilePath, isoErr)
 	}
 
