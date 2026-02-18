@@ -347,7 +347,7 @@ func splitFLAC(xFile *XFile, audioPath string, cue *CueSheet, timestamps []cueTi
 
 	var (
 		totalSize uint64
-		files     []string
+		files     = make([]string, 0, len(cue.Tracks))
 	)
 
 	// Split frames into tracks.
