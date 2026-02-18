@@ -44,6 +44,7 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-replace github.com/kdomanski/iso9660 => github.com/oceanplexian/iso9660 v0.0.0-20260217195958-d9b00d3f6793
+replace github.com/kdomanski/iso9660 => github.com/Unpackerr/iso9660 v0.0.0-20260218033718-993fc9e3f4e7
 
+// Remove after golift/udf#1 is merged and tagged.
 replace golift.io/udf => github.com/golift/udf v0.0.0-20260218033433-9d14d60a73db
