@@ -44,4 +44,4 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-replace github.com/kdomanski/iso9660 => github.com/Unpackerr/iso9660 v0.0.0-20260218033718-993fc9e3f4e7
+replace github.com/kdomanski/iso9660 => github.com/Unpackerr/iso9660 v0.0.1
