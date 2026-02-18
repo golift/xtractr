@@ -12,13 +12,16 @@ require (
 	github.com/dsnet/compress v0.0.1
 	github.com/kdomanski/iso9660 v0.4.0
 	github.com/klauspost/compress v1.18.4
+	github.com/mewkiz/flac v1.0.13
 	github.com/nwaples/rardecode/v2 v2.2.2
 	github.com/peterebden/ar v0.0.0-20241106141004-20dc11b778e8
 	github.com/pierrec/lz4/v4 v4.1.25
+	github.com/saintfish/chardet v0.0.0-20230101081208-5e3ef4b5456d
 	github.com/sshaman1101/dcompress v0.0.0-20200109162717-50436a6332de
 	github.com/stretchr/testify v1.11.1
 	github.com/therootcompany/xz v1.0.1
 	github.com/ulikunitz/xz v0.5.15
+	golang.org/x/text v0.34.0
 )
 
 require (
@@ -37,7 +40,6 @@ require (
 	github.com/stretchr/objx v0.5.3 // indirect
 	go4.org v0.0.0-20260112195520-a5071408f32f // indirect
 	golang.org/x/crypto v0.48.0 // indirect
-	golang.org/x/text v0.34.0 // indirect
 	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
