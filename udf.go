@@ -9,17 +9,6 @@ import (
 	"golift.io/udf"
 )
 
-// isUDFCandidate returns true for errors that suggest the image might be UDF.
-func isUDFCandidate(err error) bool {
-	if err == nil {
-		return false
-	}
-
-	msg := err.Error()
-
-	return strings.Contains(msg, "BEA01") || strings.Contains(msg, "UDF")
-}
-
 // extractUDF extracts a UDF volume image to disk.
 func extractUDF(xFile *XFile, ra io.ReaderAt) (uint64, []string, error) {
 	udfImage, err := udf.NewUdfFromReader(ra)
