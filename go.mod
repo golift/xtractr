@@ -1,6 +1,6 @@
 module golift.io/xtractr
 
-go 1.24.0
+go 1.25.6
 
 toolchain go1.26.0
 
@@ -22,6 +22,7 @@ require (
 	github.com/therootcompany/xz v1.0.1
 	github.com/ulikunitz/xz v0.5.15
 	golang.org/x/text v0.34.0
+	golift.io/udf v0.0.0-00010101000000-000000000000
 )
 
 require (
@@ -43,4 +44,6 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-replace github.com/kdomanski/iso9660 => ../iso9660-264
+replace github.com/kdomanski/iso9660 => github.com/oceanplexian/iso9660 v0.0.0-20260217195958-d9b00d3f6793
+
+replace golift.io/udf => github.com/golift/udf v0.0.0-20260218033433-9d14d60a73db

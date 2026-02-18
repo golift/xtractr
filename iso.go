@@ -9,7 +9,7 @@ import (
 	"strings"
 
 	"github.com/kdomanski/iso9660"
-	"github.com/mogaika/udf"
+	"golift.io/udf"
 )
 
 // ExtractISO writes an ISO's contents to disk.
@@ -163,23 +163,9 @@ func (x *XFile) unisofile(isoFile *iso9660.File, wfile string) (uint64, []string
 
 // extractUDF extracts a UDF volume image to disk.
 func extractUDF(xFile *XFile, ra io.ReaderAt) (uint64, []string, error) {
-	udfImage := udf.NewUdfFromReader(ra)
-
-	// Use a deferred recover to catch panics from the UDF library,
-	// which uses panic instead of returning errors.
-	var panicErr error
-	func() {
-		defer func() {
-			if r := recover(); r != nil {
-				panicErr = fmt.Errorf("UDF read error: %v", r)
-			}
-		}()
-		// Force initialization by reading the root directory.
-		udfImage.ReadDir(nil)
-	}()
-
-	if panicErr != nil {
-		return 0, nil, fmt.Errorf("failed to open UDF image: %s: %w", xFile.FilePath, panicErr)
+	udfImage, err := udf.NewUdfFromReader(ra)
+	if err != nil {
+		return 0, nil, fmt.Errorf("failed to open UDF image: %s: %w", xFile.FilePath, err)
 	}
 
 	defer xFile.newProgress(getUncompressedUDFSize(udfImage)).done()
@@ -199,98 +185,98 @@ func getUncompressedUDFSize(udfImage *udf.Udf) (total, _ uint64, count int) {
 	var walk func(fe *udf.FileEntry)
 
 	walk = func(fe *udf.FileEntry) {
-		files := udfImage.ReadDir(fe)
+		files, err := udfImage.ReadDir(fe)
+		if err != nil {
+			return
+		}
+
 		for i := range files {
 			count++
+
 			if files[i].IsDir() {
-				walk(files[i].FileEntry())
+				fe, err := files[i].FileEntry()
+				if err != nil {
+					continue
+				}
+
+				walk(fe)
 			} else {
 				total += uint64(files[i].Size())
 			}
 		}
 	}
 
-	func() {
-		defer func() { recover() }() //nolint:errcheck // UDF library panics on errors.
-		walk(nil)
-	}()
+	walk(nil)
 
 	return total, 0, count
 }
 
 func (x *XFile) unUDF(udfImage *udf.Udf, fe *udf.FileEntry, parent string) (uint64, []string, error) {
 	var files []string
+
 	var totalSize uint64
 
-	// Recover from panics in the UDF library.
-	var panicErr error
+	entries, err := udfImage.ReadDir(fe)
+	if err != nil {
+		return 0, nil, fmt.Errorf("reading UDF directory: %w", err)
+	}
 
-	func() {
-		defer func() {
-			if r := recover(); r != nil {
-				panicErr = fmt.Errorf("UDF extraction error: %v", r)
+	for i := range entries {
+		entry := &entries[i]
+
+		if entry.IsDir() {
+			dirPath := filepath.Join(parent, entry.Name())
+
+			err := x.mkDir(filepath.Join(x.OutputDir, dirPath), entry.Mode(), entry.ModTime())
+			if err != nil {
+				return totalSize, files, fmt.Errorf("making UDF directory %s: %w", entry.Name(), err)
 			}
-		}()
 
-		entries := udfImage.ReadDir(fe)
-
-		for i := range entries {
-			entry := &entries[i]
-
-			if entry.IsDir() {
-				dirPath := filepath.Join(parent, entry.Name())
-				dirMode := entry.Mode()
-				modTime := entry.ModTime()
-
-				err := x.mkDir(filepath.Join(x.OutputDir, dirPath), dirMode, modTime)
-				if err != nil {
-					panicErr = fmt.Errorf("making UDF directory %s: %w", entry.Name(), err)
-					return
-				}
-
-				childSize, childFiles, err := x.unUDF(udfImage, entry.FileEntry(), dirPath)
-				if err != nil {
-					panicErr = err
-					return
-				}
-
-				totalSize += childSize
-				files = append(files, childFiles...)
-			} else {
-				filePath := filepath.Join(parent, entry.Name())
-				f := &file{
-					Path:     x.clean(filePath),
-					Data:     entry.NewReader(),
-					FileMode: entry.Mode(),
-					DirMode:  x.DirMode,
-					Mtime:    entry.ModTime(),
-				}
-
-				//nolint:gocritic
-				if !strings.HasPrefix(f.Path, filepath.Join(x.OutputDir)) {
-					panicErr = fmt.Errorf("%s: %w: %s != %s (from: %s)",
-						x.FilePath, ErrInvalidPath, f.Path, x.OutputDir, entry.Name())
-					return
-				}
-
-				x.Debugf("Writing UDF file: %s (bytes: %d)", f.Path, entry.Size())
-
-				size, err := x.write(f)
-				if err != nil {
-					panicErr = fmt.Errorf("writing UDF file %s: %w", entry.Name(), err)
-					return
-				}
-
-				totalSize += size
-				files = append(files, f.Path)
+			entryFE, err := entry.FileEntry()
+			if err != nil {
+				return totalSize, files, fmt.Errorf("reading UDF file entry for %s: %w", entry.Name(), err)
 			}
+
+			childSize, childFiles, err := x.unUDF(udfImage, entryFE, dirPath)
+			if err != nil {
+				return totalSize + childSize, files, err
+			}
+
+			totalSize += childSize
+			files = append(files, childFiles...)
+		} else {
+			filePath := filepath.Join(parent, entry.Name())
+
+			reader, err := entry.NewReader()
+			if err != nil {
+				return totalSize, files, fmt.Errorf("creating reader for UDF file %s: %w", entry.Name(), err)
+			}
+
+			f := &file{
+				Path:     x.clean(filePath),
+				Data:     reader,
+				FileMode: entry.Mode(),
+				DirMode:  x.DirMode,
+				Mtime:    entry.ModTime(),
+			}
+
+			//nolint:gocritic
+			if !strings.HasPrefix(f.Path, filepath.Join(x.OutputDir)) {
+				return totalSize, files, fmt.Errorf("%s: %w: %s != %s (from: %s)",
+					x.FilePath, ErrInvalidPath, f.Path, x.OutputDir, entry.Name())
+			}
+
+			x.Debugf("Writing UDF file: %s (bytes: %d)", f.Path, entry.Size())
+
+			size, err := x.write(f)
+			if err != nil {
+				return totalSize, files, fmt.Errorf("writing UDF file %s: %w", entry.Name(), err)
+			}
+
+			totalSize += size
+			files = append(files, f.Path)
 		}
-	}()
-
-	if panicErr != nil {
-		return totalSize, files, panicErr
 	}
 
 	return totalSize, files, nil
 }
-
