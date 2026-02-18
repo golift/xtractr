@@ -12,6 +12,7 @@ require (
 	github.com/dsnet/compress v0.0.1
 	github.com/kdomanski/iso9660 v0.4.0
 	github.com/klauspost/compress v1.18.4
+	github.com/mewkiz/flac v1.0.13
 	github.com/nwaples/rardecode/v2 v2.2.2
 	github.com/peterebden/ar v0.0.0-20241106141004-20dc11b778e8
 	github.com/pierrec/lz4/v4 v4.1.25
@@ -29,8 +30,8 @@ require (
 	github.com/bodgit/windows v1.0.1 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
+	github.com/icza/bitio v1.1.0 // indirect
 	github.com/kr/pretty v0.3.1 // indirect
-	github.com/mewkiz/flac v1.0.13 // indirect
 	github.com/mewkiz/pkg v0.0.0-20250417130911-3f050ff8c56d // indirect
 	github.com/mewpkg/term v0.0.0-20241026122259-37a80af23985 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
