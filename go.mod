@@ -1,6 +1,6 @@
 module golift.io/xtractr
 
-go 1.24.0
+go 1.25.6
 
 toolchain go1.26.0
 
@@ -12,7 +12,6 @@ require (
 	github.com/dsnet/compress v0.0.1
 	github.com/kdomanski/iso9660 v0.4.0
 	github.com/klauspost/compress v1.18.4
-	github.com/mewkiz/flac v1.0.13
 	github.com/nwaples/rardecode/v2 v2.2.2
 	github.com/peterebden/ar v0.0.0-20241106141004-20dc11b778e8
 	github.com/pierrec/lz4/v4 v4.1.25
@@ -22,6 +21,7 @@ require (
 	github.com/therootcompany/xz v1.0.1
 	github.com/ulikunitz/xz v0.5.15
 	golang.org/x/text v0.34.0
+	golift.io/udf v0.0.1
 )
 
 require (
@@ -29,7 +29,6 @@ require (
 	github.com/bodgit/windows v1.0.1 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
-	github.com/icza/bitio v1.1.0 // indirect
 	github.com/kr/pretty v0.3.1 // indirect
 	github.com/mewkiz/flac v1.0.13 // indirect
 	github.com/mewkiz/pkg v0.0.0-20250417130911-3f050ff8c56d // indirect
@@ -43,3 +42,5 @@ require (
 	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
+
+replace github.com/kdomanski/iso9660 => github.com/Unpackerr/iso9660 v0.0.0-20260218033718-993fc9e3f4e7

@@ -1,6 +1,6 @@
 # `xtractr`
 
-Go Library for Queuing and Extracting ZIP, RAR, GZ, BZ2, TAR, 
+Go Library for Queuing and Extracting ZIP, RAR, GZ, BZ2, TAR,
 TGZ, TBZ2, 7Z, ISO ([and other](https://github.com/golift/xtractr/issues/44)) compressed archive files.
 Can also be used ad-hoc for direct decompression and extraction. See docs.
 
@@ -8,6 +8,9 @@ Can also be used ad-hoc for direct decompression and extraction. See docs.
 -   Works on Linux, Windows, FreeBSD and macOS **without Cgo**.
 -   Supports 32 and 64 bit architectures.
 -   Decrypts RAR and 7-Zip archives with passwords.
+-   Extracts ISO images (ISO9660 and UDF volumes).
+-   Splits FLAC+CUE sheets into individual tracks.
+-   Detects non-UTF8 zip filenames automatically.
 
 # Interface
 
@@ -17,9 +20,11 @@ It does not do the heavy lifting, and relies on these libraries to extract files
 - [**RAR**: nwaples/rardecode](https://github.com/nwaples/rardecode)
 - [**7-Zip**: bodgit/sevenzip](https://github.com/bodgit/sevenzip)
 - [**ISO**: kdomanski/iso9660](https://github.com/kdomanski/iso9660)
+- [**UDF**: golift/udf](https://github.com/golift/udf)
+- [**FLAC**: mewkiz/flac](https://github.com/mewkiz/flac)
 - [**Brotli**: andybalholm/brotli](https://github.com/andybalholm/brotli)
 - [**LZ4**: pierrec/lz4](https://github.com/pierrec/lz4)
-- [**XZ**: github.com/therootcompany/xz](https://github.com/github.com/therootcompany/xz)
+- [**XZ**: therootcompany/xz](https://github.com/therootcompany/xz)
 - [**Zstandard**: klauspost/compress](https://github.com/klauspost/compress)
 - [**S2**: klauspost/compress](https://github.com/klauspost/compress)
 - [**Snappy**: klauspost/compress](https://github.com/klauspost/compress)
@@ -119,6 +124,8 @@ know the file type you may call the direct method instead:
  - `ExtractTarGzip(*XFile)`
  - `ExtractTarBzip(*XFile)`
  - `Extract7z(*XFile)`
+ - `ExtractISO(*XFile)`
+ - `SplitCueFlac(*XFile)`
 
 ```golang
 package main
