@@ -22,7 +22,7 @@ require (
 	github.com/therootcompany/xz v1.0.1
 	github.com/ulikunitz/xz v0.5.15
 	golang.org/x/text v0.34.0
-	golift.io/udf v0.0.0-00010101000000-000000000000
+	golift.io/udf v0.0.0-20260218034104-1c191798cf43
 )
 
 require (
@@ -45,6 +45,3 @@ require (
 )
 
 replace github.com/kdomanski/iso9660 => github.com/Unpackerr/iso9660 v0.0.0-20260218033718-993fc9e3f4e7
-
-// Remove after golift/udf#1 is merged and tagged.
-replace golift.io/udf => github.com/golift/udf v0.0.0-20260218033433-9d14d60a73db
