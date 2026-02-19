@@ -115,6 +115,11 @@ type XFile struct {
 	Password string
 	// (RAR/7z) Archive passwords (to try multiple).
 	Passwords []string
+	// FileWorkers controls how many files within a single archive are extracted
+	// concurrently. Only effective for random-access formats (ZIP, 7z).
+	// Streaming formats ignore this. 0 or 1 = sequential (current behavior).
+	// Total concurrent I/O when using the queue = Config.Parallel * FileWorkers.
+	FileWorkers int
 	// Progress is called periodically during file extraction.
 	// Contains info about the progress of the extraction.
 	// This is not called if an Updates channel is also provided.
@@ -129,7 +134,7 @@ type XFile struct {
 	// Logger allows printing debug messages.
 	log       Logger
 	moveFiles func(fromPath, toPath string, overwrite bool) ([]string, error)
-	prog      *Progress
+	prog      *progressTracker
 }
 
 // Filter is the input to find compressed files.
@@ -633,7 +638,16 @@ func (x *XFile) mkDir(path string, mode os.FileMode, mtime time.Time) error {
 }
 
 // write a file from an io reader, making sure all parent directories exist.
+// Set parallel to true when writing from concurrent workers to throttle progress callbacks.
 func (x *XFile) write(file *file) (uint64, error) {
+	return x.writeFile(file, false)
+}
+
+func (x *XFile) writeParallel(file *file) (uint64, error) {
+	return x.writeFile(file, true)
+}
+
+func (x *XFile) writeFile(file *file, parallel bool) (uint64, error) {
 	err := x.mkDir(filepath.Dir(file.Path), file.DirMode, file.Mtime)
 	if err != nil {
 		return 0, fmt.Errorf("writing archived file '%s' parent folder: %w", filepath.Base(file.Path), err)
@@ -645,7 +659,12 @@ func (x *XFile) write(file *file) (uint64, error) {
 	}
 	defer fout.Close()
 
-	size, err := io.Copy(x.prog.writer(fout), file.Data)
+	progWriter := x.prog.writer(fout)
+	if parallel {
+		progWriter = x.prog.parallelWriter(fout)
+	}
+
+	size, err := io.Copy(progWriter, file.Data)
 	if err != nil {
 		return uint64(size), fmt.Errorf("copying archived file '%s' io: %w", file.Path, err)
 	}

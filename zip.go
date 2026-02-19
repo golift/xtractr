@@ -5,7 +5,10 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
+
+	"golang.org/x/text/encoding"
 )
 
 /* How to extract a ZIP file. */
@@ -22,6 +25,10 @@ func ExtractZIP(xFile *XFile) (size uint64, filesList []string, err error) {
 
 	// Detect encoding for non-UTF8 filenames in the archive.
 	decoder := detectZipEncoding(xFile, zipReader.File)
+
+	if xFile.FileWorkers > 1 {
+		return xFile.extractZIPParallel(zipReader, decoder)
+	}
 
 	files := []string{}
 
@@ -51,6 +58,128 @@ func getUncompressedZipSize(zipReader *zip.ReadCloser) (total, compressed uint64
 	}
 
 	return total, 0, count
+}
+
+// zipFileEntry holds a decoded zip file entry for the parallel dispatch pass.
+type zipFileEntry struct {
+	zipFile     *zip.File
+	decodedName string
+}
+
+// extractZIPParallel extracts zip files using a bounded worker pool.
+// Pass 1 (sequential): create directories and build a list of file entries.
+// Pass 2 (parallel): dispatch file writes to workers.
+func (x *XFile) extractZIPParallel(
+	zipReader *zip.ReadCloser,
+	decoder *encoding.Decoder,
+) (uint64, []string, error) {
+	fileEntries, files, err := x.zipPrepareEntries(zipReader, decoder)
+	if err != nil {
+		return x.prog.Wrote, files, err
+	}
+
+	workerErr := x.zipDispatchWorkers(fileEntries)
+	if workerErr != nil {
+		return x.prog.Wrote, files, workerErr
+	}
+
+	files, err = x.cleanup(files)
+
+	return x.prog.Wrote, files, err
+}
+
+// zipPrepareEntries iterates all entries, creates directories, validates paths,
+// and returns the list of file entries to extract in parallel.
+func (x *XFile) zipPrepareEntries(
+	zipReader *zip.ReadCloser,
+	decoder *encoding.Decoder,
+) ([]zipFileEntry, []string, error) {
+	entries := make([]zipFileEntry, 0, len(zipReader.File))
+	files := make([]string, 0, len(zipReader.File))
+
+	for _, zipFile := range zipReader.File {
+		decodedName := decodeZipFilename(zipFile.Name, zipFile.NonUTF8, decoder)
+		cleanPath := x.clean(decodedName)
+
+		if !strings.HasPrefix(cleanPath, x.OutputDir) {
+			return nil, files, fmt.Errorf("%s: %s: %w: %s (from: %s)",
+				x.FilePath, zipFile.FileInfo().Name(), ErrInvalidPath, cleanPath, decodedName)
+		}
+
+		files = append(files, filepath.Join(x.OutputDir, decodedName))
+
+		if zipFile.FileInfo().IsDir() {
+			err := x.mkDir(cleanPath, zipFile.Mode(), zipFile.Modified)
+			if err != nil {
+				return nil, files, fmt.Errorf("%s: making zipFile dir: %w", x.FilePath, err)
+			}
+
+			continue
+		}
+
+		entries = append(entries, zipFileEntry{zipFile: zipFile, decodedName: decodedName})
+	}
+
+	return entries, files, nil
+}
+
+// zipDispatchWorkers sends file entries to a bounded worker pool for extraction.
+func (x *XFile) zipDispatchWorkers(entries []zipFileEntry) error {
+	var (
+		waitGroup sync.WaitGroup
+		firstErr  error
+		errOnce   sync.Once
+		semaphore = make(chan struct{}, x.FileWorkers)
+	)
+
+	for idx := range entries {
+		entry := entries[idx]
+
+		if firstErr != nil {
+			break
+		}
+
+		semaphore <- struct{}{} // acquire worker slot
+
+		waitGroup.Go(func() {
+			defer func() { <-semaphore }() // release worker slot
+
+			err := x.extractZIPEntry(entry)
+			if err != nil {
+				errOnce.Do(func() { firstErr = err })
+			}
+		})
+	}
+
+	waitGroup.Wait()
+
+	return firstErr
+}
+
+// extractZIPEntry extracts a single zip file entry (used by parallel workers).
+func (x *XFile) extractZIPEntry(entry zipFileEntry) error {
+	zFile, err := entry.zipFile.Open()
+	if err != nil {
+		return fmt.Errorf("%s: zipFile.Open: %w", x.FilePath, err)
+	}
+	defer zFile.Close()
+
+	fileInfo := &file{
+		Path:     x.clean(entry.decodedName),
+		Data:     zFile,
+		FileMode: entry.zipFile.Mode(),
+		DirMode:  x.DirMode,
+		Mtime:    entry.zipFile.Modified,
+		Atime:    time.Now(),
+	}
+
+	_, err = x.writeParallel(fileInfo)
+	if err != nil {
+		return fmt.Errorf("%s: %w: %s (from: %s)",
+			entry.zipFile.FileInfo().Name(), err, fileInfo.Path, entry.decodedName)
+	}
+
+	return nil
 }
 
 func (x *XFile) unzipWithName(zipFile *zip.File, name string) (uint64, string, error) {

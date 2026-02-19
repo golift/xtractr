@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/bodgit/sevenzip"
 )
@@ -24,11 +25,12 @@ func Extract7z(xFile *XFile) (size uint64, filesList, archiveList []string, err 
 
 	for idx, password := range passwords {
 		size, files, archives, err := extract7z(&XFile{
-			FilePath:  xFile.FilePath,
-			OutputDir: xFile.OutputDir,
-			FileMode:  xFile.FileMode,
-			DirMode:   xFile.DirMode,
-			Password:  password,
+			FilePath:    xFile.FilePath,
+			OutputDir:   xFile.OutputDir,
+			FileMode:    xFile.FileMode,
+			DirMode:     xFile.DirMode,
+			Password:    password,
+			FileWorkers: xFile.FileWorkers,
 		})
 		if err != nil && idx == len(passwords)-1 {
 			return size, files, archives, fmt.Errorf("used password %d of %d: %w", idx+1, len(passwords), err)
@@ -54,6 +56,10 @@ func extract7z(xFile *XFile) (uint64, []string, []string, error) {
 		return 0, nil, nil, fmt.Errorf("%s: os.Open: %w", xFile.FilePath, err)
 	}
 	defer sevenZip.Close()
+
+	if xFile.FileWorkers > 1 {
+		return xFile.extract7zParallel(sevenZip)
+	}
 
 	files := []string{}
 
@@ -83,6 +89,120 @@ func getUncompressed7zSize(reader *sevenzip.ReadCloser) (total, compressed uint6
 	}
 
 	return total, 0, count
+}
+
+// sevenZipEntry holds a 7z file entry for the parallel dispatch pass.
+type sevenZipEntry struct {
+	sevenZipFile *sevenzip.File
+}
+
+// extract7zParallel extracts 7z files using a bounded worker pool.
+// Pass 1 (sequential): create directories and build a list of file entries.
+// Pass 2 (parallel): dispatch file writes to workers.
+func (x *XFile) extract7zParallel(sevenZip *sevenzip.ReadCloser) (uint64, []string, []string, error) {
+	entries, files, err := x.sevenZipPrepareEntries(sevenZip)
+	if err != nil {
+		return x.prog.Wrote, files, []string{x.FilePath}, err
+	}
+
+	workerErr := x.sevenZipDispatchWorkers(entries)
+	if workerErr != nil {
+		return x.prog.Wrote, files, []string{x.FilePath}, workerErr
+	}
+
+	files, err = x.cleanup(files)
+
+	return x.prog.Wrote, files, []string{x.FilePath}, err
+}
+
+// sevenZipPrepareEntries iterates all entries, creates directories, validates paths,
+// and returns the list of file entries to extract in parallel.
+func (x *XFile) sevenZipPrepareEntries(sevenZip *sevenzip.ReadCloser) ([]sevenZipEntry, []string, error) {
+	entries := make([]sevenZipEntry, 0, len(sevenZip.File))
+	files := make([]string, 0, len(sevenZip.File))
+
+	for _, zipFile := range sevenZip.File {
+		cleanPath := x.clean(zipFile.Name)
+
+		if !strings.HasPrefix(cleanPath, x.OutputDir) {
+			return nil, files, fmt.Errorf("%s: %s: %w: %s (from: %s)",
+				x.FilePath, zipFile.FileInfo().Name(), ErrInvalidPath, cleanPath, zipFile.Name)
+		}
+
+		files = append(files, filepath.Join(x.OutputDir, zipFile.Name))
+
+		if zipFile.FileInfo().IsDir() {
+			err := x.mkDir(cleanPath, zipFile.Mode(), zipFile.Modified)
+			if err != nil {
+				return nil, files, fmt.Errorf("%s: making 7z dir: %w", x.FilePath, err)
+			}
+
+			continue
+		}
+
+		entries = append(entries, sevenZipEntry{sevenZipFile: zipFile})
+	}
+
+	return entries, files, nil
+}
+
+// sevenZipDispatchWorkers sends file entries to a bounded worker pool for extraction.
+func (x *XFile) sevenZipDispatchWorkers(entries []sevenZipEntry) error {
+	var (
+		waitGroup sync.WaitGroup
+		firstErr  error
+		errOnce   sync.Once
+		semaphore = make(chan struct{}, x.FileWorkers)
+	)
+
+	for idx := range entries {
+		entry := entries[idx]
+
+		if firstErr != nil {
+			break
+		}
+
+		semaphore <- struct{}{} // acquire worker slot
+
+		waitGroup.Go(func() {
+			defer func() { <-semaphore }() // release worker slot
+
+			err := x.extract7zEntry(entry)
+			if err != nil {
+				errOnce.Do(func() { firstErr = err })
+			}
+		})
+	}
+
+	waitGroup.Wait()
+
+	return firstErr
+}
+
+// extract7zEntry extracts a single 7z file entry (used by parallel workers).
+func (x *XFile) extract7zEntry(entry sevenZipEntry) error {
+	zFile, err := entry.sevenZipFile.Open()
+	if err != nil {
+		return fmt.Errorf("%s: 7zFile.Open: %w", x.FilePath, err)
+	}
+	defer zFile.Close()
+
+	fileInfo := &file{
+		Path:     x.clean(entry.sevenZipFile.Name),
+		Data:     zFile,
+		FileMode: entry.sevenZipFile.Mode(),
+		DirMode:  x.DirMode,
+		Mtime:    entry.sevenZipFile.Modified,
+		Atime:    entry.sevenZipFile.Accessed,
+	}
+
+	_, err = x.writeParallel(fileInfo)
+	if err != nil {
+		return fmt.Errorf("%s: %w: %s (from: %s)",
+			entry.sevenZipFile.FileInfo().Name(), err, fileInfo.Path, entry.sevenZipFile.Name)
+	}
+
+	return nil
 }
 
 func (x *XFile) un7zip(zipFile *sevenzip.File) (uint64, string, error) {
