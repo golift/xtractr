@@ -335,12 +335,15 @@ func (x *Xtractr) decompressArchives(resp *Response) error {
 func (x *Xtractr) processArchive(filename string, resp *Response) (uint64, []string, []string, error) {
 	err := os.MkdirAll(resp.Output, x.config.DirMode)
 	if err != nil {
-		return 0, nil, nil, fmt.Errorf("making output dir: %w", err)
+		return 0, nil, nil, NewExtractError(
+			fmt.Errorf("making output dir: %w", err),
+			filename, resp.Output, 0, "directory",
+		)
 	}
 
 	x.config.Debugf("Extracting File: %v to %v", filename, resp.Output)
 
-	bytes, files, archives, err := ExtractFile(&XFile{ // extract the file.
+	xFile := &XFile{
 		FilePath:  filename,
 		OutputDir: resp.Output,
 		FileMode:  x.config.FileMode,
@@ -350,12 +353,15 @@ func (x *Xtractr) processArchive(filename string, resp *Response) (uint64, []str
 		log:       x.config.Logger,
 		Updates:   resp.X.Updates,
 		Progress:  resp.X.Progress,
-	})
-	if err != nil {
-		x.DeleteFiles(resp.Output) // clean up the mess after an error and bail.
 	}
 
-	return bytes, files, archives, err
+	bytes, files, archives, err := ExtractFile(xFile)
+	if err != nil {
+		x.DeleteFiles(resp.Output) // clean up the mess after an error and bail.
+		return bytes, files, archives, WrapExtractError(err, xFile, bytes, "")
+	}
+
+	return bytes, files, archives, nil
 }
 
 func (x *Xtractr) cleanupProcessedArchives(resp *Response) error {
