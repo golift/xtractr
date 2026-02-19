@@ -556,9 +556,7 @@ func (x *Xtractr) Rename(oldpath, newpath string) error {
 	}
 	defer oldFile.Close()
 
-	tryPath := newpath
-
-	newFile, err := os.OpenFile(tryPath, os.O_TRUNC|os.O_CREATE|os.O_WRONLY, x.config.FileMode)
+	newFile, err := os.OpenFile(newpath, os.O_TRUNC|os.O_CREATE|os.O_WRONLY, x.config.FileMode)
 	if err != nil {
 		if IsErrNameTooLong(err) {
 			tryPath, tryErr := TruncatePathForFS(newpath)
