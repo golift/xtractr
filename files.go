@@ -544,7 +544,7 @@ func openFile(path string, flags int, mode os.FileMode) (*os.File, string, error
 	}
 
 	if !IsErrNameTooLong(err) {
-		return nil, "", err
+		return nil, "", fmt.Errorf("os.OpenFile(): %w", err)
 	}
 
 	shortPath, truncErr := TruncatePathForFS(path)
@@ -554,7 +554,7 @@ func openFile(path string, flags int, mode os.FileMode) (*os.File, string, error
 
 	openFile, err = os.OpenFile(shortPath, flags, mode)
 	if err != nil {
-		return nil, "", err
+		return nil, "", fmt.Errorf("os.OpenFile(): %w", err)
 	}
 
 	return openFile, shortPath, nil
@@ -592,7 +592,7 @@ func (x *Xtractr) Rename(oldpath, newpath string) error {
 
 	newFile, _, err := openFile(newpath, os.O_TRUNC|os.O_CREATE|os.O_WRONLY, oldFileStat.Mode())
 	if err != nil {
-		return &ExtractError{Errs: []error{origErr, fmt.Errorf("os.OpenFile(): %w", err)}}
+		return &ExtractError{Errs: []error{origErr, err}}
 	}
 	defer newFile.Close()
 
@@ -601,7 +601,7 @@ func (x *Xtractr) Rename(oldpath, newpath string) error {
 		return &ExtractError{Errs: []error{origErr, fmt.Errorf("io.Copy(): %w", err)}}
 	}
 
-	_ = os.Chtimes(newpath, oldFileStat.ModTime(), oldFileStat.ModTime()) //nolint:errcheck
+	_ = os.Chtimes(newpath, oldFileStat.ModTime(), oldFileStat.ModTime())
 	// The copy was successful, so now delete the original file
 	_ = oldFile.Close() // Needs to be closed before delete.
 	_ = os.Remove(oldpath)
@@ -763,7 +763,7 @@ func (x *XFile) writeFile(file *file, parallel bool) (uint64, error) {
 
 	fout, pathUsed, err := openFile(file.Path, os.O_RDWR|os.O_CREATE|os.O_TRUNC, x.safeFileMode(file.FileMode))
 	if err != nil {
-		return 0, fmt.Errorf("opening archived file for writing: %w", err)
+		return 0, err
 	}
 	defer fout.Close()
 
