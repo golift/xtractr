@@ -3,6 +3,7 @@ package xtractr
 import (
 	"fmt"
 	"io"
+	"sync"
 )
 
 const maxPercent = 100
@@ -29,6 +30,14 @@ type Progress struct {
 	// This is the input file. Do not modify the data.
 	XFile *XFile
 	send  func()
+}
+
+// progressTracker wraps Progress with a mutex for thread-safe concurrent access.
+// The mutex is kept out of Progress so Progress remains safely copyable (for channels/callbacks).
+type progressTracker struct {
+	Progress
+
+	mu sync.Mutex
 }
 
 // Percent returns the percent of bytes read or written.
@@ -93,18 +102,46 @@ func ArchiveProgress(every float64, progress chan Progress, reset, exit bool) { 
 	}
 }
 
-func (x *XFile) newProgress(total, compressed uint64, count int) *Progress {
-	x.prog = &Progress{Total: total, Compressed: compressed, Count: count, send: func() {}, XFile: x}
+func (x *XFile) newProgress(total, compressed uint64, count int) *progressTracker {
+	tracker := &progressTracker{}
+	tracker.Total = total
+	tracker.Compressed = compressed
+	tracker.Count = count
+	tracker.XFile = x
+	tracker.send = func() {}
+	x.prog = tracker
 
 	if x.Progress != nil {
-		x.prog.send = func() { x.Progress(*x.prog) }
+		tracker.send = func() {
+			x.Progress(tracker.snapshot())
+		}
 	}
 
 	if x.Updates != nil {
-		x.prog.send = func() { x.Updates <- *x.prog }
+		tracker.send = func() {
+			x.Updates <- tracker.snapshot()
+		}
 	}
 
-	return x.prog
+	return tracker
+}
+
+// snapshot returns a copy of the Progress data, safe to send to callbacks/channels.
+func (p *progressTracker) snapshot() Progress {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	return p.Progress
+}
+
+// safeSend attempts to send a progress update without blocking.
+// Parallel workers use this to avoid flooding the progress channel.
+// Uses TryLock so concurrent workers skip updates rather than serialize on them.
+func (p *progressTracker) safeSend() {
+	if p.mu.TryLock() {
+		p.mu.Unlock()
+		p.send()
+	}
 }
 
 // progressWrapper wraps several io interfaces so we can count the bytes read and written to those interfaces.
@@ -112,50 +149,84 @@ type progressWrapper struct {
 	io.Writer
 	io.Reader
 	io.ReaderAt
-	*Progress
+	*progressTracker
+
+	parallel bool
 }
 
 func (p *progressWrapper) Write(data []byte) (n int, err error) {
-	defer p.send()
-
 	size, err := p.Writer.Write(data)
+
+	p.mu.Lock()
 	p.Wrote += uint64(size)
+	p.mu.Unlock()
+
+	if p.parallel {
+		p.safeSend()
+	} else {
+		p.send()
+	}
 
 	return size, err //nolint:wrapcheck
 }
 
 func (p *progressWrapper) Read(data []byte) (n int, err error) {
-	defer p.send()
-
 	size, err := p.Reader.Read(data)
+
+	p.mu.Lock()
 	p.Progress.Read += uint64(size)
+	p.mu.Unlock()
+
+	if p.parallel {
+		p.safeSend()
+	} else {
+		p.send()
+	}
 
 	return size, err //nolint:wrapcheck
 }
 
 func (p *progressWrapper) ReadAt(data []byte, off int64) (n int, err error) {
-	defer p.send()
-
 	size, err := p.ReaderAt.ReadAt(data, off)
+
+	p.mu.Lock()
 	p.Progress.Read += uint64(size)
+	p.mu.Unlock()
+
+	if p.parallel {
+		p.safeSend()
+	} else {
+		p.send()
+	}
 
 	return size, err //nolint:wrapcheck
 }
 
-func (p *Progress) writer(writer io.Writer) io.Writer {
+func (p *progressTracker) writer(writer io.Writer) io.Writer {
+	p.mu.Lock()
 	p.Files++
-	return &progressWrapper{Writer: writer, Progress: p}
+	p.mu.Unlock()
+
+	return &progressWrapper{Writer: writer, progressTracker: p}
 }
 
-func (p *Progress) reader(reader io.Reader) io.Reader {
-	return &progressWrapper{Reader: reader, Progress: p}
+func (p *progressTracker) parallelWriter(writer io.Writer) io.Writer {
+	p.mu.Lock()
+	p.Files++
+	p.mu.Unlock()
+
+	return &progressWrapper{Writer: writer, progressTracker: p, parallel: true}
 }
 
-func (p *Progress) readAter(reader io.ReaderAt) io.ReaderAt {
-	return &progressWrapper{ReaderAt: reader, Progress: p}
+func (p *progressTracker) reader(reader io.Reader) io.Reader {
+	return &progressWrapper{Reader: reader, progressTracker: p}
 }
 
-func (p *Progress) done() {
+func (p *progressTracker) readAter(reader io.ReaderAt) io.ReaderAt {
+	return &progressWrapper{ReaderAt: reader, progressTracker: p}
+}
+
+func (p *progressTracker) done() {
 	p.Done = true
 	p.send()
 }

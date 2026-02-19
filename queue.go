@@ -344,17 +344,17 @@ func (x *Xtractr) processArchive(filename string, resp *Response) (uint64, []str
 	x.config.Debugf("Extracting File: %v to %v", filename, resp.Output)
 
 	xFile := &XFile{
-		FilePath:  filename,
-		OutputDir: resp.Output,
-		FileMode:  x.config.FileMode,
-		DirMode:   x.config.DirMode,
-		Passwords: resp.X.Passwords,
-		Password:  resp.X.Password,
-		log:       x.config.Logger,
-		Updates:   resp.X.Updates,
-		Progress:  resp.X.Progress,
+		FilePath:    filename,
+		OutputDir:   resp.Output,
+		FileMode:    x.config.FileMode,
+		DirMode:     x.config.DirMode,
+		Passwords:   resp.X.Passwords,
+		Password:    resp.X.Password,
+		FileWorkers: x.config.FileWorkers,
+		log:         x.config.Logger,
+		Updates:     resp.X.Updates,
+		Progress:    resp.X.Progress,
 	}
-
 	bytes, files, archives, err := ExtractFile(xFile)
 	if err != nil {
 		x.DeleteFiles(resp.Output) // clean up the mess after an error and bail.

@@ -26,6 +26,11 @@ type Config struct {
 	BuffSize int
 	// Number of concurrent extractions allowed.
 	Parallel int
+	// FileWorkers controls how many files within a single archive are extracted
+	// concurrently. Only effective for random-access formats (ZIP, 7z).
+	// Streaming formats ignore this. 0 or 1 = sequential (current behavior).
+	// Total concurrent I/O = Parallel * FileWorkers.
+	FileWorkers int
 	// Filemode used when writing files, tar ignores this, so does Windows.
 	FileMode os.FileMode
 	// Filemode used when writing folders, tar ignores this.
@@ -117,6 +122,10 @@ func parseConfig(config *Config) *Xtractr {
 
 	if config.Parallel < 1 {
 		config.Parallel = 1
+	}
+
+	if config.FileWorkers < 1 {
+		config.FileWorkers = 1
 	}
 
 	if config.BuffSize == 0 {
