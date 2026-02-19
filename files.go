@@ -356,12 +356,16 @@ func ExtractFile(xFile *XFile) (size uint64, filesList, archiveList []string, er
 	// just borrowing this... Has to go into an interface to avoid a cycle.
 	xFile.moveFiles = parseConfig(&Config{Logger: xFile.log}).MoveFiles
 
+	var extensionType string // archive type from matched extension, for error reporting when extraction fails
+
 	for _, ext := range extension2function {
 		if strings.HasSuffix(sName, ext.Ext) {
 			size, filesList, archiveList, err = ext.Fn(xFile)
 			if err == nil {
 				return size, filesList, archiveList, nil
 			}
+
+			extensionType = ext.Type // preserve for error reporting before fallback
 			// Extension matched but extraction failed; try signature detection as fallback.
 			break
 		}
@@ -375,7 +379,7 @@ func ExtractFile(xFile *XFile) (size uint64, filesList, archiveList []string, er
 		extErr := &ExtractError{
 			FilePath:    xFile.FilePath,
 			OutputDir:   xFile.OutputDir,
-			ArchiveType: archiveType,
+			ArchiveType: extensionType,
 		}
 		if err != nil {
 			extErr.Errs = append(extErr.Errs, err)
