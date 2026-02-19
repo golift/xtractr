@@ -164,19 +164,14 @@ func (x *XFile) sevenZipDispatchWorkers(entries []sevenZipEntry) error {
 
 		semaphore <- struct{}{} // acquire worker slot
 
-		waitGroup.Add(1)
-
-		go func() {
-			defer func() {
-				<-semaphore // release worker slot
-				waitGroup.Done()
-			}()
+		waitGroup.Go(func() {
+			defer func() { <-semaphore }() // release worker slot
 
 			err := x.extract7zEntry(entry)
 			if err != nil {
 				errOnce.Do(func() { firstErr = err })
 			}
-		}()
+		})
 	}
 
 	waitGroup.Wait()

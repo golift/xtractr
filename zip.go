@@ -135,28 +135,20 @@ func (x *XFile) zipDispatchWorkers(entries []zipFileEntry) error {
 	for idx := range entries {
 		entry := entries[idx]
 
-		// Stop dispatching if we already have an error.
-		errOnce.Do(func() {}) // no-op; just checking if errOnce has fired is not possible,
-		// so we check firstErr directly.
 		if firstErr != nil {
 			break
 		}
 
 		semaphore <- struct{}{} // acquire worker slot
 
-		waitGroup.Add(1)
-
-		go func() {
-			defer func() {
-				<-semaphore // release worker slot
-				waitGroup.Done()
-			}()
+		waitGroup.Go(func() {
+			defer func() { <-semaphore }() // release worker slot
 
 			err := x.extractZIPEntry(entry)
 			if err != nil {
 				errOnce.Do(func() { firstErr = err })
 			}
-		}()
+		})
 	}
 
 	waitGroup.Wait()
