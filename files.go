@@ -737,9 +737,7 @@ func (x *XFile) writeFile(file *file, parallel bool) (uint64, error) {
 		return 0, fmt.Errorf("writing archived file '%s' parent folder: %w", filepath.Base(file.Path), err)
 	}
 
-	writePath := file.Path
-
-	fout, err := os.OpenFile(writePath, os.O_RDWR|os.O_CREATE|os.O_TRUNC, x.safeFileMode(file.FileMode))
+	fout, err := os.OpenFile(file.Path, os.O_RDWR|os.O_CREATE|os.O_TRUNC, x.safeFileMode(file.FileMode))
 	if err != nil {
 		if IsErrNameTooLong(err) {
 			shortPath, truncErr := TruncatePathForFS(file.Path)
@@ -747,9 +745,8 @@ func (x *XFile) writeFile(file *file, parallel bool) (uint64, error) {
 				return 0, fmt.Errorf("opening archived file (name too long, truncation failed): %w", truncErr)
 			}
 
-			writePath = shortPath
 			file.Path = shortPath
-			fout, err = os.OpenFile(writePath, os.O_RDWR|os.O_CREATE|os.O_TRUNC, x.safeFileMode(file.FileMode))
+			fout, err = os.OpenFile(file.Path, os.O_RDWR|os.O_CREATE|os.O_TRUNC, x.safeFileMode(file.FileMode))
 		}
 
 		if err != nil {
@@ -769,7 +766,7 @@ func (x *XFile) writeFile(file *file, parallel bool) (uint64, error) {
 	}
 
 	// If this sucks, make it a defer and ignore the error, like xFile.mkDir().
-	err = os.Chtimes(writePath, file.Atime, file.Mtime)
+	err = os.Chtimes(file.Path, file.Atime, file.Mtime)
 	if err != nil {
 		return uint64(size), fmt.Errorf("changing archived file times: %w", err)
 	}
