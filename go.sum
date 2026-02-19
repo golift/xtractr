@@ -1,5 +1,7 @@
 github.com/Unpackerr/iso9660 v0.0.0-20260218033718-993fc9e3f4e7 h1:gWkvAjff7C4vXpca7yR0ReFpPfQJwRLPuH0Z0R1dxCE=
 github.com/Unpackerr/iso9660 v0.0.0-20260218033718-993fc9e3f4e7/go.mod h1:OxUSupHsO9ceI8lBLPJKWBTphLemjrCQY8LPXM7qSzU=
+github.com/Unpackerr/iso9660 v0.0.1 h1:T1sigj6u9eBuoVeeJyMRdSHi83czj5EDU7vCQUhDv7g=
+github.com/Unpackerr/iso9660 v0.0.1/go.mod h1:OxUSupHsO9ceI8lBLPJKWBTphLemjrCQY8LPXM7qSzU=
 github.com/andybalholm/brotli v1.2.0 h1:ukwgCxwYrmACq68yiUqwIWnGY0cTPox/M94sVwToPjQ=
 github.com/andybalholm/brotli v1.2.0/go.mod h1:rzTDkvFWvIrjDXZHkuS16NPggd91W3kUSvPlQ1pLaKY=
 github.com/bodgit/plumbing v1.3.0 h1:pf9Itz1JOQgn7vEOE7v7nlEfBykYqvUYioC61TwWCFU=
