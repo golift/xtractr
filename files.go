@@ -352,11 +352,30 @@ func ExtractFile(xFile *XFile) (size uint64, filesList, archiveList []string, er
 
 	for _, ext := range extension2function {
 		if strings.HasSuffix(sName, ext.Extension) {
-			return ext.Extract(xFile)
+			size, filesList, archiveList, err = ext.Extract(xFile)
+			if err == nil {
+				return size, filesList, archiveList, nil
+			}
+
+			// Extension matched but extraction failed; try signature detection as fallback.
+			break
 		}
 	}
 
-	return 0, nil, nil, fmt.Errorf("%w: %s", ErrUnknownArchiveType, xFile.FilePath)
+	// Fall back to file signature (magic number) detection.
+	xFile.Debugf("falling back to signature detection for %s (extension error: %v)", xFile.FilePath, err)
+
+	extractFn, sigErr := detectBySignature(xFile.FilePath)
+	if sigErr != nil {
+		// If extension matching also failed, return the original error context.
+		if err != nil {
+			return 0, nil, nil, err
+		}
+
+		return 0, nil, nil, sigErr
+	}
+
+	return extractFn(xFile)
 }
 
 // MoveFiles relocates files then removes the folder they were in.
