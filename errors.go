@@ -3,6 +3,35 @@ package xtractr
 import (
 	"errors"
 	"strings"
+	"syscall"
+)
+
+// Package-level errors for extraction and queue operations.
+var (
+	ErrNameTooLong = errors.New("could not find available truncated path after 999 attempts")
+
+	// Queue / start.
+
+	ErrQueueStopped       = errors.New("extractor queue stopped, cannot extract")
+	ErrNoCompressedFiles  = errors.New("no compressed files found")
+	ErrUnknownArchiveType = errors.New("unknown archive file type")
+	ErrInvalidPath        = errors.New("archived file contains invalid path")
+	ErrInvalidHead        = errors.New("archived file contains invalid header file")
+	ErrQueueRunning       = errors.New("extractor queue running, cannot start")
+	ErrNoConfig           = errors.New("call NewQueue() to initialize a queue")
+	ErrNoLogger           = errors.New("xtractr.Config.Logger must be non-nil")
+
+	// CUE sheet.
+
+	ErrNoCueFile        = errors.New("cue sheet does not reference a FILE")
+	ErrNoTracks         = errors.New("cue sheet contains no tracks")
+	ErrAudioNotFound    = errors.New("audio file referenced by cue sheet not found")
+	ErrUnsupportedAudio = errors.New("cue sheet references unsupported audio format (only FLAC is supported)")
+
+	// RPM.
+
+	ErrUnsupportedRPMCompression = errors.New("unsupported rpm compression")
+	ErrUnsupportedRPMArchiveFmt  = errors.New("unsupported rpm archive format")
 )
 
 // ExtractError is a rich error type that can carry multiple errors and warnings
@@ -108,4 +137,19 @@ func WrapExtractError(err error, xFile *XFile, bytesWritten uint64, archiveType 
 	}
 
 	return extErr
+}
+
+// IsErrNameTooLong reports whether err indicates a "file name too long" condition.
+// On Unix this corresponds to syscall.ENAMETOOLONG; it also matches the
+// "file name too long" error message so it works on all platforms (e.g. Windows).
+func IsErrNameTooLong(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	if errors.Is(err, syscall.ENAMETOOLONG) {
+		return true
+	}
+
+	return strings.Contains(err.Error(), "file name too long")
 }

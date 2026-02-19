@@ -10,8 +10,10 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // ArchiveList is the value returned when searching for compressed files.
@@ -472,6 +474,76 @@ func (x *Xtractr) DeleteFiles(files ...string) {
 	}
 }
 
+// nameMax is the typical filesystem limit for a single path component (POSIX NAME_MAX).
+const nameMax = 255
+
+// TruncatePathForFS returns a path that fits within filesystem name limits by
+// truncating the last path component (the filename) to nameMax bytes and, if
+// that name already exists in the directory, appending ~1, ~2, etc. until an
+// available name is found. The extension is preserved; the stem is truncated at
+// UTF-8 rune boundaries. Use this when IsErrNameTooLong indicates a path is too long.
+func TruncatePathForFS(path string) (string, error) {
+	dir, base := filepath.Dir(path), filepath.Base(path)
+	ext := filepath.Ext(base)
+	stem := strings.TrimSuffix(base, ext)
+	// Reserve space for conflict suffix "~999"
+	maxStemBytes := max(
+		//nolint:mnd // (4 bytes) so we don't exceed nameMax.
+		nameMax-len(ext)-4, 1)
+
+	stem = truncateToBytes(stem, maxStemBytes)
+	candidate := stem + ext
+
+	if len(candidate) > nameMax {
+		stem = truncateToBytes(stem, nameMax-len(ext))
+		candidate = stem + ext
+	}
+
+	tryPath := filepath.Join(dir, candidate)
+
+	_, err := os.Lstat(tryPath)
+	if err != nil { // it doesn't exist, or some other problem reading it. Try to write it.
+		return tryPath, nil //nolint:nilerr
+	}
+
+	for n := 1; n < 1000; n++ {
+		suffix := "~" + strconv.Itoa(n)
+		candidate = truncateToBytes(stem, nameMax-len(ext)-len(suffix)) + suffix + ext
+
+		if len(candidate) > nameMax {
+			candidate = stem + suffix + ext
+			if len(candidate) > nameMax {
+				stem = truncateToBytes(stem, nameMax-len(ext)-len(suffix))
+				candidate = stem + suffix + ext
+			}
+		}
+
+		tryPath = filepath.Join(dir, candidate)
+
+		_, err = os.Lstat(tryPath)
+		if err != nil {
+			return tryPath, nil //nolint:nilerr
+		}
+	}
+
+	return "", ErrNameTooLong
+}
+
+// truncateToBytes shortens s to at most maxBytes bytes, on UTF-8 rune boundaries.
+func truncateToBytes(s string, maxBytes int) string {
+	if len(s) <= maxBytes {
+		return s
+	}
+
+	bytes := []byte(s)
+	for len(bytes) > maxBytes {
+		_, size := utf8.DecodeLastRune(bytes)
+		bytes = bytes[:len(bytes)-size]
+	}
+
+	return string(bytes)
+}
+
 type file struct {
 	Path     string
 	Data     io.Reader
@@ -496,9 +568,22 @@ func (x *Xtractr) Rename(oldpath, newpath string) error {
 	}
 	defer oldFile.Close()
 
-	newFile, err := os.OpenFile(newpath, os.O_TRUNC|os.O_CREATE|os.O_WRONLY, x.config.FileMode)
+	tryPath := newpath
+
+	newFile, err := os.OpenFile(tryPath, os.O_TRUNC|os.O_CREATE|os.O_WRONLY, x.config.FileMode)
 	if err != nil {
-		return fmt.Errorf("os.OpenFile(): %w", err)
+		if IsErrNameTooLong(err) {
+			tryPath, tryErr := TruncatePathForFS(newpath)
+			if tryErr != nil {
+				return fmt.Errorf("os.OpenFile() and path truncation: %w", tryErr)
+			}
+
+			newFile, err = os.OpenFile(tryPath, os.O_TRUNC|os.O_CREATE|os.O_WRONLY, x.config.FileMode)
+		}
+
+		if err != nil {
+			return fmt.Errorf("os.OpenFile(): %w", err)
+		}
 	}
 	defer newFile.Close()
 
@@ -666,9 +751,24 @@ func (x *XFile) writeFile(file *file, parallel bool) (uint64, error) {
 		return 0, fmt.Errorf("writing archived file '%s' parent folder: %w", filepath.Base(file.Path), err)
 	}
 
-	fout, err := os.OpenFile(file.Path, os.O_RDWR|os.O_CREATE|os.O_TRUNC, x.safeFileMode(file.FileMode))
+	writePath := file.Path
+
+	fout, err := os.OpenFile(writePath, os.O_RDWR|os.O_CREATE|os.O_TRUNC, x.safeFileMode(file.FileMode))
 	if err != nil {
-		return 0, fmt.Errorf("opening archived file for writing: %w", err)
+		if IsErrNameTooLong(err) {
+			shortPath, truncErr := TruncatePathForFS(file.Path)
+			if truncErr != nil {
+				return 0, fmt.Errorf("opening archived file (name too long, truncation failed): %w", truncErr)
+			}
+
+			writePath = shortPath
+			file.Path = shortPath
+			fout, err = os.OpenFile(writePath, os.O_RDWR|os.O_CREATE|os.O_TRUNC, x.safeFileMode(file.FileMode))
+		}
+
+		if err != nil {
+			return 0, fmt.Errorf("opening archived file for writing: %w", err)
+		}
 	}
 	defer fout.Close()
 
@@ -683,7 +783,7 @@ func (x *XFile) writeFile(file *file, parallel bool) (uint64, error) {
 	}
 
 	// If this sucks, make it a defer and ignore the error, like xFile.mkDir().
-	err = os.Chtimes(file.Path, file.Atime, file.Mtime)
+	err = os.Chtimes(writePath, file.Atime, file.Mtime)
 	if err != nil {
 		return uint64(size), fmt.Errorf("changing archived file times: %w", err)
 	}

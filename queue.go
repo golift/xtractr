@@ -355,6 +355,7 @@ func (x *Xtractr) processArchive(filename string, resp *Response) (uint64, []str
 		Updates:     resp.X.Updates,
 		Progress:    resp.X.Progress,
 	}
+
 	bytes, files, archives, err := ExtractFile(xFile)
 	if err != nil {
 		x.DeleteFiles(resp.Output) // clean up the mess after an error and bail.

@@ -1,8 +1,11 @@
 package xtractr_test
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -146,4 +149,45 @@ func TestAllExcept(t *testing.T) {
 
 	assert.Len(t, allExcept, len(xtractr.SupportedExtensions())-len(includeOnlyThese),
 		"we should have 3 fewer entries that the total supported extensions")
+}
+
+func TestIsErrNameTooLong(t *testing.T) {
+	t.Parallel()
+
+	assert.False(t, xtractr.IsErrNameTooLong(nil))
+	assert.False(t, xtractr.IsErrNameTooLong(errors.New("other error")))
+
+	assert.True(t, xtractr.IsErrNameTooLong(syscall.ENAMETOOLONG))
+	assert.True(t, xtractr.IsErrNameTooLong(errors.Join(errors.New("wrap"), syscall.ENAMETOOLONG)))
+	assert.True(t, xtractr.IsErrNameTooLong(errors.New("open foo: file name too long")))
+}
+
+func TestTruncatePathForFS(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	// Short path is returned unchanged (and file doesn't exist).
+	short := filepath.Join(dir, "short.docx")
+	out, err := xtractr.TruncatePathForFS(short)
+	require.NoError(t, err)
+	assert.Equal(t, short, out)
+
+	// Long basename is truncated to 255 bytes; extension preserved.
+	longStem := strings.Repeat("a", 300)
+	longPath := filepath.Join(dir, longStem+".docx")
+	out, err = xtractr.TruncatePathForFS(longPath)
+	require.NoError(t, err)
+	assert.Equal(t, dir, filepath.Dir(out))
+	base := filepath.Base(out)
+	assert.LessOrEqual(t, len(base), 255)
+	assert.Equal(t, ".docx", filepath.Ext(out))
+
+	// When truncated name already exists, ~1 is used.
+	require.NoError(t, os.WriteFile(out, []byte("x"), 0o600))
+
+	out2, err := xtractr.TruncatePathForFS(longPath)
+	require.NoError(t, err)
+	assert.Contains(t, filepath.Base(out2), "~1")
+	assert.Equal(t, ".docx", filepath.Ext(out2))
 }

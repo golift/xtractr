@@ -16,6 +16,7 @@ linters:
           - goconst
           - wsl
           - errcheck
+          - err113
         path: .+_test.go
       - linters:
           - cyclop

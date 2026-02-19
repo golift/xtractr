@@ -3,7 +3,6 @@ package xtractr
 import (
 	"compress/bzip2"
 	"compress/gzip"
-	"errors"
 	"fmt"
 	"io"
 
@@ -11,12 +10,6 @@ import (
 	"github.com/klauspost/compress/zstd"
 	"github.com/therootcompany/xz"
 	"github.com/ulikunitz/xz/lzma"
-)
-
-// Errors returned when decompressing RAR archives.
-var (
-	ErrUnsupportedRPMCompression = errors.New("unsupported rpm compression")
-	ErrUnsupportedRPMArchiveFmt  = errors.New("unsupported rpm archive format")
 )
 
 // ExtractRPM extract a file as a RedHat Package Manager file.
