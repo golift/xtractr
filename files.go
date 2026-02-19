@@ -483,13 +483,13 @@ const nameMax = 255
 // available name is found. The extension is preserved; the stem is truncated at
 // UTF-8 rune boundaries. Use this when IsErrNameTooLong indicates a path is too long.
 //
-//nolint:nilerr,noinlineerr
+//nolint:nilerr
 func TruncatePathForFS(path string) (string, error) {
 	var (
 		dir     = filepath.Dir(path)
 		ext     = filepath.Ext(path)
-		stem    = truncateToBytes(strings.TrimSuffix(filepath.Base(path), ext), max(nameMax-len(ext), 1))
-		base    = stem // Do not mutate in loop.
+		base    = strings.TrimSuffix(filepath.Base(path), ext)
+		stem    = truncateToBytes(base, max(nameMax-len(ext), 1))
 		tryPath = filepath.Join(dir, stem+ext)
 	)
 
@@ -498,15 +498,13 @@ func TruncatePathForFS(path string) (string, error) {
 		return tryPath, nil
 	}
 
-	for n := 1; n < 1000; n++ {
-		var (
-			suffix    = "~" + strconv.Itoa(n)
-			maxStem   = max(nameMax-len(ext)-len(suffix), 1)
-			candidate = truncateToBytes(base, maxStem)
-		)
+	for attempt := range 1000 {
+		postfix := "~" + strconv.Itoa(attempt+1)
+		newStem := truncateToBytes(stem, max(nameMax-len(ext)-len(postfix), 1))
+		tryPath = filepath.Join(dir, newStem+postfix+ext)
 
-		tryPath = filepath.Join(dir, candidate+suffix+ext)
-		if _, err = os.Lstat(tryPath); err != nil {
+		_, err = os.Lstat(tryPath)
+		if err != nil {
 			return tryPath, nil
 		}
 	}
