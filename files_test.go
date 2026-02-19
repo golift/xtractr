@@ -190,4 +190,28 @@ func TestTruncatePathForFS(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, filepath.Base(out2), "~1")
 	assert.Equal(t, ".docx", filepath.Ext(out2))
+
+	// Stem consistency: when multiple conflicts exist (~1, ~2, ...), each candidate
+	// must use the same base stem. Would have caught the "stem mutated in loop" bug.
+	require.NoError(t, os.WriteFile(out2, []byte("x"), 0o600))
+
+	out3, err := xtractr.TruncatePathForFS(longPath)
+	require.NoError(t, err)
+
+	base3 := filepath.Base(out3)
+	assert.Contains(t, base3, "~2", "third call should return ~2 when truncated and ~1 exist")
+
+	stem1 := strings.TrimSuffix(filepath.Base(out2), "~1.docx")
+	stem2 := strings.TrimSuffix(base3, "~2.docx")
+	assert.Equal(t, stem1, stem2, "stems for ~1 and ~2 must be identical (no mutation in loop)")
+	assert.LessOrEqual(t, len(base3), 255)
+
+	// Extension longer than nameMax: must not panic; truncateToBytes gets maxBytes <= 0
+	// without the fix. Resulting path may still be long; we only assert no panic and no error.
+	longExt := strings.Repeat("x", 300)
+	pathLongExt := filepath.Join(dir, "a."+longExt)
+	outLongExt, err := xtractr.TruncatePathForFS(pathLongExt)
+	require.NoError(t, err)
+	assert.NotEmpty(t, outLongExt)
+	assert.Equal(t, dir, filepath.Dir(outLongExt))
 }

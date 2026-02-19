@@ -482,47 +482,32 @@ const nameMax = 255
 // that name already exists in the directory, appending ~1, ~2, etc. until an
 // available name is found. The extension is preserved; the stem is truncated at
 // UTF-8 rune boundaries. Use this when IsErrNameTooLong indicates a path is too long.
+//
+//nolint:nilerr,noinlineerr
 func TruncatePathForFS(path string) (string, error) {
-	dir, base := filepath.Dir(path), filepath.Base(path)
-	ext := filepath.Ext(base)
-	stem := strings.TrimSuffix(base, ext)
-	// Reserve space for conflict suffix "~999"
-	maxStemBytes := max(
-		//nolint:mnd // (4 bytes) so we don't exceed nameMax.
-		nameMax-len(ext)-4, 1)
-
-	stem = truncateToBytes(stem, maxStemBytes)
-	candidate := stem + ext
-
-	if len(candidate) > nameMax {
-		stem = truncateToBytes(stem, nameMax-len(ext))
-		candidate = stem + ext
-	}
-
-	tryPath := filepath.Join(dir, candidate)
+	var (
+		dir     = filepath.Dir(path)
+		ext     = filepath.Ext(path)
+		stem    = truncateToBytes(strings.TrimSuffix(filepath.Base(path), ext), max(nameMax-len(ext), 1))
+		base    = stem // Do not mutate in loop.
+		tryPath = filepath.Join(dir, stem+ext)
+	)
 
 	_, err := os.Lstat(tryPath)
-	if err != nil { // it doesn't exist, or some other problem reading it. Try to write it.
-		return tryPath, nil //nolint:nilerr
+	if err != nil { // path doesn't exist or other error; caller can try to create it
+		return tryPath, nil
 	}
 
 	for n := 1; n < 1000; n++ {
-		suffix := "~" + strconv.Itoa(n)
-		candidate = truncateToBytes(stem, nameMax-len(ext)-len(suffix)) + suffix + ext
+		var (
+			suffix    = "~" + strconv.Itoa(n)
+			maxStem   = max(nameMax-len(ext)-len(suffix), 1)
+			candidate = truncateToBytes(base, maxStem)
+		)
 
-		if len(candidate) > nameMax {
-			candidate = stem + suffix + ext
-			if len(candidate) > nameMax {
-				stem = truncateToBytes(stem, nameMax-len(ext)-len(suffix))
-				candidate = stem + suffix + ext
-			}
-		}
-
-		tryPath = filepath.Join(dir, candidate)
-
-		_, err = os.Lstat(tryPath)
-		if err != nil {
-			return tryPath, nil //nolint:nilerr
+		tryPath = filepath.Join(dir, candidate+suffix+ext)
+		if _, err = os.Lstat(tryPath); err != nil {
+			return tryPath, nil
 		}
 	}
 
@@ -530,12 +515,17 @@ func TruncatePathForFS(path string) (string, error) {
 }
 
 // truncateToBytes shortens s to at most maxBytes bytes, on UTF-8 rune boundaries.
-func truncateToBytes(s string, maxBytes int) string {
-	if len(s) <= maxBytes {
-		return s
+// It returns s unchanged if maxBytes is negative or zero to avoid infinite loops or panics.
+func truncateToBytes(str string, maxBytes int) string {
+	if maxBytes <= 0 || len(str) <= maxBytes {
+		if maxBytes <= 0 {
+			return ""
+		}
+
+		return str
 	}
 
-	bytes := []byte(s)
+	bytes := []byte(str)
 	for len(bytes) > maxBytes {
 		_, size := utf8.DecodeLastRune(bytes)
 		bytes = bytes[:len(bytes)-size]
