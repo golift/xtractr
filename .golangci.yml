@@ -24,6 +24,9 @@ linters:
         path: chardet\.go
 
   settings:
+    gomoddirectives:
+      replace-allow-list:
+        - github.com/kdomanski/iso9660
     gosec:
       excludes:
         - G304
