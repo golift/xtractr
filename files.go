@@ -532,6 +532,34 @@ func truncateToBytes(str string, maxBytes int) string {
 	return string(bytes)
 }
 
+// openFile opens path with the given flags and mode. If the path exceeds
+// filesystem name limits, the path is truncated via TruncatePathForFS and
+// retried. It returns the opened file and the path that was actually used
+// (the original or the truncated path), so the caller can update file.Path
+// for later use (e.g. os.Chtimes).
+func openFile(path string, flags int, mode os.FileMode) (*os.File, string, error) {
+	openFile, err := os.OpenFile(path, flags, mode)
+	if err == nil {
+		return openFile, path, nil
+	}
+
+	if !IsErrNameTooLong(err) {
+		return nil, "", err
+	}
+
+	shortPath, truncErr := TruncatePathForFS(path)
+	if truncErr != nil {
+		return nil, "", truncErr
+	}
+
+	openFile, err = os.OpenFile(shortPath, flags, mode)
+	if err != nil {
+		return nil, "", err
+	}
+
+	return openFile, shortPath, nil
+}
+
 type file struct {
 	Path     string
 	Data     io.Reader
@@ -543,41 +571,37 @@ type file struct {
 
 // Rename is an attempt to deal with "invalid cross link device" on weird file systems.
 func (x *Xtractr) Rename(oldpath, newpath string) error {
-	err := os.Rename(oldpath, newpath)
-	if err == nil {
+	origErr := os.Rename(oldpath, newpath)
+	if origErr == nil {
 		return nil
 	}
 
+	origErr = fmt.Errorf("os.Rename(): %w", origErr)
+
 	/* Rename failed, try copy. */
+
+	oldFileStat, err := os.Stat(oldpath)
+	if err != nil {
+		return &ExtractError{Errs: []error{origErr, fmt.Errorf("os.Stat(): %w", err)}}
+	}
 
 	oldFile, err := os.Open(oldpath) // do not forget to close this!
 	if err != nil {
-		return fmt.Errorf("os.Open(): %w", err)
+		return &ExtractError{Errs: []error{origErr, fmt.Errorf("os.Open(): %w", err)}}
 	}
-	defer oldFile.Close()
 
-	newFile, err := os.OpenFile(newpath, os.O_TRUNC|os.O_CREATE|os.O_WRONLY, x.config.FileMode)
+	newFile, _, err := openFile(newpath, os.O_TRUNC|os.O_CREATE|os.O_WRONLY, oldFileStat.Mode())
 	if err != nil {
-		if IsErrNameTooLong(err) {
-			tryPath, tryErr := TruncatePathForFS(newpath)
-			if tryErr != nil {
-				return fmt.Errorf("os.OpenFile() and path truncation: %w", tryErr)
-			}
-
-			newFile, err = os.OpenFile(tryPath, os.O_TRUNC|os.O_CREATE|os.O_WRONLY, x.config.FileMode)
-		}
-
-		if err != nil {
-			return fmt.Errorf("os.OpenFile(): %w", err)
-		}
+		return &ExtractError{Errs: []error{origErr, fmt.Errorf("os.OpenFile(): %w", err)}}
 	}
 	defer newFile.Close()
 
 	_, err = io.Copy(newFile, oldFile)
 	if err != nil {
-		return fmt.Errorf("io.Copy(): %w", err)
+		return &ExtractError{Errs: []error{origErr, fmt.Errorf("io.Copy(): %w", err)}}
 	}
 
+	_ = os.Chtimes(newpath, oldFileStat.ModTime(), oldFileStat.ModTime()) //nolint:errcheck
 	// The copy was successful, so now delete the original file
 	_ = oldFile.Close() // Needs to be closed before delete.
 	_ = os.Remove(oldpath)
@@ -737,23 +761,13 @@ func (x *XFile) writeFile(file *file, parallel bool) (uint64, error) {
 		return 0, fmt.Errorf("writing archived file '%s' parent folder: %w", filepath.Base(file.Path), err)
 	}
 
-	fout, err := os.OpenFile(file.Path, os.O_RDWR|os.O_CREATE|os.O_TRUNC, x.safeFileMode(file.FileMode))
+	fout, pathUsed, err := openFile(file.Path, os.O_RDWR|os.O_CREATE|os.O_TRUNC, x.safeFileMode(file.FileMode))
 	if err != nil {
-		if IsErrNameTooLong(err) {
-			shortPath, truncErr := TruncatePathForFS(file.Path)
-			if truncErr != nil {
-				return 0, fmt.Errorf("opening archived file (name too long, truncation failed): %w", truncErr)
-			}
-
-			file.Path = shortPath
-			fout, err = os.OpenFile(file.Path, os.O_RDWR|os.O_CREATE|os.O_TRUNC, x.safeFileMode(file.FileMode))
-		}
-
-		if err != nil {
-			return 0, fmt.Errorf("opening archived file for writing: %w", err)
-		}
+		return 0, fmt.Errorf("opening archived file for writing: %w", err)
 	}
 	defer fout.Close()
+
+	file.Path = pathUsed
 
 	progWriter := x.prog.writer(fout)
 	if parallel {
