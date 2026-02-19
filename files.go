@@ -367,12 +367,14 @@ func ExtractFile(xFile *XFile) (size uint64, filesList, archiveList []string, er
 
 	extractFn, sigErr := detectBySignature(xFile.FilePath)
 	if sigErr != nil {
-		// If extension matching also failed, return the original error context.
+		extErr := &ExtractError{}
 		if err != nil {
-			return 0, nil, nil, err
+			extErr.Errs = append(extErr.Errs, err)
 		}
 
-		return 0, nil, nil, sigErr
+		extErr.Errs = append(extErr.Errs, sigErr)
+
+		return 0, nil, nil, extErr
 	}
 
 	return extractFn(xFile)
