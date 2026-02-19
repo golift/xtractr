@@ -3,7 +3,6 @@ package xtractr
 import (
 	"errors"
 	"os"
-	"strings"
 )
 
 // Sane defaults.
@@ -70,35 +69,6 @@ var (
 	ErrNoConfig           = errors.New("call NewQueue() to initialize a queue")
 	ErrNoLogger           = errors.New("xtractr.Config.Logger must be non-nil")
 )
-
-// ExtractError is a rich error type that can carry multiple errors and warnings
-// from an extraction attempt. Consumers can use errors.As to retrieve it.
-type ExtractError struct {
-	// Errs holds all errors encountered during extraction attempts.
-	Errs []error
-	// Warnings holds non-fatal messages such as extension mismatches or truncated names.
-	Warnings []string
-}
-
-// Error satisfies the error interface. It returns a combined message from all errors.
-func (e *ExtractError) Error() string {
-	msgs := make([]string, 0, len(e.Errs))
-	for _, err := range e.Errs {
-		msgs = append(msgs, err.Error())
-	}
-
-	return "extraction failed: " + strings.Join(msgs, "; ")
-}
-
-// Unwrap returns the list of wrapped errors for use with errors.Is and errors.As.
-func (e *ExtractError) Unwrap() []error {
-	return e.Errs
-}
-
-// HasWarnings returns true if any non-fatal warnings were collected.
-func (e *ExtractError) HasWarnings() bool {
-	return len(e.Warnings) > 0
-}
 
 // NewQueue returns a new Xtractr Queue you can send Xtract jobs into.
 // This is where to start if you're creating an extractor queue.

@@ -19,10 +19,11 @@ import (
 type ArchiveList map[string][]string
 
 type archive struct {
-	// Extension is passed to strings.HasSuffix.
-	Extension string
-	// Extract function for this extension.
-	Extract Interface
+	Type string
+	// Ext is passed to strings.HasSuffix.
+	Ext string
+	// Fn is the extraction function for this extension.
+	Fn Interface
 }
 
 // Interface is a common interface for extracting compressed or non-compressed files or archives.
@@ -34,50 +35,50 @@ type Interface func(x *XFile) (size uint64, filesList, archiveList []string, err
 //
 //nolint:gochecknoglobals
 var extension2function = []archive{
-	{Extension: ".tar.bz2", Extract: ChngInt(ExtractTarBzip)},
-	{Extension: ".cpio.gz", Extract: ChngInt(ExtractCPIOGzip)},
-	{Extension: ".tar.gz", Extract: ChngInt(ExtractTarGzip)},
-	{Extension: ".tar.xz", Extract: ChngInt(ExtractTarXZ)},
-	{Extension: ".tar.z", Extract: ChngInt(ExtractTarZ)},
+	{Type: "tar.bzip2", Ext: ".tar.bz2", Fn: ChngInt(ExtractTarBzip)},
+	{Type: "cpio.gzip", Ext: ".cpio.gz", Fn: ChngInt(ExtractCPIOGzip)},
+	{Type: "tar.gzip", Ext: ".tar.gz", Fn: ChngInt(ExtractTarGzip)},
+	{Type: "tar.xz", Ext: ".tar.xz", Fn: ChngInt(ExtractTarXZ)},
+	{Type: "tar.lzw", Ext: ".tar.z", Fn: ChngInt(ExtractTarZ)},
 	// The ones with double extensions that match a single (below) need to come first.
-	{Extension: ".7z", Extract: Extract7z},
-	{Extension: ".7z.001", Extract: Extract7z},
-	{Extension: ".ar", Extract: ChngInt(ExtractAr)},
-	{Extension: ".br", Extract: ChngInt(ExtractBrotli)},
-	{Extension: ".brotli", Extract: ChngInt(ExtractBrotli)},
-	{Extension: ".bz2", Extract: ChngInt(ExtractBzip)},
-	{Extension: ".cpgz", Extract: ChngInt(ExtractCPIOGzip)},
-	{Extension: ".cpio", Extract: ChngInt(ExtractCPIO)},
-	{Extension: ".deb", Extract: ChngInt(ExtractAr)},
-	{Extension: ".gz", Extract: ChngInt(ExtractGzip)},
-	{Extension: ".gzip", Extract: ChngInt(ExtractGzip)},
-	{Extension: ".iso", Extract: ChngInt(ExtractISO)},
-	{Extension: ".lz4", Extract: ChngInt(ExtractLZ4)},
-	{Extension: ".lz", Extract: ChngInt(ExtractLZMA)},
-	{Extension: ".lzip", Extract: ChngInt(ExtractLZMA)},
-	{Extension: ".lzma", Extract: ChngInt(ExtractLZMA)},
-	{Extension: ".lzma2", Extract: ChngInt(ExtractLZMA2)},
-	{Extension: ".r00", Extract: ExtractRAR},
-	{Extension: ".rar", Extract: ExtractRAR},
-	{Extension: ".s2", Extract: ChngInt(ExtractS2)},
-	{Extension: ".rpm", Extract: ChngInt(ExtractRPM)},
-	{Extension: ".snappy", Extract: ChngInt(ExtractSnappy)},
-	{Extension: ".sz", Extract: ChngInt(ExtractSnappy)},
-	{Extension: ".tar", Extract: ChngInt(ExtractTar)},
-	{Extension: ".tbz", Extract: ChngInt(ExtractTarBzip)},
-	{Extension: ".tbz2", Extract: ChngInt(ExtractTarBzip)},
-	{Extension: ".tgz", Extract: ChngInt(ExtractTarGzip)},
-	{Extension: ".tlz", Extract: ChngInt(ExtractTarLzip)},
-	{Extension: ".txz", Extract: ChngInt(ExtractTarXZ)},
-	{Extension: ".tz", Extract: ChngInt(ExtractTarZ)},
-	{Extension: ".xz", Extract: ChngInt(ExtractXZ)},
-	{Extension: ".z", Extract: ChngInt(ExtractLZW)}, // everything is lowercase...
-	{Extension: ".zip", Extract: ChngInt(ExtractZIP)},
-	{Extension: ".zlib", Extract: ChngInt(ExtractZlib)},
-	{Extension: ".zst", Extract: ChngInt(ExtractZstandard)},
-	{Extension: ".zstd", Extract: ChngInt(ExtractZstandard)},
-	{Extension: ".zz", Extract: ChngInt(ExtractZlib)},
-	{Extension: ".cue", Extract: ExtractCUE},
+	{Type: "7zip", Ext: ".7z", Fn: Extract7z},
+	{Type: "7zip", Ext: ".7z.001", Fn: Extract7z},
+	{Type: "ar", Ext: ".ar", Fn: ChngInt(ExtractAr)},
+	{Type: "brotli", Ext: ".br", Fn: ChngInt(ExtractBrotli)},
+	{Type: "brotli", Ext: ".brotli", Fn: ChngInt(ExtractBrotli)},
+	{Type: "bz2", Ext: ".bz2", Fn: ChngInt(ExtractBzip)},
+	{Type: "cpio.gzip", Ext: ".cpgz", Fn: ChngInt(ExtractCPIOGzip)},
+	{Type: "cpio", Ext: ".cpio", Fn: ChngInt(ExtractCPIO)},
+	{Type: "deb", Ext: ".deb", Fn: ChngInt(ExtractAr)},
+	{Type: "gzip", Ext: ".gz", Fn: ChngInt(ExtractGzip)},
+	{Type: "gzip", Ext: ".gzip", Fn: ChngInt(ExtractGzip)},
+	{Type: "iso", Ext: ".iso", Fn: ChngInt(ExtractISO)},
+	{Type: "lz4", Ext: ".lz4", Fn: ChngInt(ExtractLZ4)},
+	{Type: "lzma", Ext: ".lz", Fn: ChngInt(ExtractLZMA)},
+	{Type: "lzma", Ext: ".lzip", Fn: ChngInt(ExtractLZMA)},
+	{Type: "lzma", Ext: ".lzma", Fn: ChngInt(ExtractLZMA)},
+	{Type: "lzma2", Ext: ".lzma2", Fn: ChngInt(ExtractLZMA2)},
+	{Type: "rar", Ext: ".r00", Fn: ExtractRAR},
+	{Type: "rar", Ext: ".rar", Fn: ExtractRAR},
+	{Type: "snappy2", Ext: ".s2", Fn: ChngInt(ExtractS2)},
+	{Type: "rpm", Ext: ".rpm", Fn: ChngInt(ExtractRPM)},
+	{Type: "snappy", Ext: ".snappy", Fn: ChngInt(ExtractSnappy)},
+	{Type: "snappy", Ext: ".sz", Fn: ChngInt(ExtractSnappy)},
+	{Type: "tar", Ext: ".tar", Fn: ChngInt(ExtractTar)},
+	{Type: "tar.bzip2", Ext: ".tbz", Fn: ChngInt(ExtractTarBzip)},
+	{Type: "tar.bzip2", Ext: ".tbz2", Fn: ChngInt(ExtractTarBzip)},
+	{Type: "tar.gzip", Ext: ".tgz", Fn: ChngInt(ExtractTarGzip)},
+	{Type: "tar.lzma", Ext: ".tlz", Fn: ChngInt(ExtractTarLzip)},
+	{Type: "tar.xz", Ext: ".txz", Fn: ChngInt(ExtractTarXZ)},
+	{Type: "tar.lzw", Ext: ".tz", Fn: ChngInt(ExtractTarZ)},
+	{Type: "xz", Ext: ".xz", Fn: ChngInt(ExtractXZ)},
+	{Type: "lzw", Ext: ".z", Fn: ChngInt(ExtractLZW)}, // everything is lowercase...
+	{Type: "zip", Ext: ".zip", Fn: ChngInt(ExtractZIP)},
+	{Type: "zlib", Ext: ".zlib", Fn: ChngInt(ExtractZlib)},
+	{Type: "zstandard", Ext: ".zst", Fn: ChngInt(ExtractZstandard)},
+	{Type: "zstandard", Ext: ".zstd", Fn: ChngInt(ExtractZstandard)},
+	{Type: "zlib", Ext: ".zz", Fn: ChngInt(ExtractZlib)},
+	{Type: "flac", Ext: ".cue", Fn: ExtractCUE},
 }
 
 // ChngInt converts the smaller return interface into an ExtractInterface.
@@ -95,7 +96,7 @@ func SupportedExtensions() []string {
 	exts := make([]string, len(extension2function))
 
 	for idx, ext := range extension2function {
-		exts[idx] = ext.Extension
+		exts[idx] = ext.Ext
 	}
 
 	return exts
@@ -288,7 +289,7 @@ func IsArchiveFile(path string) bool {
 	path = strings.ToLower(path)
 
 	for _, ext := range extension2function {
-		if strings.HasSuffix(path, ext.Extension) {
+		if strings.HasSuffix(path, ext.Ext) {
 			return true
 		}
 	}
@@ -355,13 +356,16 @@ func ExtractFile(xFile *XFile) (size uint64, filesList, archiveList []string, er
 	// just borrowing this... Has to go into an interface to avoid a cycle.
 	xFile.moveFiles = parseConfig(&Config{Logger: xFile.log}).MoveFiles
 
+	var extensionType string // archive type from matched extension, for error reporting when extraction fails
+
 	for _, ext := range extension2function {
-		if strings.HasSuffix(sName, ext.Extension) {
-			size, filesList, archiveList, err = ext.Extract(xFile)
+		if strings.HasSuffix(sName, ext.Ext) {
+			size, filesList, archiveList, err = ext.Fn(xFile)
 			if err == nil {
 				return size, filesList, archiveList, nil
 			}
 
+			extensionType = ext.Type // preserve for error reporting before fallback
 			// Extension matched but extraction failed; try signature detection as fallback.
 			break
 		}
@@ -370,9 +374,13 @@ func ExtractFile(xFile *XFile) (size uint64, filesList, archiveList []string, er
 	// Fall back to file signature (magic number) detection.
 	xFile.Debugf("falling back to signature detection for %s (extension error: %v)", xFile.FilePath, err)
 
-	extractFn, sigErr := detectBySignature(xFile.FilePath)
+	extractFn, archiveType, sigErr := detectBySignature(xFile.FilePath)
 	if sigErr != nil {
-		extErr := &ExtractError{}
+		extErr := &ExtractError{
+			FilePath:    xFile.FilePath,
+			OutputDir:   xFile.OutputDir,
+			ArchiveType: extensionType,
+		}
 		if err != nil {
 			extErr.Errs = append(extErr.Errs, err)
 		}
@@ -382,7 +390,12 @@ func ExtractFile(xFile *XFile) (size uint64, filesList, archiveList []string, er
 		return 0, nil, nil, extErr
 	}
 
-	return extractFn(xFile)
+	size, filesList, archiveList, err = extractFn(xFile)
+	if err != nil {
+		return size, filesList, archiveList, WrapExtractError(err, xFile, size, archiveType)
+	}
+
+	return size, filesList, archiveList, nil
 }
 
 // MoveFiles relocates files then removes the folder they were in.
