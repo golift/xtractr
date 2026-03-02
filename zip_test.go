@@ -132,11 +132,14 @@ func unicodePathExtra(rawName []byte, unicodeName string) []byte {
 	return extra
 }
 
-func createNonUTF8ZipFileWithUnicodeExtra(t *testing.T, dir string, rawName []byte, unicodeName string, content []byte) string {
+func createNonUTF8ZipFileWithUnicodeExtra(
+	t *testing.T, dir string, rawName []byte, unicodeName string, content []byte,
+) string {
 	t.Helper()
 
 	zipPath := filepath.Join(dir, "non_utf8_unicode_extra.zip")
 	outFile, err := os.Create(zipPath)
+
 	require.NoError(t, err)
 	defer safeCloser(t, outFile)
 

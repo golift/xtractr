@@ -255,10 +255,12 @@ func decodeZipFilename(name string, extra []byte, nonUTF8 bool, decoders *zipNam
 }
 
 func decodeUnicodePathExtra(rawName string, extra []byte) (string, bool) {
-	for idx := 0; idx+4 <= len(extra); {
+	const extraFieldBytes = 4
+	for idx := 0; idx+extraFieldBytes <= len(extra); {
 		fieldID := binary.LittleEndian.Uint16(extra[idx : idx+2])
-		fieldSize := int(binary.LittleEndian.Uint16(extra[idx+2 : idx+4]))
-		start := idx + 4
+		fieldSize := int(binary.LittleEndian.Uint16(extra[idx+2 : idx+extraFieldBytes]))
+		start := idx + extraFieldBytes
+
 		end := start + fieldSize
 		if end > len(extra) {
 			return "", false
@@ -266,6 +268,7 @@ func decodeUnicodePathExtra(rawName string, extra []byte) (string, bool) {
 
 		if fieldID == zipExtraUnicodePathID && fieldSize >= 5 {
 			fieldData := extra[start:end]
+
 			nameCRC := binary.LittleEndian.Uint32(fieldData[1:5])
 			if nameCRC != crc32.ChecksumIEEE([]byte(rawName)) {
 				idx = end
