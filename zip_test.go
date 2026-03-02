@@ -206,6 +206,62 @@ func TestZipNonUTF8_ShiftJIS(t *testing.T) {
 }
 
 //nolint:gosmopolitan
+func TestZipNonUTF8_MixedEncodings(t *testing.T) {
+	t.Parallel()
+
+	shiftJISEncoder := japanese.ShiftJIS.NewEncoder()
+	gbkEncoder := simplifiedchinese.GBK.NewEncoder()
+	expectedNames := []string{
+		"テスト.txt",
+		"感谢你的帮助.jpg",
+		"数据目录/报告.txt",
+	}
+
+	encodedNames := make([][]byte, 0, len(expectedNames))
+
+	encodedJapanese, err := shiftJISEncoder.Bytes([]byte(expectedNames[0]))
+	require.NoError(t, err)
+
+	encodedNames = append(encodedNames, encodedJapanese)
+
+	encodedChinese1, err := gbkEncoder.Bytes([]byte(expectedNames[1]))
+	require.NoError(t, err)
+
+	encodedNames = append(encodedNames, encodedChinese1)
+
+	encodedChinese2, err := gbkEncoder.Bytes([]byte(expectedNames[2]))
+	require.NoError(t, err)
+
+	encodedNames = append(encodedNames, encodedChinese2)
+
+	tmpDir := t.TempDir()
+	content := []byte("hello")
+	zipPath := createNonUTF8ZipFile(t, tmpDir, encodedNames, content)
+
+	outDir := filepath.Join(tmpDir, "out")
+	require.NoError(t, os.MkdirAll(outDir, 0o700))
+
+	size, files, err := xtractr.ExtractZIP(&xtractr.XFile{
+		FilePath:  zipPath,
+		OutputDir: outDir,
+		FileMode:  0o600,
+		DirMode:   0o700,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, uint64(len(content)*len(expectedNames)), size)
+	assert.Len(t, files, len(expectedNames))
+
+	for idx, file := range files {
+		assert.Equal(t, filepath.Base(expectedNames[idx]), filepath.Base(file))
+	}
+
+	for _, name := range expectedNames {
+		_, err := os.Stat(filepath.Join(outDir, name))
+		assert.NoError(t, err, "decoded file should exist on disk: %s", name)
+	}
+}
+
+//nolint:gosmopolitan
 func TestZipUTF8FilenamesUnchanged(t *testing.T) {
 	t.Parallel()
 

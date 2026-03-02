@@ -7,8 +7,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"golang.org/x/text/encoding"
 )
 
 /* How to extract a ZIP file. */
@@ -71,7 +69,7 @@ type zipFileEntry struct {
 // Pass 2 (parallel): dispatch file writes to workers.
 func (x *XFile) extractZIPParallel(
 	zipReader *zip.ReadCloser,
-	decoder *encoding.Decoder,
+	decoder *zipNameDecoders,
 ) (uint64, []string, error) {
 	fileEntries, files, err := x.zipPrepareEntries(zipReader, decoder)
 	if err != nil {
@@ -92,7 +90,7 @@ func (x *XFile) extractZIPParallel(
 // and returns the list of file entries to extract in parallel.
 func (x *XFile) zipPrepareEntries(
 	zipReader *zip.ReadCloser,
-	decoder *encoding.Decoder,
+	decoder *zipNameDecoders,
 ) ([]zipFileEntry, []string, error) {
 	entries := make([]zipFileEntry, 0, len(zipReader.File))
 	files := make([]string, 0, len(zipReader.File))

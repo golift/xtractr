@@ -14,6 +14,12 @@ import (
 	"golang.org/x/text/encoding/traditionalchinese"
 )
 
+// zipNameDecoders stores per-entry filename encodings with an archive-level fallback.
+type zipNameDecoders struct {
+	defaultEncoding encoding.Encoding
+	nameEncodings   map[string]encoding.Encoding
+}
+
 // Encoding preference scores for tiebreaking. Higher = more commonly seen in non-UTF8 zips.
 // GBK/GB-18030 is most common because Chinese Windows is the largest source
 // of non-UTF8 zip files. Shift-JIS is next (Japanese Windows). These are
@@ -48,7 +54,7 @@ type encodingCandidate struct {
 // attempts to detect their character encoding. It uses chardet for initial
 // candidates, then validates and scores each one. Returns nil if no non-UTF8
 // filenames are found or no suitable decoder can be determined.
-func detectZipEncoding(xFile *XFile, entries []*zip.File) *encoding.Decoder {
+func detectZipEncoding(xFile *XFile, entries []*zip.File) *zipNameDecoders {
 	var rawNames []string
 
 	for _, f := range entries {
@@ -61,30 +67,63 @@ func detectZipEncoding(xFile *XFile, entries []*zip.File) *encoding.Decoder {
 		return nil
 	}
 
-	// Concatenate all non-UTF8 names for charset detection.
+	// Concatenate all non-UTF8 names for an archive-level fallback.
 	var allBytes []byte
 	for _, name := range rawNames {
 		allBytes = append(allBytes, []byte(name)...)
 	}
 
-	detector := chardet.NewTextDetector()
+	// Get a map of filename->encoding.
+	detector, decoders := detectEachFileEncoding(rawNames)
 
 	results, err := detector.DetectAll(allBytes)
 	if err != nil {
 		xFile.Debugf("Charset detection failed for zip filenames: %v", err)
-		return nil
+
+		if len(decoders.nameEncodings) == 0 {
+			return nil
+		}
+
+		return decoders
 	}
 
 	best := pickBestEncoding(results, rawNames)
-	if best == nil {
+	if best != nil {
+		decoders.defaultEncoding = best.enc
+		xFile.Debugf("Detected zip fallback filename encoding: %s (confidence: %d, score: %d)",
+			best.charset, best.confidence, best.score)
+	}
+
+	if len(decoders.nameEncodings) == 0 && decoders.defaultEncoding == nil {
 		xFile.Debugf("No suitable encoding found for %d non-UTF8 zip filenames", len(rawNames))
 		return nil
 	}
 
-	xFile.Debugf("Detected zip filename encoding: %s (confidence: %d, score: %d)",
-		best.charset, best.confidence, best.score)
+	xFile.Debugf("Detected per-entry zip filename encodings for %d/%d entries",
+		len(decoders.nameEncodings), len(rawNames))
 
-	return best.enc.NewDecoder()
+	return decoders
+}
+
+func detectEachFileEncoding(rawNames []string) (*chardet.Detector, *zipNameDecoders) {
+	detector := chardet.NewTextDetector()
+	decoders := &zipNameDecoders{nameEncodings: make(map[string]encoding.Encoding, len(rawNames))}
+	// Detect the encoding of the filenames, per filename.
+	for _, name := range rawNames {
+		results, err := detector.DetectAll([]byte(name))
+		if err != nil {
+			continue
+		}
+
+		best := pickBestEncoding(results, []string{name})
+		if best == nil {
+			continue
+		}
+
+		decoders.nameEncodings[name] = best.enc
+	}
+
+	return detector, decoders
 }
 
 // pickBestEncoding evaluates chardet results against the raw filenames and
@@ -134,8 +173,8 @@ func pickBestEncoding(results []chardet.Result, rawNames []string) *encodingCand
 }
 
 // decodeZipFilename decodes a zip entry filename if it's non-UTF8 and a decoder is available.
-func decodeZipFilename(name string, nonUTF8 bool, decoder *encoding.Decoder) string {
-	if decoder == nil {
+func decodeZipFilename(name string, nonUTF8 bool, decoders *zipNameDecoders) string {
+	if decoders == nil {
 		return name
 	}
 
@@ -143,7 +182,16 @@ func decodeZipFilename(name string, nonUTF8 bool, decoder *encoding.Decoder) str
 		return name
 	}
 
-	decoded, err := decoder.String(name)
+	enc := decoders.defaultEncoding
+	if specific, ok := decoders.nameEncodings[name]; ok {
+		enc = specific
+	}
+
+	if enc == nil {
+		return name
+	}
+
+	decoded, err := enc.NewDecoder().String(name)
 	if err != nil {
 		return name // fall back to original on error
 	}
