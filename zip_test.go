@@ -215,6 +215,7 @@ func TestZipNonUTF8_MixedEncodings(t *testing.T) {
 		"テスト.txt",
 		"感谢你的帮助.jpg",
 		"数据目录/报告.txt",
+		"游戏启动说明.txt",
 	}
 
 	encodedNames := make([][]byte, 0, len(expectedNames))
@@ -233,6 +234,11 @@ func TestZipNonUTF8_MixedEncodings(t *testing.T) {
 	require.NoError(t, err)
 
 	encodedNames = append(encodedNames, encodedChinese2)
+
+	encodedChinese3, err := gbkEncoder.Bytes([]byte(expectedNames[3]))
+	require.NoError(t, err)
+
+	encodedNames = append(encodedNames, encodedChinese3)
 
 	tmpDir := t.TempDir()
 	content := []byte("hello")

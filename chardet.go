@@ -295,6 +295,12 @@ func scriptConsistencyScore(decoded []string) int {
 	// Kana characters are unambiguous markers for Japanese text.
 	// When decoded text contains kana, that encoding is almost certainly correct.
 	if kana > 0 {
+		// Some mojibake patterns produce a small amount of kana mixed into mostly
+		// CJK text. That's usually not Japanese; avoid a large kana bonus there.
+		if counts.cjk > 0 && kana*4 < counts.cjk {
+			return counts.cjk * scorePercentDivisor / total
+		}
+
 		return scoreKanaBonus + kana*scorePercentDivisor/total
 	}
 
