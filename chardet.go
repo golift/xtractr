@@ -18,6 +18,7 @@ import (
 type zipNameDecoders struct {
 	defaultEncoding encoding.Encoding
 	nameEncodings   map[string]encoding.Encoding
+	partNames       map[string]string
 }
 
 // Encoding preference scores for tiebreaking. Higher = more commonly seen in non-UTF8 zips.
@@ -99,15 +100,18 @@ func detectZipEncoding(xFile *XFile, entries []*zip.File) *zipNameDecoders {
 		return nil
 	}
 
-	xFile.Debugf("Detected per-entry zip filename encodings for %d/%d entries",
-		len(decoders.nameEncodings), len(rawNames))
+	xFile.Debugf("Detected zip filename encodings for %d/%d entries and %d path parts",
+		len(decoders.nameEncodings), len(rawNames), len(decoders.partNames))
 
 	return decoders
 }
 
 func detectEachFileEncoding(rawNames []string) (*chardet.Detector, *zipNameDecoders) {
 	detector := chardet.NewTextDetector()
-	decoders := &zipNameDecoders{nameEncodings: make(map[string]encoding.Encoding, len(rawNames))}
+	decoders := &zipNameDecoders{
+		nameEncodings: make(map[string]encoding.Encoding, len(rawNames)),
+		partNames:     map[string]string{},
+	}
 	// Detect the encoding of the filenames, per filename.
 	for _, name := range rawNames {
 		results, err := detector.DetectAll([]byte(name))
@@ -121,6 +125,30 @@ func detectEachFileEncoding(rawNames []string) (*chardet.Detector, *zipNameDecod
 		}
 
 		decoders.nameEncodings[name] = best.enc
+
+		decodedName, err := best.enc.NewDecoder().String(name)
+		if err != nil {
+			continue
+		}
+
+		rawParts := strings.Split(name, "/")
+
+		decodedParts := strings.Split(decodedName, "/")
+		if len(rawParts) != len(decodedParts) {
+			continue
+		}
+
+		for idx, part := range rawParts {
+			if part == "" {
+				continue
+			}
+
+			if _, ok := decoders.partNames[part]; ok {
+				continue
+			}
+
+			decoders.partNames[part] = decodedParts[idx]
+		}
 	}
 
 	return detector, decoders
@@ -182,21 +210,38 @@ func decodeZipFilename(name string, nonUTF8 bool, decoders *zipNameDecoders) str
 		return name
 	}
 
-	enc := decoders.defaultEncoding
-	if specific, ok := decoders.nameEncodings[name]; ok {
-		enc = specific
+	parts := strings.Split(name, "/")
+	decoded := make([]string, len(parts))
+
+	for idx, part := range parts {
+		if part == "" {
+			decoded[idx] = part
+			continue
+		}
+
+		enc := decoders.defaultEncoding
+		if value, ok := decoders.partNames[part]; ok {
+			decoded[idx] = value
+			continue
+		} else if specific, ok := decoders.nameEncodings[name]; ok {
+			enc = specific
+		}
+
+		if enc == nil {
+			decoded[idx] = part
+			continue
+		}
+
+		value, err := enc.NewDecoder().String(part)
+		if err != nil {
+			decoded[idx] = part // fall back to original on error
+			continue
+		}
+
+		decoded[idx] = value
 	}
 
-	if enc == nil {
-		return name
-	}
-
-	decoded, err := enc.NewDecoder().String(name)
-	if err != nil {
-		return name // fall back to original on error
-	}
-
-	return decoded
+	return strings.Join(decoded, "/")
 }
 
 func encodingPreference(charset string) int {
