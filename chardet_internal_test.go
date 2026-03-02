@@ -47,6 +47,6 @@ func TestDecodeZipFilename_PrefersPartEncodingForSharedFolders(t *testing.T) {
 		},
 	}
 
-	assert.Equal(t, rootUTF+"/"+japaneseLeafUTF, decodeZipFilename(japanesePathRaw, true, decoders))
-	assert.Equal(t, rootUTF+"/"+chineseLeafUTF, decodeZipFilename(chinesePathRaw, true, decoders))
+	assert.Equal(t, rootUTF+"/"+japaneseLeafUTF, decodeZipFilename(japanesePathRaw, nil, true, decoders))
+	assert.Equal(t, rootUTF+"/"+chineseLeafUTF, decodeZipFilename(chinesePathRaw, nil, true, decoders))
 }

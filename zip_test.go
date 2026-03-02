@@ -3,6 +3,8 @@ package xtractr_test
 import (
 	"archive/zip"
 	_ "embed"
+	"encoding/binary"
+	"hash/crc32"
 	"os"
 	"path/filepath"
 	"testing"
@@ -13,6 +15,8 @@ import (
 	"golang.org/x/text/encoding/simplifiedchinese"
 	"golift.io/xtractr"
 )
+
+const zipExtraUnicodePathID = 0x7075
 
 func TestZip(t *testing.T) {
 	t.Parallel()
@@ -109,6 +113,48 @@ func createNonUTF8ZipFile(t *testing.T, dir string, encodedNames [][]byte, conte
 		_, err = writer.Write(content)
 		require.NoError(t, err)
 	}
+
+	return zipPath
+}
+
+func unicodePathExtra(rawName []byte, unicodeName string) []byte {
+	nameBytes := []byte(unicodeName)
+	fieldData := make([]byte, 1+4+len(nameBytes))
+	fieldData[0] = 1 // version
+	binary.LittleEndian.PutUint32(fieldData[1:5], crc32.ChecksumIEEE(rawName))
+	copy(fieldData[5:], nameBytes)
+
+	extra := make([]byte, 4+len(fieldData))
+	binary.LittleEndian.PutUint16(extra[0:2], zipExtraUnicodePathID)
+	binary.LittleEndian.PutUint16(extra[2:4], uint16(len(fieldData)))
+	copy(extra[4:], fieldData)
+
+	return extra
+}
+
+func createNonUTF8ZipFileWithUnicodeExtra(t *testing.T, dir string, rawName []byte, unicodeName string, content []byte) string {
+	t.Helper()
+
+	zipPath := filepath.Join(dir, "non_utf8_unicode_extra.zip")
+	outFile, err := os.Create(zipPath)
+	require.NoError(t, err)
+	defer safeCloser(t, outFile)
+
+	zipWriter := zip.NewWriter(outFile)
+	defer safeCloser(t, zipWriter)
+
+	header := &zip.FileHeader{
+		Name:    string(rawName),
+		Method:  zip.Deflate,
+		NonUTF8: true,
+		Extra:   unicodePathExtra(rawName, unicodeName),
+	}
+
+	writer, err := zipWriter.CreateHeader(header)
+	require.NoError(t, err)
+
+	_, err = writer.Write(content)
+	require.NoError(t, err)
 
 	return zipPath
 }
@@ -265,6 +311,39 @@ func TestZipNonUTF8_MixedEncodings(t *testing.T) {
 		_, err := os.Stat(filepath.Join(outDir, name))
 		assert.NoError(t, err, "decoded file should exist on disk: %s", name)
 	}
+}
+
+//nolint:gosmopolitan
+func TestZipNonUTF8_UnicodePathExtraMixedLanguage(t *testing.T) {
+	t.Parallel()
+
+	// Raw filename bytes are Shift-JIS (legacy), but Unicode Path extra field
+	// carries the canonical UTF-8 mixed-language name.
+	shiftJISEncoder := japanese.ShiftJIS.NewEncoder()
+	rawName, err := shiftJISEncoder.Bytes([]byte("テスト.txt"))
+	require.NoError(t, err)
+
+	unicodeName := "游戏テスト启动说明.txt"
+	tmpDir := t.TempDir()
+	content := []byte("hello")
+	zipPath := createNonUTF8ZipFileWithUnicodeExtra(t, tmpDir, rawName, unicodeName, content)
+
+	outDir := filepath.Join(tmpDir, "out")
+	require.NoError(t, os.MkdirAll(outDir, 0o700))
+
+	size, files, err := xtractr.ExtractZIP(&xtractr.XFile{
+		FilePath:  zipPath,
+		OutputDir: outDir,
+		FileMode:  0o600,
+		DirMode:   0o700,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, uint64(len(content)), size)
+	assert.Len(t, files, 1)
+	assert.Equal(t, unicodeName, filepath.Base(files[0]))
+
+	_, err = os.Stat(filepath.Join(outDir, unicodeName))
+	assert.NoError(t, err, "decoded file should exist on disk: %s", unicodeName)
 }
 
 //nolint:gosmopolitan

@@ -2,6 +2,8 @@ package xtractr
 
 import (
 	"archive/zip"
+	"encoding/binary"
+	"hash/crc32"
 	"strings"
 	"unicode/utf8"
 
@@ -42,6 +44,8 @@ const (
 	scorePercentDivisor = 100 // used to compute percentage-based scores
 	maxASCII            = 0x80
 )
+
+const zipExtraUnicodePathID = 0x7075 // Info-ZIP Unicode Path extra field.
 
 // encodingCandidate holds a charset detection result with its validation score.
 type encodingCandidate struct {
@@ -201,7 +205,13 @@ func pickBestEncoding(results []chardet.Result, rawNames []string) *encodingCand
 }
 
 // decodeZipFilename decodes a zip entry filename if it's non-UTF8 and a decoder is available.
-func decodeZipFilename(name string, nonUTF8 bool, decoders *zipNameDecoders) string {
+func decodeZipFilename(name string, extra []byte, nonUTF8 bool, decoders *zipNameDecoders) string {
+	// Prefer ZIP's Unicode Path extra field when present. This is explicit metadata
+	// and avoids heuristic guessing for mixed-language filenames.
+	if unicodeName, ok := decodeUnicodePathExtra(name, extra); ok {
+		return unicodeName
+	}
+
 	if decoders == nil {
 		return name
 	}
@@ -242,6 +252,36 @@ func decodeZipFilename(name string, nonUTF8 bool, decoders *zipNameDecoders) str
 	}
 
 	return strings.Join(decoded, "/")
+}
+
+func decodeUnicodePathExtra(rawName string, extra []byte) (string, bool) {
+	for idx := 0; idx+4 <= len(extra); {
+		fieldID := binary.LittleEndian.Uint16(extra[idx : idx+2])
+		fieldSize := int(binary.LittleEndian.Uint16(extra[idx+2 : idx+4]))
+		start := idx + 4
+		end := start + fieldSize
+		if end > len(extra) {
+			return "", false
+		}
+
+		if fieldID == zipExtraUnicodePathID && fieldSize >= 5 {
+			fieldData := extra[start:end]
+			nameCRC := binary.LittleEndian.Uint32(fieldData[1:5])
+			if nameCRC != crc32.ChecksumIEEE([]byte(rawName)) {
+				idx = end
+				continue
+			}
+
+			unicodeName := string(fieldData[5:])
+			if unicodeName != "" && utf8.ValidString(unicodeName) {
+				return unicodeName, true
+			}
+		}
+
+		idx = end
+	}
+
+	return "", false
 }
 
 func encodingPreference(charset string) int {

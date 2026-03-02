@@ -31,7 +31,7 @@ func ExtractZIP(xFile *XFile) (size uint64, filesList []string, err error) {
 	files := []string{}
 
 	for _, zipFile := range zipReader.File {
-		decodedName := decodeZipFilename(zipFile.Name, zipFile.NonUTF8, decoder)
+		decodedName := decodeZipFilename(zipFile.Name, zipFile.Extra, zipFile.NonUTF8, decoder)
 
 		fSize, wfile, err := xFile.unzipWithName(zipFile, decodedName)
 		if err != nil {
@@ -96,7 +96,7 @@ func (x *XFile) zipPrepareEntries(
 	files := make([]string, 0, len(zipReader.File))
 
 	for _, zipFile := range zipReader.File {
-		decodedName := decodeZipFilename(zipFile.Name, zipFile.NonUTF8, decoder)
+		decodedName := decodeZipFilename(zipFile.Name, zipFile.Extra, zipFile.NonUTF8, decoder)
 		cleanPath := x.clean(decodedName)
 
 		if !strings.HasPrefix(cleanPath, x.OutputDir) {
