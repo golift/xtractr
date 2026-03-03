@@ -1,8 +1,11 @@
 package xtractr_test
 
 import (
+	"errors"
+	"io"
 	"math"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -396,6 +399,206 @@ func TestCueREMComments(t *testing.T) {
 	_, files, _, err := xtractr.ExtractCUE(xFile)
 	require.NoError(t, err)
 	assert.Len(t, files, 1)
+}
+
+// TestCueVariableBlockSizeConsistency verifies that all frames in every split
+// track file use variable-block-size encoding (HasFixedBlockSize=false).
+// Mixing fixed- and variable-blocksize frames in one file is invalid FLAC:
+// the two modes encode different values in the "frame/sample number" field of
+// the frame header, causing decoders such as GStreamer's flacparse to reject
+// the file with a stream error.
+func TestCueVariableBlockSizeConsistency(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	outputDir := filepath.Join(tmpDir, "output")
+
+	// Use a block size that will not align perfectly with track boundaries so
+	// that the first frame of track 2 is a boundary-split (partial) frame.
+	// 44100 samples/s * 1 minute = 2646000 samples; block size 4096 means
+	// the track boundary at sample 2646000 falls mid-frame.
+	totalSamples := uint64(2 * 60 * testSampleRate) // 2 minutes
+	flacPath := filepath.Join(tmpDir, "album.flac")
+	generateTestFLAC(t, flacPath, totalSamples)
+
+	cueContent := strings.Join([]string{
+		`PERFORMER "Artist"`,
+		`TITLE "Album"`,
+		`FILE "album.flac" WAVE`,
+		`  TRACK 01 AUDIO`,
+		`    TITLE "Track One"`,
+		`    INDEX 01 00:00:00`,
+		`  TRACK 02 AUDIO`,
+		`    TITLE "Track Two"`,
+		`    INDEX 01 01:00:00`,
+	}, "\n") + "\n"
+	cuePath := filepath.Join(tmpDir, "album.cue")
+	require.NoError(t, os.WriteFile(cuePath, []byte(cueContent), 0o600))
+
+	xFile := &xtractr.XFile{
+		FilePath:  cuePath,
+		OutputDir: outputDir,
+		FileMode:  0o600,
+		DirMode:   0o755,
+	}
+
+	_, files, _, err := xtractr.ExtractCUE(xFile)
+	require.NoError(t, err)
+	require.Len(t, files, 2)
+
+	for _, trackPath := range files {
+		trackFile, err := os.Open(trackPath)
+		require.NoError(t, err, "opening track: %s", trackPath)
+
+		stream, err := flac.New(trackFile)
+		require.NoError(t, err, "parsing track: %s", trackPath)
+
+		for {
+			frm, err := stream.ParseNext()
+			if errors.Is(err, io.EOF) {
+				break
+			}
+
+			require.NoError(t, err, "reading frame from: %s", trackPath)
+			assert.False(t, frm.HasFixedBlockSize,
+				"frame in %s uses fixed-blocksize encoding; "+
+					"all frames must use variable-blocksize (HasFixedBlockSize=false) "+
+					"or decoders like GStreamer's flacparse will reject the file",
+				filepath.Base(trackPath))
+		}
+
+		require.NoError(t, trackFile.Close())
+	}
+}
+
+// TestCueSplitRealFLAC is an integration test that uses ffmpeg to produce a
+// fixed-blocksize FLAC file (the default for all mainstream encoders) and then
+// splits it with ExtractCUE.  This is the exact scenario that caused GStreamer's
+// flacparse to abort with "streaming stopped, reason error (-5)":
+//
+//   - ffmpeg-encoded FLACs use HasFixedBlockSize=true in every frame header.
+//   - The old buildOutputFrame fast-path returned interior frames as-is
+//     (HasFixedBlockSize=true) while boundary-split frames were newly built
+//     with HasFixedBlockSize=false.
+//   - The mix is invalid FLAC; fixed-blocksize frames encode a frame number
+//     while variable-blocksize frames encode a sample position in the same
+//     header field, so a decoder reading a mixed file gets garbage positions.
+//
+// The test is skipped automatically when ffmpeg is not in PATH so it does not
+// break CI environments that lack the tool.
+func TestCueSplitRealFLAC(t *testing.T) {
+	t.Parallel()
+
+	ffmpeg, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		t.Skip("ffmpeg not found in PATH; skipping real-FLAC integration test")
+	}
+
+	tmpDir := t.TempDir()
+	outputDir := filepath.Join(tmpDir, "output")
+	flacPath := filepath.Join(tmpDir, "album.flac")
+
+	// Build a 90-second fixed-blocksize FLAC by concatenating three 30-second
+	// sine-tone segments at different frequencies (440, 523, 659 Hz).
+	// ffmpeg's FLAC encoder always writes fixed-blocksize streams, which is
+	// what triggers the bug in the un-patched code.
+	cmd := exec.CommandContext(t.Context(), ffmpeg, //nolint:gosec
+		"-y",
+		"-f", "lavfi", "-i", "sine=frequency=440:sample_rate=44100:duration=30",
+		"-f", "lavfi", "-i", "sine=frequency=523:sample_rate=44100:duration=30",
+		"-f", "lavfi", "-i", "sine=frequency=659:sample_rate=44100:duration=30",
+		"-filter_complex", "[0][1][2]concat=n=3:v=0:a=1",
+		"-c:a", "flac",
+		flacPath,
+	)
+
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "ffmpeg failed: %s", out)
+
+	// Verify the source FLAC uses fixed-blocksize encoding — if it doesn't, the
+	// test is not exercising the right code path and should be updated.
+	requireFixedBlocksizeFLAC(t, flacPath)
+
+	cueContent := strings.Join([]string{
+		`PERFORMER "Test Artist"`,
+		`TITLE "Test Album"`,
+		`FILE "album.flac" WAVE`,
+		`  TRACK 01 AUDIO`,
+		`    TITLE "A4 Tone"`,
+		`    INDEX 01 00:00:00`,
+		`  TRACK 02 AUDIO`,
+		`    TITLE "C5 Tone"`,
+		`    INDEX 01 00:30:00`,
+		`  TRACK 03 AUDIO`,
+		`    TITLE "E5 Tone"`,
+		`    INDEX 01 01:00:00`,
+	}, "\n") + "\n"
+
+	cuePath := filepath.Join(tmpDir, "album.cue")
+	require.NoError(t, os.WriteFile(cuePath, []byte(cueContent), 0o600))
+
+	xFile := &xtractr.XFile{
+		FilePath:  cuePath,
+		OutputDir: outputDir,
+		FileMode:  0o600,
+		DirMode:   0o755,
+	}
+
+	size, files, archiveList, err := xtractr.ExtractCUE(xFile)
+	require.NoError(t, err, "ExtractCUE failed on ffmpeg-encoded FLAC")
+	require.Len(t, files, 3, "expected 3 split track files")
+	assert.Positive(t, size)
+	assert.Len(t, archiveList, 2)
+
+	for _, trackPath := range files {
+		trackFile, err := os.Open(trackPath)
+		require.NoError(t, err)
+
+		stream, err := flac.New(trackFile)
+		require.NoError(t, err, "flac.New failed for %s", filepath.Base(trackPath))
+
+		// Every frame in the output must use variable-blocksize encoding.
+		// Mixing fixed- and variable-blocksize frames produces an invalid file.
+		frameIdx := 0
+
+		for {
+			frm, err := stream.ParseNext()
+			if errors.Is(err, io.EOF) {
+				break
+			}
+
+			require.NoError(t, err)
+			assert.False(t, frm.HasFixedBlockSize,
+				"frame %d in %s uses fixed-blocksize encoding; "+
+					"decoders like GStreamer's flacparse will reject the file",
+				frameIdx, filepath.Base(trackPath))
+			frameIdx++
+		}
+
+		require.NoError(t, trackFile.Close())
+	}
+}
+
+// requireFixedBlocksizeFLAC fails the test if the FLAC at path does not use
+// fixed-blocksize encoding.  It is used to assert that our ffmpeg-generated
+// source file is actually triggering the code path we want to test.
+func requireFixedBlocksizeFLAC(t *testing.T, path string) {
+	t.Helper()
+
+	srcFile, err := os.Open(path)
+	require.NoError(t, err)
+
+	defer srcFile.Close()
+
+	stream, err := flac.New(srcFile)
+	require.NoError(t, err)
+
+	frm, err := stream.ParseNext()
+	require.NoError(t, err, "could not read first frame of source FLAC")
+	require.True(t, frm.HasFixedBlockSize,
+		"source FLAC %s does not use fixed-blocksize encoding; "+
+			"the test is not exercising the right code path",
+		filepath.Base(path))
 }
 
 func TestCueSupportedExtensions(t *testing.T) {
