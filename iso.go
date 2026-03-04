@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/kdomanski/iso9660"
+	"github.com/Unpackerr/iso9660"
 )
 
 // ExtractISO writes an ISO's contents to disk.

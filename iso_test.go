@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kdomanski/iso9660"
+	"github.com/Unpackerr/iso9660"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golift.io/xtractr"

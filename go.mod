@@ -1,16 +1,16 @@
 module golift.io/xtractr
 
-go 1.25.6
+go 1.25.7
 
 toolchain go1.26.0
 
 require (
+	github.com/Unpackerr/iso9660 v0.0.3
 	github.com/andybalholm/brotli v1.2.0
 	github.com/bodgit/sevenzip v1.6.1
 	github.com/cavaliergopher/cpio v1.0.1
 	github.com/cavaliergopher/rpm v1.3.0
 	github.com/dsnet/compress v0.0.1
-	github.com/kdomanski/iso9660 v0.4.0
 	github.com/klauspost/compress v1.18.4
 	github.com/mewkiz/flac v1.0.13
 	github.com/nwaples/rardecode/v2 v2.2.2
@@ -43,5 +43,3 @@ require (
 	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
-
-replace github.com/kdomanski/iso9660 => github.com/Unpackerr/iso9660 v0.0.1
