@@ -337,6 +337,17 @@ func splitFLAC(xFile *XFile, audioPath string, cue *CueSheet, timestamps []cueTi
 
 	defer xFile.newProgress(0, 0, len(cue.Tracks)).done()
 
+	return writeTracksFLAC(xFile, cue, allFrames, trackStarts, streamInfo, trackEnds)
+}
+
+func writeTracksFLAC(
+	xFile *XFile,
+	cue *CueSheet,
+	allFrames []flacFrame,
+	trackStarts []uint64,
+	streamInfo *meta.StreamInfo,
+	trackEnds []uint64,
+) (uint64, []string, error) {
 	var (
 		totalSize uint64
 		files     = make([]string, 0, len(cue.Tracks))
@@ -355,7 +366,12 @@ func splitFLAC(xFile *XFile, audioPath string, cue *CueSheet, timestamps []cueTi
 		outputName := formatTrackFilename(track)
 		outputPath := filepath.Join(xFile.OutputDir, outputName)
 
-		size, err := writeTrackFLAC(outputPath, streamInfo, allFrames, startSample, endSample, xFile.FileMode)
+		var blocks []*meta.Block
+		if cue != nil && track != nil {
+			blocks = []*meta.Block{buildVorbisCommentBlock(cue, track)}
+		}
+
+		size, err := writeTrackFLAC(outputPath, streamInfo, allFrames, startSample, endSample, xFile.FileMode, blocks)
 		if err != nil {
 			return totalSize, files, fmt.Errorf("writing track %d: %w", track.Number, err)
 		}
@@ -406,6 +422,43 @@ func readFLACFile(audioPath string) (*meta.StreamInfo, []flacFrame, error) {
 	return info, frames, nil
 }
 
+// buildVorbisCommentBlock returns a FLAC metadata block with ALBUM, ARTIST, TITLE, and TRACKNUMBER
+// from the CUE sheet and track so that split files can be identified by Lidarr and other importers.
+func buildVorbisCommentBlock(cue *CueSheet, track *CueTrack) *meta.Block {
+	artist := track.Performer
+	if artist == "" {
+		artist = cue.Performer
+	}
+
+	title := track.Title
+	if title == "" {
+		title = fmt.Sprintf("Track %d", track.Number)
+	}
+
+	tags := [][2]string{
+		{"TITLE", title},
+		{"TRACKNUMBER", strconv.Itoa(track.Number)},
+	}
+
+	if cue.Title != "" {
+		tags = append(tags, [2]string{"ALBUM", cue.Title})
+	}
+
+	if artist != "" {
+		tags = append(tags, [2]string{"ARTIST", artist})
+	}
+
+	comment := &meta.VorbisComment{
+		Vendor: "golift.io/xtractr",
+		Tags:   tags,
+	}
+
+	return &meta.Block{
+		Header: meta.Header{Type: meta.TypeVorbisComment, Length: 1, IsLast: false},
+		Body:   comment,
+	}
+}
+
 // readAllFrames reads all audio frames from a FLAC stream.
 func readAllFrames(stream *flac.Stream) ([]flacFrame, error) {
 	var (
@@ -437,12 +490,16 @@ func readAllFrames(stream *flac.Stream) ([]flacFrame, error) {
 
 // writeTrackFLAC writes a subset of FLAC frames to a new FLAC file for a single track.
 // Frames are split at sample boundaries when they span track boundaries.
+// If cue and track are non-nil, a VorbisComment metadata block is written with ALBUM (from cue Title),
+// ARTIST (from track Performer or cue Performer), TITLE (track title),
+// and TRACKNUMBER so Lidarr and others can identify the file.
 func writeTrackFLAC( //nolint:funlen
 	outputPath string,
 	srcInfo *meta.StreamInfo,
 	allFrames []flacFrame,
 	startSample, endSample uint64,
 	fileMode os.FileMode,
+	blocks []*meta.Block,
 ) (uint64, error) {
 	outFile, err := os.OpenFile(outputPath, os.O_RDWR|os.O_CREATE|os.O_TRUNC, fileMode)
 	if err != nil {
@@ -467,7 +524,7 @@ func writeTrackFLAC( //nolint:funlen
 		NSamples:      trackSamples,
 	}
 
-	enc, err := flac.NewEncoder(outFile, trackInfo)
+	enc, err := flac.NewEncoder(outFile, trackInfo, blocks...)
 	if err != nil {
 		_ = outFile.Close()
 		return 0, fmt.Errorf("creating flac encoder: %w", err)

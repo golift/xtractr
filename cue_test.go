@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -165,16 +166,38 @@ func TestCueExtractCUE(t *testing.T) {
 		"02 - Second Song.flac",
 		"03 - Third Song.flac",
 	}
+	expectedTitles := []string{"First Song", "Second Song", "Third Song"}
 
 	for idx, expectedName := range expectedNames {
 		assert.Equal(t, filepath.Join(outputDir, expectedName), files[idx])
 		trackFile, err := os.Open(files[idx])
 		require.NoError(t, err, "opening track FLAC file: %s", files[idx])
-		trackStream, err := flac.New(trackFile)
+		trackStream, err := flac.Parse(trackFile)
 		require.NoError(t, err, "parsing track FLAC file: %s", files[idx])
 		assert.Equal(t, uint32(testSampleRate), trackStream.Info.SampleRate)
 		assert.Equal(t, uint8(testNChannels), trackStream.Info.NChannels)
 		assert.Positive(t, trackStream.Info.NSamples, "track should have samples")
+		// Split tracks should include VorbisComment with ALBUM, ARTIST, TITLE, TRACKNUMBER for Lidarr/import.
+		var vorbis *meta.VorbisComment
+
+		for _, blk := range trackStream.Blocks {
+			if vc, ok := blk.Body.(*meta.VorbisComment); ok {
+				vorbis = vc
+				break
+			}
+		}
+
+		require.NotNil(t, vorbis, "track %s should have VorbisComment metadata", files[idx])
+
+		tagMap := make(map[string]string)
+		for _, pair := range vorbis.Tags {
+			tagMap[pair[0]] = pair[1]
+		}
+
+		assert.Equal(t, "Test Album", tagMap["ALBUM"], "ALBUM tag from CUE TITLE")
+		assert.Equal(t, "Test Artist", tagMap["ARTIST"], "ARTIST tag from CUE PERFORMER")
+		assert.Equal(t, expectedTitles[idx], tagMap["TITLE"], "TITLE tag from track")
+		assert.Equal(t, strconv.Itoa(idx+1), tagMap["TRACKNUMBER"], "TRACKNUMBER")
 		require.NoError(t, trackFile.Close())
 	}
 }
