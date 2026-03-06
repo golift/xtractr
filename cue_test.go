@@ -216,7 +216,7 @@ func TestCueExtractCUE(t *testing.T) {
 	size, files, archiveList, err := xtractr.ExtractCUE(xFile)
 	require.NoError(t, err, "extracting CUE+FLAC")
 
-	assert.Len(t, files, 3, "expected 3 extracted track files")
+	assert.Len(t, files, 4, "expected 3 track files + CUE sheet")
 	assert.Positive(t, size, "total size should be > 0")
 	assert.Len(t, archiveList, 2, "archive list should contain cue and flac files")
 	assert.Contains(t, archiveList, cuePath)
@@ -297,7 +297,7 @@ func TestCueExtractCUE_SplitFLAC_EmbeddedCover(t *testing.T) {
 	_, files, _, err := xtractr.ExtractCUE(xFile)
 	require.NoError(t, err, "extracting CUE+FLAC with cover")
 
-	require.Len(t, files, 3, "expected 2 track files + cover.png")
+	require.Len(t, files, 4, "expected 2 track files + cover.png + CUE sheet")
 	assert.Contains(t, files, filepath.Join(outputDir, "cover.png"), "cover.png should be in extracted file list")
 
 	// Album cover should be written to cover.png in the output directory.
@@ -376,7 +376,7 @@ func TestCueExtractViaExtractFile(t *testing.T) {
 
 	size, files, archiveList, err := xtractr.ExtractFile(xFile)
 	require.NoError(t, err, "ExtractFile with .cue")
-	assert.Len(t, files, 2)
+	assert.Len(t, files, 3, "expected 2 track files + CUE sheet")
 	assert.Len(t, archiveList, 2)
 	assert.Positive(t, size)
 }
@@ -471,7 +471,7 @@ func TestCueWavReferenceFlacFile(t *testing.T) {
 
 	size, files, archiveList, err := xtractr.ExtractCUE(xFile)
 	require.NoError(t, err, "ExtractCUE with CUE referencing .wav but .flac on disk")
-	assert.Len(t, files, 2)
+	assert.Len(t, files, 3, "expected 2 track files + CUE sheet")
 	assert.Len(t, archiveList, 2)
 	assert.Positive(t, size)
 	// Archive list should include the actual flac path we used, not the .wav path
@@ -509,7 +509,7 @@ func TestCueTimestampConversion(t *testing.T) {
 
 	_, files, _, err := xtractr.ExtractCUE(xFile)
 	require.NoError(t, err)
-	assert.Len(t, files, 2)
+	assert.Len(t, files, 3, "expected 2 track files + CUE sheet")
 
 	file1, err := os.Open(files[0])
 	require.NoError(t, err)
@@ -565,7 +565,7 @@ func TestCueSpecialCharacters(t *testing.T) {
 
 	_, files, _, err := xtractr.ExtractCUE(xFile)
 	require.NoError(t, err)
-	assert.Len(t, files, 2)
+	assert.Len(t, files, 3, "expected 2 track files + CUE sheet")
 
 	assert.Equal(t, "01 - Song With - Slash.flac", filepath.Base(files[0]))
 	assert.Equal(t, "02 - Song- With Special Chars.flac", filepath.Base(files[1]))
@@ -604,7 +604,7 @@ func TestCueREMComments(t *testing.T) {
 
 	_, files, _, err := xtractr.ExtractCUE(xFile)
 	require.NoError(t, err)
-	assert.Len(t, files, 1)
+	assert.Len(t, files, 2, "expected 1 track file + CUE sheet")
 }
 
 // TestCueVariableBlockSizeConsistency verifies that all frames in every split
@@ -650,9 +650,13 @@ func TestCueVariableBlockSizeConsistency(t *testing.T) {
 
 	_, files, _, err := xtractr.ExtractCUE(xFile)
 	require.NoError(t, err)
-	require.Len(t, files, 2)
+	require.Len(t, files, 3, "expected 2 track files + CUE sheet")
 
 	for _, trackPath := range files {
+		if filepath.Ext(trackPath) != ".flac" {
+			continue
+		}
+
 		trackFile, err := os.Open(trackPath)
 		require.NoError(t, err, "opening track: %s", trackPath)
 
@@ -752,11 +756,15 @@ func TestCueSplitRealFLAC(t *testing.T) {
 
 	size, files, archiveList, err := xtractr.ExtractCUE(xFile)
 	require.NoError(t, err, "ExtractCUE failed on ffmpeg-encoded FLAC")
-	require.Len(t, files, 3, "expected 3 split track files")
+	require.Len(t, files, 4, "expected 3 split track files + CUE sheet")
 	assert.Positive(t, size)
 	assert.Len(t, archiveList, 2)
 
 	for _, trackPath := range files {
+		if filepath.Ext(trackPath) != ".flac" {
+			continue
+		}
+
 		trackFile, err := os.Open(trackPath)
 		require.NoError(t, err)
 
