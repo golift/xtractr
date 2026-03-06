@@ -73,17 +73,16 @@ func ExtractCUE(xFile *XFile) (size uint64, files, archives []string, err error)
 	}
 
 	// Resolve the audio file path relative to the CUE file.
+	// Some CUE sheets say FILE "album.wav" WAVE but the file on disk is album.flac; try .flac when .wav is missing.
 	cueDir := filepath.Dir(xFile.FilePath)
-	audioPath := filepath.Join(cueDir, cue.File)
 
-	// Check that the audio file exists.
-	_, err = os.Stat(audioPath)
+	audioPath, err := resolveCueAudioPath(cueDir, cue.File)
 	if err != nil {
-		return 0, nil, nil, fmt.Errorf("%w: %s", ErrAudioNotFound, audioPath)
+		return 0, nil, nil, err
 	}
 
 	// Only FLAC is supported for now.
-	ext := strings.ToLower(filepath.Ext(cue.File))
+	ext := strings.ToLower(filepath.Ext(audioPath))
 	if ext != ".flac" {
 		return 0, nil, nil, fmt.Errorf("%w: %s", ErrUnsupportedAudio, ext)
 	}
@@ -207,6 +206,29 @@ func parseCueSheet(reader io.Reader) (*CueSheet, []cueTimestamp, error) { //noli
 	}
 
 	return cue, timestamps, nil
+}
+
+// resolveCueAudioPath returns the path to the audio file referenced by the CUE.
+// If the CUE says FILE "album.wav" but the file on disk is album.flac, the .flac path is returned.
+func resolveCueAudioPath(cueDir, cueFile string) (string, error) {
+	path := filepath.Join(cueDir, cueFile)
+
+	_, err := os.Stat(path)
+	if err == nil {
+		return path, nil
+	}
+
+	ext := strings.ToLower(filepath.Ext(cueFile))
+	if ext == ".wav" {
+		flacPath := path[:len(path)-len(ext)] + ".flac"
+
+		_, err = os.Stat(flacPath)
+		if err == nil {
+			return flacPath, nil
+		}
+	}
+
+	return "", fmt.Errorf("%w: %s", ErrAudioNotFound, path)
 }
 
 // splitCueLine splits a CUE line into its command and arguments.

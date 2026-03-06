@@ -295,6 +295,48 @@ func TestCueUnsupportedFormat(t *testing.T) {
 	assert.ErrorIs(t, err, xtractr.ErrUnsupportedAudio)
 }
 
+// TestCueWavReferenceFlacFile verifies that when the CUE says FILE "album.wav" WAVE
+// but only album.flac exists on disk, we use the .flac file (common mislabeling).
+func TestCueWavReferenceFlacFile(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	outputDir := filepath.Join(tmpDir, "output")
+
+	totalSamples := uint64(60 * testSampleRate)
+	flacPath := filepath.Join(tmpDir, "album.flac")
+	generateTestFLAC(t, flacPath, totalSamples)
+	// CUE references .wav but we only have .flac
+	cueContent := strings.Join([]string{
+		`PERFORMER "Artist"`,
+		`TITLE "Album"`,
+		`FILE "album.wav" WAVE`,
+		`  TRACK 01 AUDIO`,
+		`    TITLE "Track One"`,
+		`    INDEX 01 00:00:00`,
+		`  TRACK 02 AUDIO`,
+		`    TITLE "Track Two"`,
+		`    INDEX 01 00:30:00`,
+	}, "\n") + "\n"
+	cuePath := filepath.Join(tmpDir, "album.cue")
+	require.NoError(t, os.WriteFile(cuePath, []byte(cueContent), 0o600))
+
+	xFile := &xtractr.XFile{
+		FilePath:  cuePath,
+		OutputDir: outputDir,
+		FileMode:  0o600,
+		DirMode:   0o755,
+	}
+
+	size, files, archiveList, err := xtractr.ExtractCUE(xFile)
+	require.NoError(t, err, "ExtractCUE with CUE referencing .wav but .flac on disk")
+	assert.Len(t, files, 2)
+	assert.Len(t, archiveList, 2)
+	assert.Positive(t, size)
+	// Archive list should include the actual flac path we used, not the .wav path
+	assert.Contains(t, archiveList, flacPath)
+}
+
 func TestCueTimestampConversion(t *testing.T) {
 	t.Parallel()
 
