@@ -324,10 +324,10 @@ func parseCueTime(s string) cueTimestamp {
 
 // splitFLAC splits a FLAC file into individual tracks based on CUE sheet data.
 func splitFLAC(xFile *XFile, audioPath string, cue *CueSheet, timestamps []cueTimestamp) (uint64, []string, error) {
-	// Open, parse, and read all frames from the FLAC file.
+	// Open, parse, and read all frames and metadata (e.g. front cover) from the FLAC file.
 	// We close the stream immediately after reading to release the file handle,
 	// which is important on Windows where open handles block TempDir cleanup.
-	streamInfo, allFrames, err := readFLACFile(audioPath)
+	streamInfo, allFrames, coverPicture, err := readFLACFile(audioPath)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -357,9 +357,32 @@ func splitFLAC(xFile *XFile, audioPath string, cue *CueSheet, timestamps []cueTi
 		return 0, nil, fmt.Errorf("creating output directory: %w", err)
 	}
 
+	var (
+		coverPath string
+		writeErr  error
+	)
+
+	if coverPicture != nil {
+		coverPath, writeErr = writeCoverToFile(xFile.OutputDir, coverPicture, xFile.FileMode)
+		if writeErr != nil {
+			xFile.Debugf("Error writing album cover: %s", writeErr)
+		}
+
+		xFile.Debugf("Wrote album cover: %s (%d bytes)", coverPath, len(coverPicture.Data))
+	}
+
 	defer xFile.newProgress(0, 0, len(cue.Tracks)).done()
 
-	return writeTracksFLAC(xFile, cue, allFrames, trackStarts, streamInfo, trackEnds)
+	totalSize, files, err := writeTracksFLAC(xFile, cue, allFrames, trackStarts, streamInfo, trackEnds, coverPicture)
+	if err != nil {
+		return 0, nil, err
+	}
+
+	if coverPath != "" {
+		return totalSize + uint64(len(coverPicture.Data)), append(files, coverPath), nil
+	}
+
+	return totalSize, files, nil
 }
 
 func writeTracksFLAC(
@@ -369,6 +392,7 @@ func writeTracksFLAC(
 	trackStarts []uint64,
 	streamInfo *meta.StreamInfo,
 	trackEnds []uint64,
+	coverPicture *meta.Picture,
 ) (uint64, []string, error) {
 	var (
 		totalSize uint64
@@ -377,21 +401,17 @@ func writeTracksFLAC(
 
 	// Split frames into tracks.
 	for trackIdx := range cue.Tracks {
-		track := &cue.Tracks[trackIdx]
 		startSample := trackStarts[trackIdx]
-		endSample := trackEnds[trackIdx]
 
+		endSample := trackEnds[trackIdx]
 		if endSample <= startSample {
 			continue
 		}
 
+		track := &cue.Tracks[trackIdx]
 		outputName := formatTrackFilename(track)
 		outputPath := filepath.Join(xFile.OutputDir, outputName)
-
-		var blocks []*meta.Block
-		if cue != nil && track != nil {
-			blocks = []*meta.Block{buildVorbisCommentBlock(cue, track)}
-		}
+		blocks := buildTrackMetadataBlocks(cue, track, coverPicture)
 
 		size, err := writeTrackFLAC(outputPath, streamInfo, allFrames, startSample, endSample, xFile.FileMode, blocks)
 		if err != nil {
@@ -414,34 +434,49 @@ type flacFrame struct {
 	sampleEnd   uint64
 }
 
-// readFLACFile opens a FLAC file, reads all frames, and closes the file.
-// We open and close the os.File ourselves because flac.Open wraps the reader
-// in bufio.NewReader, which loses the io.Closer interface and prevents
-// flac.Stream.Close from actually closing the underlying file handle.
-// This matters on Windows where open handles block file deletion.
-func readFLACFile(audioPath string) (*meta.StreamInfo, []flacFrame, error) {
+// frontCoverPictureType is the FLAC/ID3v2 APIC picture type for "Cover (front)".
+const frontCoverPictureType = 3
+
+// readFLACFile opens a FLAC file, parses metadata and all frames, and closes the file.
+// It returns the stream info, frames, and the first front-cover picture block if present.
+// We use flac.Parse (not flac.New) so metadata blocks (e.g. Picture) are available.
+// We open and close the os.File ourselves so the underlying file handle is released
+// (important on Windows where open handles block TempDir cleanup).
+func readFLACFile(audioPath string) (*meta.StreamInfo, []flacFrame, *meta.Picture, error) {
 	file, err := os.Open(audioPath)
 	if err != nil {
-		return nil, nil, fmt.Errorf("opening flac file: %w", err)
+		return nil, nil, nil, fmt.Errorf("opening flac file: %w", err)
 	}
+	defer file.Close()
 
-	stream, err := flac.New(file)
+	stream, err := flac.Parse(file)
 	if err != nil {
-		_ = file.Close()
-		return nil, nil, fmt.Errorf("parsing flac file: %w", err)
+		return nil, nil, nil, fmt.Errorf("parsing flac file: %w", err)
 	}
 
-	info := stream.Info
 	frames, err := readAllFrames(stream)
-
-	// Always close the file handle, regardless of readAllFrames result.
-	_ = file.Close()
-
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
-	return info, frames, nil
+	var cover *meta.Picture
+
+	for _, blk := range stream.Blocks {
+		if blk.Type != meta.TypePicture {
+			continue
+		}
+
+		pic, ok := blk.Body.(*meta.Picture)
+		if !ok || pic.Type != frontCoverPictureType {
+			continue
+		}
+
+		cover = pic
+
+		break
+	}
+
+	return stream.Info, frames, cover, nil
 }
 
 // buildVorbisCommentBlock returns a FLAC metadata block with ALBUM, ARTIST, TITLE, and TRACKNUMBER
@@ -476,9 +511,57 @@ func buildVorbisCommentBlock(cue *CueSheet, track *CueTrack) *meta.Block {
 	}
 
 	return &meta.Block{
-		Header: meta.Header{Type: meta.TypeVorbisComment, Length: 1, IsLast: false},
+		Header: meta.Header{Type: meta.TypeVorbisComment, Length: 1},
 		Body:   comment,
 	}
+}
+
+// buildTrackMetadataBlocks returns metadata blocks for a split track: VorbisComment
+// (when cue/track are set) and optionally the front-cover Picture. The last block
+// has IsLast set so the FLAC encoder writes the metadata block chain correctly.
+func buildTrackMetadataBlocks(cue *CueSheet, track *CueTrack, coverPicture *meta.Picture) []*meta.Block {
+	var blocks []*meta.Block
+
+	if cue != nil && track != nil {
+		blocks = append(blocks, buildVorbisCommentBlock(cue, track))
+	}
+
+	if coverPicture != nil {
+		blocks = append(blocks, &meta.Block{
+			Header: meta.Header{Type: meta.TypePicture, Length: 1, IsLast: false},
+			Body:   coverPicture,
+		})
+	}
+
+	if len(blocks) > 0 {
+		blocks[len(blocks)-1].IsLast = true
+	}
+
+	return blocks
+}
+
+// writeCoverToFile writes the front-cover picture data to a file in outputDir.
+// The filename is chosen from the picture's MIME type: cover.png for image/png,
+// cover.jpg for image/jpeg, otherwise cover.bin.
+func writeCoverToFile(outputDir string, pic *meta.Picture, fileMode os.FileMode) (string, error) {
+	ext := "bin"
+
+	switch {
+	case strings.EqualFold(pic.MIME, "image/png"):
+		ext = "png"
+	case strings.EqualFold(pic.MIME, "image/jpeg"), strings.EqualFold(pic.MIME, "image/jpg"):
+		ext = "jpg"
+	}
+
+	name := "cover." + ext
+	path := filepath.Join(outputDir, name)
+
+	err := os.WriteFile(path, pic.Data, fileMode)
+	if err != nil {
+		return "", fmt.Errorf("writing cover to file: %w", err)
+	}
+
+	return path, nil
 }
 
 // readAllFrames reads all audio frames from a FLAC stream.

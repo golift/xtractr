@@ -26,27 +26,12 @@ const (
 	testBlockSize     = 4096
 )
 
-// generateTestFLAC creates a FLAC file with a sine wave tone at the given path.
-func generateTestFLAC(t *testing.T, path string, totalSamples uint64) {
+// writeTestFLACAudioFrames writes sine-wave audio frames to a FLAC encoder.
+// Callers must call enc.Close() after this returns.
+func writeTestFLACAudioFrames(t *testing.T, enc *flac.Encoder, totalSamples uint64) {
 	t.Helper()
 
-	outFile, err := os.Create(path)
-	require.NoError(t, err, "creating test FLAC file")
-
-	info := &meta.StreamInfo{
-		BlockSizeMin:  testBlockSize,
-		BlockSizeMax:  testBlockSize,
-		SampleRate:    testSampleRate,
-		NChannels:     testNChannels,
-		BitsPerSample: testBitsPerSample,
-		NSamples:      totalSamples,
-	}
-
-	enc, err := flac.NewEncoder(outFile, info)
-	require.NoError(t, err, "creating FLAC encoder")
-
 	samplesWritten := uint64(0)
-
 	for samplesWritten < totalSamples {
 		blockSize := uint64(testBlockSize)
 		if samplesWritten+blockSize > totalSamples {
@@ -95,8 +80,84 @@ func generateTestFLAC(t *testing.T, path string, totalSamples uint64) {
 
 		samplesWritten += blockSize
 	}
+}
+
+// generateTestFLAC creates a FLAC file with a sine wave tone at the given path.
+func generateTestFLAC(t *testing.T, path string, totalSamples uint64) {
+	t.Helper()
+
+	outFile, err := os.Create(path)
+	require.NoError(t, err, "creating test FLAC file")
+
+	info := &meta.StreamInfo{
+		BlockSizeMin:  testBlockSize,
+		BlockSizeMax:  testBlockSize,
+		SampleRate:    testSampleRate,
+		NChannels:     testNChannels,
+		BitsPerSample: testBitsPerSample,
+		NSamples:      totalSamples,
+	}
+
+	enc, err := flac.NewEncoder(outFile, info)
+	require.NoError(t, err, "creating FLAC encoder")
+
+	writeTestFLACAudioFrames(t, enc, totalSamples)
 
 	// enc.Close() also closes the underlying outFile via io.Closer.
+	require.NoError(t, enc.Close(), "closing FLAC encoder")
+}
+
+// minimalPNG is a valid 1x1 black pixel PNG (67 bytes) for embedding as front cover in tests.
+func minimalPNG(t *testing.T) []byte {
+	t.Helper()
+
+	return []byte{
+		0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+		0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+		0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+		0x01, 0x00, 0x00, 0x00, 0x00, 0x37, 0x6E, 0xF9,
+		0x24, 0x00, 0x00, 0x00, 0x0A, 0x49, 0x44, 0x41,
+		0x54, 0x78, 0x01, 0x63, 0x60, 0x00, 0x00, 0x00,
+		0x02, 0x00, 0x01, 0x73, 0x75, 0x01, 0x18, 0x00,
+		0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE,
+		0x42, 0x60, 0x82,
+	}
+}
+
+// generateTestFLACWithCover creates a FLAC file with an embedded front-cover picture
+// and the same sine-wave audio as generateTestFLAC. Used to test that CUE split
+// copies the cover into each track.
+func generateTestFLACWithCover(t *testing.T, path string, totalSamples uint64) {
+	t.Helper()
+
+	outFile, err := os.Create(path)
+	require.NoError(t, err, "creating test FLAC file with cover")
+
+	info := &meta.StreamInfo{
+		BlockSizeMin:  testBlockSize,
+		BlockSizeMax:  testBlockSize,
+		SampleRate:    testSampleRate,
+		NChannels:     testNChannels,
+		BitsPerSample: testBitsPerSample,
+		NSamples:      totalSamples,
+	}
+
+	coverBlock := &meta.Block{
+		Header: meta.Header{Type: meta.TypePicture, Length: 1, IsLast: true},
+		Body: &meta.Picture{
+			Type:  3, // Cover (front)
+			MIME:  "image/png",
+			Desc:  "cover",
+			Width: 1, Height: 1, Depth: 8, NPalColors: 0,
+			Data: minimalPNG(t),
+		},
+	}
+
+	enc, err := flac.NewEncoder(outFile, info, coverBlock)
+	require.NoError(t, err, "creating FLAC encoder with cover")
+
+	writeTestFLACAudioFrames(t, enc, totalSamples)
+
 	require.NoError(t, enc.Close(), "closing FLAC encoder")
 }
 
@@ -198,6 +259,86 @@ func TestCueExtractCUE(t *testing.T) {
 		assert.Equal(t, "Test Artist", tagMap["ARTIST"], "ARTIST tag from CUE PERFORMER")
 		assert.Equal(t, expectedTitles[idx], tagMap["TITLE"], "TITLE tag from track")
 		assert.Equal(t, strconv.Itoa(idx+1), tagMap["TRACKNUMBER"], "TRACKNUMBER")
+		require.NoError(t, trackFile.Close())
+	}
+}
+
+func TestCueExtractCUE_SplitFLAC_EmbeddedCover(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	outputDir := filepath.Join(tmpDir, "output")
+
+	totalSamples := uint64(2 * 60 * testSampleRate)
+	flacPath := filepath.Join(tmpDir, "album.flac")
+	generateTestFLACWithCover(t, flacPath, totalSamples)
+
+	cueContent := strings.Join([]string{
+		`PERFORMER "Cover Artist"`,
+		`TITLE "Cover Album"`,
+		`FILE "album.flac" WAVE`,
+		`  TRACK 01 AUDIO`,
+		`    TITLE "Track A"`,
+		`    INDEX 01 00:00:00`,
+		`  TRACK 02 AUDIO`,
+		`    TITLE "Track B"`,
+		`    INDEX 01 01:00:00`,
+	}, "\n") + "\n"
+	cuePath := filepath.Join(tmpDir, "album.cue")
+	require.NoError(t, os.WriteFile(cuePath, []byte(cueContent), 0o600))
+
+	xFile := &xtractr.XFile{
+		FilePath:  cuePath,
+		OutputDir: outputDir,
+		FileMode:  0o600,
+		DirMode:   0o755,
+	}
+
+	_, files, _, err := xtractr.ExtractCUE(xFile)
+	require.NoError(t, err, "extracting CUE+FLAC with cover")
+
+	require.Len(t, files, 3, "expected 2 track files + cover.png")
+	assert.Contains(t, files, filepath.Join(outputDir, "cover.png"), "cover.png should be in extracted file list")
+
+	// Album cover should be written to cover.png in the output directory.
+	coverPath := filepath.Join(outputDir, "cover.png")
+	coverData, err := os.ReadFile(coverPath)
+	require.NoError(t, err, "reading cover.png")
+	assert.Equal(t, minimalPNG(t), coverData, "cover.png should match embedded image")
+
+	for _, trackPath := range files {
+		if filepath.Ext(trackPath) != ".flac" {
+			continue
+		}
+
+		trackFile, err := os.Open(trackPath)
+		require.NoError(t, err, "opening track: %s", trackPath)
+		stream, err := flac.Parse(trackFile)
+		require.NoError(t, err, "parsing track: %s", trackPath)
+
+		var frontCover *meta.Picture
+
+		for _, blk := range stream.Blocks {
+			if blk.Type != meta.TypePicture {
+				continue
+			}
+
+			pic, ok := blk.Body.(*meta.Picture)
+			if !ok {
+				continue
+			}
+
+			if pic.Type == 3 {
+				frontCover = pic
+				break
+			}
+		}
+
+		require.NotNil(t, frontCover, "track %s should have front-cover Picture block", trackPath)
+		assert.Equal(t, "image/png", frontCover.MIME, "cover MIME")
+		assert.Equal(t, uint32(1), frontCover.Width, "cover width")
+		assert.Equal(t, uint32(1), frontCover.Height, "cover height")
+		assert.Equal(t, minimalPNG(t), frontCover.Data, "cover image data should match source")
 		require.NoError(t, trackFile.Close())
 	}
 }
