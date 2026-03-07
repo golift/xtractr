@@ -7,8 +7,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"unicode/utf16"
 
 	"github.com/mewkiz/flac"
 	"github.com/mewkiz/flac/frame"
@@ -25,27 +27,12 @@ const (
 	testBlockSize     = 4096
 )
 
-// generateTestFLAC creates a FLAC file with a sine wave tone at the given path.
-func generateTestFLAC(t *testing.T, path string, totalSamples uint64) {
+// writeTestFLACAudioFrames writes sine-wave audio frames to a FLAC encoder.
+// Callers must call enc.Close() after this returns.
+func writeTestFLACAudioFrames(t *testing.T, enc *flac.Encoder, totalSamples uint64) {
 	t.Helper()
 
-	outFile, err := os.Create(path)
-	require.NoError(t, err, "creating test FLAC file")
-
-	info := &meta.StreamInfo{
-		BlockSizeMin:  testBlockSize,
-		BlockSizeMax:  testBlockSize,
-		SampleRate:    testSampleRate,
-		NChannels:     testNChannels,
-		BitsPerSample: testBitsPerSample,
-		NSamples:      totalSamples,
-	}
-
-	enc, err := flac.NewEncoder(outFile, info)
-	require.NoError(t, err, "creating FLAC encoder")
-
 	samplesWritten := uint64(0)
-
 	for samplesWritten < totalSamples {
 		blockSize := uint64(testBlockSize)
 		if samplesWritten+blockSize > totalSamples {
@@ -94,8 +81,84 @@ func generateTestFLAC(t *testing.T, path string, totalSamples uint64) {
 
 		samplesWritten += blockSize
 	}
+}
+
+// generateTestFLAC creates a FLAC file with a sine wave tone at the given path.
+func generateTestFLAC(t *testing.T, path string, totalSamples uint64) {
+	t.Helper()
+
+	outFile, err := os.Create(path)
+	require.NoError(t, err, "creating test FLAC file")
+
+	info := &meta.StreamInfo{
+		BlockSizeMin:  testBlockSize,
+		BlockSizeMax:  testBlockSize,
+		SampleRate:    testSampleRate,
+		NChannels:     testNChannels,
+		BitsPerSample: testBitsPerSample,
+		NSamples:      totalSamples,
+	}
+
+	enc, err := flac.NewEncoder(outFile, info)
+	require.NoError(t, err, "creating FLAC encoder")
+
+	writeTestFLACAudioFrames(t, enc, totalSamples)
 
 	// enc.Close() also closes the underlying outFile via io.Closer.
+	require.NoError(t, enc.Close(), "closing FLAC encoder")
+}
+
+// minimalPNG is a valid 1x1 black pixel PNG (67 bytes) for embedding as front cover in tests.
+func minimalPNG(t *testing.T) []byte {
+	t.Helper()
+
+	return []byte{
+		0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+		0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+		0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+		0x01, 0x00, 0x00, 0x00, 0x00, 0x37, 0x6E, 0xF9,
+		0x24, 0x00, 0x00, 0x00, 0x0A, 0x49, 0x44, 0x41,
+		0x54, 0x78, 0x01, 0x63, 0x60, 0x00, 0x00, 0x00,
+		0x02, 0x00, 0x01, 0x73, 0x75, 0x01, 0x18, 0x00,
+		0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE,
+		0x42, 0x60, 0x82,
+	}
+}
+
+// generateTestFLACWithCover creates a FLAC file with an embedded front-cover picture
+// and the same sine-wave audio as generateTestFLAC. Used to test that CUE split
+// copies the cover into each track.
+func generateTestFLACWithCover(t *testing.T, path string, totalSamples uint64) {
+	t.Helper()
+
+	outFile, err := os.Create(path)
+	require.NoError(t, err, "creating test FLAC file with cover")
+
+	info := &meta.StreamInfo{
+		BlockSizeMin:  testBlockSize,
+		BlockSizeMax:  testBlockSize,
+		SampleRate:    testSampleRate,
+		NChannels:     testNChannels,
+		BitsPerSample: testBitsPerSample,
+		NSamples:      totalSamples,
+	}
+
+	coverBlock := &meta.Block{
+		Header: meta.Header{Type: meta.TypePicture, Length: 1, IsLast: true},
+		Body: &meta.Picture{
+			Type:  3, // Cover (front)
+			MIME:  "image/png",
+			Desc:  "cover",
+			Width: 1, Height: 1, Depth: 8, NPalColors: 0,
+			Data: minimalPNG(t),
+		},
+	}
+
+	enc, err := flac.NewEncoder(outFile, info, coverBlock)
+	require.NoError(t, err, "creating FLAC encoder with cover")
+
+	writeTestFLACAudioFrames(t, enc, totalSamples)
+
 	require.NoError(t, enc.Close(), "closing FLAC encoder")
 }
 
@@ -154,7 +217,7 @@ func TestCueExtractCUE(t *testing.T) {
 	size, files, archiveList, err := xtractr.ExtractCUE(xFile)
 	require.NoError(t, err, "extracting CUE+FLAC")
 
-	assert.Len(t, files, 3, "expected 3 extracted track files")
+	assert.Len(t, files, 4, "expected 3 track files + CUE sheet")
 	assert.Positive(t, size, "total size should be > 0")
 	assert.Len(t, archiveList, 2, "archive list should contain cue and flac files")
 	assert.Contains(t, archiveList, cuePath)
@@ -165,16 +228,118 @@ func TestCueExtractCUE(t *testing.T) {
 		"02 - Second Song.flac",
 		"03 - Third Song.flac",
 	}
+	expectedTitles := []string{"First Song", "Second Song", "Third Song"}
 
 	for idx, expectedName := range expectedNames {
 		assert.Equal(t, filepath.Join(outputDir, expectedName), files[idx])
 		trackFile, err := os.Open(files[idx])
 		require.NoError(t, err, "opening track FLAC file: %s", files[idx])
-		trackStream, err := flac.New(trackFile)
+		trackStream, err := flac.Parse(trackFile)
 		require.NoError(t, err, "parsing track FLAC file: %s", files[idx])
 		assert.Equal(t, uint32(testSampleRate), trackStream.Info.SampleRate)
 		assert.Equal(t, uint8(testNChannels), trackStream.Info.NChannels)
 		assert.Positive(t, trackStream.Info.NSamples, "track should have samples")
+		// Split tracks should include VorbisComment with ALBUM, ARTIST, TITLE, TRACKNUMBER for Lidarr/import.
+		var vorbis *meta.VorbisComment
+
+		for _, blk := range trackStream.Blocks {
+			if vc, ok := blk.Body.(*meta.VorbisComment); ok {
+				vorbis = vc
+				break
+			}
+		}
+
+		require.NotNil(t, vorbis, "track %s should have VorbisComment metadata", files[idx])
+
+		tagMap := make(map[string]string)
+		for _, pair := range vorbis.Tags {
+			tagMap[pair[0]] = pair[1]
+		}
+
+		assert.Equal(t, "Test Album", tagMap["ALBUM"], "ALBUM tag from CUE TITLE")
+		assert.Equal(t, "Test Artist", tagMap["ARTIST"], "ARTIST tag from CUE PERFORMER")
+		assert.Equal(t, expectedTitles[idx], tagMap["TITLE"], "TITLE tag from track")
+		assert.Equal(t, strconv.Itoa(idx+1), tagMap["TRACKNUMBER"], "TRACKNUMBER")
+		require.NoError(t, trackFile.Close())
+	}
+}
+
+func TestCueExtractCUE_SplitFLAC_EmbeddedCover(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	outputDir := filepath.Join(tmpDir, "output")
+
+	totalSamples := uint64(2 * 60 * testSampleRate)
+	flacPath := filepath.Join(tmpDir, "album.flac")
+	generateTestFLACWithCover(t, flacPath, totalSamples)
+
+	cueContent := strings.Join([]string{
+		`PERFORMER "Cover Artist"`,
+		`TITLE "Cover Album"`,
+		`FILE "album.flac" WAVE`,
+		`  TRACK 01 AUDIO`,
+		`    TITLE "Track A"`,
+		`    INDEX 01 00:00:00`,
+		`  TRACK 02 AUDIO`,
+		`    TITLE "Track B"`,
+		`    INDEX 01 01:00:00`,
+	}, "\n") + "\n"
+	cuePath := filepath.Join(tmpDir, "album.cue")
+	require.NoError(t, os.WriteFile(cuePath, []byte(cueContent), 0o600))
+
+	xFile := &xtractr.XFile{
+		FilePath:  cuePath,
+		OutputDir: outputDir,
+		FileMode:  0o600,
+		DirMode:   0o755,
+	}
+
+	_, files, _, err := xtractr.ExtractCUE(xFile)
+	require.NoError(t, err, "extracting CUE+FLAC with cover")
+
+	require.Len(t, files, 4, "expected 2 track files + cover.png + CUE sheet")
+	assert.Contains(t, files, filepath.Join(outputDir, "cover.png"), "cover.png should be in extracted file list")
+
+	// Album cover should be written to cover.png in the output directory.
+	coverPath := filepath.Join(outputDir, "cover.png")
+	coverData, err := os.ReadFile(coverPath)
+	require.NoError(t, err, "reading cover.png")
+	assert.Equal(t, minimalPNG(t), coverData, "cover.png should match embedded image")
+
+	for _, trackPath := range files {
+		if filepath.Ext(trackPath) != ".flac" {
+			continue
+		}
+
+		trackFile, err := os.Open(trackPath)
+		require.NoError(t, err, "opening track: %s", trackPath)
+		stream, err := flac.Parse(trackFile)
+		require.NoError(t, err, "parsing track: %s", trackPath)
+
+		var frontCover *meta.Picture
+
+		for _, blk := range stream.Blocks {
+			if blk.Type != meta.TypePicture {
+				continue
+			}
+
+			pic, ok := blk.Body.(*meta.Picture)
+			if !ok {
+				continue
+			}
+
+			if pic.Type == 3 {
+				frontCover = pic
+				break
+			}
+		}
+
+		require.NotNil(t, frontCover, "track %s should have front-cover Picture block", trackPath)
+		assert.Equal(t, "image/png", frontCover.MIME, "cover MIME")
+		assert.Equal(t, uint32(1), frontCover.Width, "cover width")
+		assert.Equal(t, uint32(1), frontCover.Height, "cover height")
+		assert.Equal(t, minimalPNG(t), frontCover.Data, "cover image data should match source")
 		require.NoError(t, trackFile.Close())
 	}
 }
@@ -212,7 +377,7 @@ func TestCueExtractViaExtractFile(t *testing.T) {
 
 	size, files, archiveList, err := xtractr.ExtractFile(xFile)
 	require.NoError(t, err, "ExtractFile with .cue")
-	assert.Len(t, files, 2)
+	assert.Len(t, files, 3, "expected 2 track files + CUE sheet")
 	assert.Len(t, archiveList, 2)
 	assert.Positive(t, size)
 }
@@ -272,6 +437,127 @@ func TestCueUnsupportedFormat(t *testing.T) {
 	assert.ErrorIs(t, err, xtractr.ErrUnsupportedAudio)
 }
 
+// TestCueWavReferenceFlacFile verifies that when the CUE says FILE "album.wav" WAVE
+// but only album.flac exists on disk, we use the .flac file (common mislabeling).
+func TestCueWavReferenceFlacFile(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	outputDir := filepath.Join(tmpDir, "output")
+
+	totalSamples := uint64(60 * testSampleRate)
+	flacPath := filepath.Join(tmpDir, "album.flac")
+	generateTestFLAC(t, flacPath, totalSamples)
+	// CUE references .wav but we only have .flac
+	cueContent := strings.Join([]string{
+		`PERFORMER "Artist"`,
+		`TITLE "Album"`,
+		`FILE "album.wav" WAVE`,
+		`  TRACK 01 AUDIO`,
+		`    TITLE "Track One"`,
+		`    INDEX 01 00:00:00`,
+		`  TRACK 02 AUDIO`,
+		`    TITLE "Track Two"`,
+		`    INDEX 01 00:30:00`,
+	}, "\n") + "\n"
+	cuePath := filepath.Join(tmpDir, "album.cue")
+	require.NoError(t, os.WriteFile(cuePath, []byte(cueContent), 0o600))
+
+	xFile := &xtractr.XFile{
+		FilePath:  cuePath,
+		OutputDir: outputDir,
+		FileMode:  0o600,
+		DirMode:   0o755,
+	}
+
+	size, files, archiveList, err := xtractr.ExtractCUE(xFile)
+	require.NoError(t, err, "ExtractCUE with CUE referencing .wav but .flac on disk")
+	assert.Len(t, files, 3, "expected 2 track files + CUE sheet")
+	assert.Len(t, archiveList, 2)
+	assert.Positive(t, size)
+	// Archive list should include the actual flac path we used, not the .wav path
+	assert.Contains(t, archiveList, flacPath)
+}
+
+// TestCueFallbackSameBasename verifies that when the FILE line does not match any file
+// (e.g. O vs Ö or encoding mismatch), we use the FLAC with the same base name as the CUE file.
+func TestCueFallbackSameBasename(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	outputDir := filepath.Join(tmpDir, "output")
+
+	totalSamples := uint64(60 * testSampleRate)
+	// FLAC on disk has same base name as CUE, but CUE FILE line references a different name.
+	flacPath := filepath.Join(tmpDir, "Album.flac")
+	generateTestFLAC(t, flacPath, totalSamples)
+
+	cueContent := strings.Join([]string{
+		`PERFORMER "Artist"`,
+		`TITLE "Album"`,
+		`FILE "Other Name.flac" WAVE`,
+		`  TRACK 01 AUDIO`,
+		`    TITLE "Track One"`,
+		`    INDEX 01 00:00:00`,
+		`  TRACK 02 AUDIO`,
+		`    TITLE "Track Two"`,
+		`    INDEX 01 00:30:00`,
+	}, "\n") + "\n"
+	cuePath := filepath.Join(tmpDir, "Album.cue")
+	require.NoError(t, os.WriteFile(cuePath, []byte(cueContent), 0o600))
+
+	xFile := &xtractr.XFile{
+		FilePath:  cuePath,
+		OutputDir: outputDir,
+		FileMode:  0o600,
+		DirMode:   0o755,
+	}
+
+	size, files, archiveList, err := xtractr.ExtractCUE(xFile)
+	require.NoError(t, err, "ExtractCUE should find Album.flac via same-basename fallback")
+	assert.Len(t, files, 3)
+	assert.Len(t, archiveList, 2)
+	assert.Positive(t, size)
+	assert.Contains(t, archiveList, flacPath)
+}
+
+// TestCueUTF16LE verifies that a CUE file encoded as UTF-16 LE with BOM is parsed correctly.
+func TestCueUTF16LE(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	outputDir := filepath.Join(tmpDir, "output")
+
+	totalSamples := uint64(60 * testSampleRate)
+	flacPath := filepath.Join(tmpDir, "album.flac")
+	generateTestFLAC(t, flacPath, totalSamples)
+	//nolint:lll // it's ok.
+	cueContent := "PERFORMER \"Artist\"\r\nTITLE \"Album\"\r\nFILE \"album.flac\" WAVE\r\n  TRACK 01 AUDIO\r\n    TITLE \"Track One\"\r\n    INDEX 01 00:00:00\r\n"
+	// Encode as UTF-16 LE with BOM (common for CUE sheets from Windows).
+	u16 := utf16.Encode([]rune(cueContent))
+	buf := make([]byte, 0, 2+len(u16)*2)
+
+	buf = append(buf, 0xFF, 0xFE)
+	for _, v := range u16 {
+		buf = append(buf, byte(v), byte(v>>8))
+	}
+
+	cuePath := filepath.Join(tmpDir, "album.cue")
+	require.NoError(t, os.WriteFile(cuePath, buf, 0o600))
+
+	xFile := &xtractr.XFile{
+		FilePath:  cuePath,
+		OutputDir: outputDir,
+		FileMode:  0o600,
+		DirMode:   0o755,
+	}
+
+	size, files, _, err := xtractr.ExtractCUE(xFile)
+	require.NoError(t, err, "UTF-16 LE CUE should parse and extract")
+	assert.Positive(t, size)
+	assert.Len(t, files, 2, "expected 1 track + CUE sheet")
+}
+
 func TestCueTimestampConversion(t *testing.T) {
 	t.Parallel()
 
@@ -303,7 +589,7 @@ func TestCueTimestampConversion(t *testing.T) {
 
 	_, files, _, err := xtractr.ExtractCUE(xFile)
 	require.NoError(t, err)
-	assert.Len(t, files, 2)
+	assert.Len(t, files, 3, "expected 2 track files + CUE sheet")
 
 	file1, err := os.Open(files[0])
 	require.NoError(t, err)
@@ -359,10 +645,47 @@ func TestCueSpecialCharacters(t *testing.T) {
 
 	_, files, _, err := xtractr.ExtractCUE(xFile)
 	require.NoError(t, err)
-	assert.Len(t, files, 2)
+	assert.Len(t, files, 3, "expected 2 track files + CUE sheet")
 
 	assert.Equal(t, "01 - Song With - Slash.flac", filepath.Base(files[0]))
 	assert.Equal(t, "02 - Song- With Special Chars.flac", filepath.Base(files[1]))
+}
+
+// TestCueSmartQuoteInTitle verifies that track titles with Unicode smart quote (U+2019)
+// are sanitized to ASCII apostrophe in output filenames so tools like Lidarr can find files.
+func TestCueSmartQuoteInTitle(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	outputDir := filepath.Join(tmpDir, "output")
+
+	totalSamples := uint64(60 * testSampleRate)
+	flacPath := filepath.Join(tmpDir, "album.flac")
+	generateTestFLAC(t, flacPath, totalSamples)
+
+	// U+2019 is RIGHT SINGLE QUOTATION MARK (curly apostrophe), often from CUE sheets.
+	cueContent := strings.Join([]string{
+		`FILE "album.flac" WAVE`,
+		`  TRACK 01 AUDIO`,
+		`    TITLE "It's Hard to Find a Way"`,
+		`    INDEX 01 00:00:00`,
+	}, "\n") + "\n"
+	// Replace straight apostrophe with U+2019 in the CUE content.
+	cueContent = strings.ReplaceAll(cueContent, "It's", "It\u2019s")
+	cuePath := filepath.Join(tmpDir, "test.cue")
+	require.NoError(t, os.WriteFile(cuePath, []byte(cueContent), 0o600))
+
+	xFile := &xtractr.XFile{
+		FilePath:  cuePath,
+		OutputDir: outputDir,
+		FileMode:  0o600,
+		DirMode:   0o755,
+	}
+
+	_, files, _, err := xtractr.ExtractCUE(xFile)
+	require.NoError(t, err)
+	// Output filename must use ASCII apostrophe so Lidarr can find the file.
+	assert.Equal(t, "01 - It's Hard to Find a Way.flac", filepath.Base(files[0]))
 }
 
 func TestCueREMComments(t *testing.T) {
@@ -398,7 +721,7 @@ func TestCueREMComments(t *testing.T) {
 
 	_, files, _, err := xtractr.ExtractCUE(xFile)
 	require.NoError(t, err)
-	assert.Len(t, files, 1)
+	assert.Len(t, files, 2, "expected 1 track file + CUE sheet")
 }
 
 // TestCueVariableBlockSizeConsistency verifies that all frames in every split
@@ -444,9 +767,13 @@ func TestCueVariableBlockSizeConsistency(t *testing.T) {
 
 	_, files, _, err := xtractr.ExtractCUE(xFile)
 	require.NoError(t, err)
-	require.Len(t, files, 2)
+	require.Len(t, files, 3, "expected 2 track files + CUE sheet")
 
 	for _, trackPath := range files {
+		if filepath.Ext(trackPath) != ".flac" {
+			continue
+		}
+
 		trackFile, err := os.Open(trackPath)
 		require.NoError(t, err, "opening track: %s", trackPath)
 
@@ -546,11 +873,15 @@ func TestCueSplitRealFLAC(t *testing.T) {
 
 	size, files, archiveList, err := xtractr.ExtractCUE(xFile)
 	require.NoError(t, err, "ExtractCUE failed on ffmpeg-encoded FLAC")
-	require.Len(t, files, 3, "expected 3 split track files")
+	require.Len(t, files, 4, "expected 3 split track files + CUE sheet")
 	assert.Positive(t, size)
 	assert.Len(t, archiveList, 2)
 
 	for _, trackPath := range files {
+		if filepath.Ext(trackPath) != ".flac" {
+			continue
+		}
+
 		trackFile, err := os.Open(trackPath)
 		require.NoError(t, err)
 

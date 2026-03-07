@@ -1,6 +1,7 @@
 package xtractr_test
 
 import (
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,14 +26,19 @@ func TestIso(t *testing.T) {
 	}()
 
 	size := uint64(0)
-	walkErr := filepath.Walk(testFilesInfo.srcFilesDir, func(path string, info os.FileInfo, err error) error {
+	walkFS := os.DirFS(testFilesInfo.srcFilesDir)
+	walkErr := fs.WalkDir(walkFS, ".", func(path string, entry fs.DirEntry, err error) error {
 		require.NoError(t, err, "unexpected")
 
-		if info.IsDir() {
+		if entry.IsDir() {
 			return nil
 		}
 
-		fileToAdd, err := os.Open(path)
+		if path == "." {
+			return nil
+		}
+
+		fileToAdd, err := walkFS.Open(path)
 
 		require.NoError(t, err, "failed to open file")
 		defer safeCloser(t, fileToAdd)
@@ -42,7 +48,8 @@ func TestIso(t *testing.T) {
 
 		size += uint64(fStat.Size())
 
-		err = writer.AddFile(fileToAdd, strings.TrimPrefix(fileToAdd.Name(), testFilesInfo.srcFilesDir))
+		isoName := strings.TrimPrefix(filepath.ToSlash(path), "/")
+		err = writer.AddFile(fileToAdd, isoName)
 		require.NoError(t, err, "failed to add file")
 
 		return nil

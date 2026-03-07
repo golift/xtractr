@@ -77,6 +77,9 @@ type Response struct {
 	Archives ArchiveList
 	// Files written to final path.
 	NewFiles []string
+	// SkipOnRecursion lists paths that extractors copied into output (e.g. CUE sheet)
+	// and must not be re-extracted when recursing. Other files (e.g. CUE from a RAR) are still extracted.
+	SkipOnRecursion []string
 	// Error encountered, only when done=true.
 	Error error
 	// Copied from input data.
@@ -259,6 +262,37 @@ func weExtractedAnISO(resp *Response) bool {
 	return false
 }
 
+// excludePathsFromArchiveList returns a copy of list with any archive path that
+// appears in exclude (e.g. resp.SkipOnRecursion) removed.
+func excludePathsFromArchiveList(list ArchiveList, exclude []string) ArchiveList {
+	if len(exclude) == 0 {
+		return list
+	}
+
+	skip := make(map[string]bool, len(exclude))
+	out := make(ArchiveList, len(list))
+
+	for _, p := range exclude {
+		skip[filepath.Clean(p)] = true
+	}
+
+	for dir, archives := range list {
+		keep := make([]string, 0, len(archives))
+
+		for _, p := range archives {
+			if !skip[filepath.Clean(p)] {
+				keep = append(keep, p)
+			}
+		}
+
+		if len(keep) > 0 {
+			out[dir] = keep
+		}
+	}
+
+	return out
+}
+
 // decompressFiles runs after we find and verify archives exist.
 // This extracts everything in the search path then (optionally)
 // checks the output path for more archives that were just decompressed.
@@ -277,6 +311,10 @@ func (x *Xtractr) decompressFiles(resp *Response) error {
 		Path:          resp.Output,
 		ExcludeSuffix: resp.X.ExcludeSuffix,
 	})
+	// Do not try to extract files that an extractor copied into output (e.g. CUE sheet);
+	// re-extracting the copied CUE would fail and delete the output directory.
+	// Other archives in the output (e.g. CUE+FLAC from a RAR) are still extracted.
+	resp.Extras = excludePathsFromArchiveList(resp.Extras, resp.SkipOnRecursion)
 	nre := &Response{
 		X: &Xtract{
 			Password:  resp.X.Password,
@@ -360,6 +398,10 @@ func (x *Xtractr) processArchive(filename string, resp *Response) (uint64, []str
 	if err != nil {
 		x.DeleteFiles(resp.Output) // clean up the mess after an error and bail.
 		return bytes, files, archives, WrapExtractError(err, xFile, bytes, "")
+	}
+
+	if len(xFile.SkipOnRecursion) > 0 {
+		resp.SkipOnRecursion = append(resp.SkipOnRecursion, xFile.SkipOnRecursion...)
 	}
 
 	return bytes, files, archives, nil
