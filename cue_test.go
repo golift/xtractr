@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"unicode/utf16"
 
 	"github.com/mewkiz/flac"
 	"github.com/mewkiz/flac/frame"
@@ -478,6 +479,85 @@ func TestCueWavReferenceFlacFile(t *testing.T) {
 	assert.Contains(t, archiveList, flacPath)
 }
 
+// TestCueFallbackSameBasename verifies that when the FILE line does not match any file
+// (e.g. O vs Ö or encoding mismatch), we use the FLAC with the same base name as the CUE file.
+func TestCueFallbackSameBasename(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	outputDir := filepath.Join(tmpDir, "output")
+
+	totalSamples := uint64(60 * testSampleRate)
+	// FLAC on disk has same base name as CUE, but CUE FILE line references a different name.
+	flacPath := filepath.Join(tmpDir, "Album.flac")
+	generateTestFLAC(t, flacPath, totalSamples)
+
+	cueContent := strings.Join([]string{
+		`PERFORMER "Artist"`,
+		`TITLE "Album"`,
+		`FILE "Other Name.flac" WAVE`,
+		`  TRACK 01 AUDIO`,
+		`    TITLE "Track One"`,
+		`    INDEX 01 00:00:00`,
+		`  TRACK 02 AUDIO`,
+		`    TITLE "Track Two"`,
+		`    INDEX 01 00:30:00`,
+	}, "\n") + "\n"
+	cuePath := filepath.Join(tmpDir, "Album.cue")
+	require.NoError(t, os.WriteFile(cuePath, []byte(cueContent), 0o600))
+
+	xFile := &xtractr.XFile{
+		FilePath:  cuePath,
+		OutputDir: outputDir,
+		FileMode:  0o600,
+		DirMode:   0o755,
+	}
+
+	size, files, archiveList, err := xtractr.ExtractCUE(xFile)
+	require.NoError(t, err, "ExtractCUE should find Album.flac via same-basename fallback")
+	assert.Len(t, files, 3)
+	assert.Len(t, archiveList, 2)
+	assert.Positive(t, size)
+	assert.Contains(t, archiveList, flacPath)
+}
+
+// TestCueUTF16LE verifies that a CUE file encoded as UTF-16 LE with BOM is parsed correctly.
+func TestCueUTF16LE(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	outputDir := filepath.Join(tmpDir, "output")
+
+	totalSamples := uint64(60 * testSampleRate)
+	flacPath := filepath.Join(tmpDir, "album.flac")
+	generateTestFLAC(t, flacPath, totalSamples)
+	//nolint:lll // it's ok.
+	cueContent := "PERFORMER \"Artist\"\r\nTITLE \"Album\"\r\nFILE \"album.flac\" WAVE\r\n  TRACK 01 AUDIO\r\n    TITLE \"Track One\"\r\n    INDEX 01 00:00:00\r\n"
+	// Encode as UTF-16 LE with BOM (common for CUE sheets from Windows).
+	u16 := utf16.Encode([]rune(cueContent))
+	buf := make([]byte, 0, 2+len(u16)*2)
+
+	buf = append(buf, 0xFF, 0xFE)
+	for _, v := range u16 {
+		buf = append(buf, byte(v), byte(v>>8))
+	}
+
+	cuePath := filepath.Join(tmpDir, "album.cue")
+	require.NoError(t, os.WriteFile(cuePath, buf, 0o600))
+
+	xFile := &xtractr.XFile{
+		FilePath:  cuePath,
+		OutputDir: outputDir,
+		FileMode:  0o600,
+		DirMode:   0o755,
+	}
+
+	size, files, _, err := xtractr.ExtractCUE(xFile)
+	require.NoError(t, err, "UTF-16 LE CUE should parse and extract")
+	assert.Positive(t, size)
+	assert.Len(t, files, 2, "expected 1 track + CUE sheet")
+}
+
 func TestCueTimestampConversion(t *testing.T) {
 	t.Parallel()
 
@@ -569,6 +649,43 @@ func TestCueSpecialCharacters(t *testing.T) {
 
 	assert.Equal(t, "01 - Song With - Slash.flac", filepath.Base(files[0]))
 	assert.Equal(t, "02 - Song- With Special Chars.flac", filepath.Base(files[1]))
+}
+
+// TestCueSmartQuoteInTitle verifies that track titles with Unicode smart quote (U+2019)
+// are sanitized to ASCII apostrophe in output filenames so tools like Lidarr can find files.
+func TestCueSmartQuoteInTitle(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	outputDir := filepath.Join(tmpDir, "output")
+
+	totalSamples := uint64(60 * testSampleRate)
+	flacPath := filepath.Join(tmpDir, "album.flac")
+	generateTestFLAC(t, flacPath, totalSamples)
+
+	// U+2019 is RIGHT SINGLE QUOTATION MARK (curly apostrophe), often from CUE sheets.
+	cueContent := strings.Join([]string{
+		`FILE "album.flac" WAVE`,
+		`  TRACK 01 AUDIO`,
+		`    TITLE "It's Hard to Find a Way"`,
+		`    INDEX 01 00:00:00`,
+	}, "\n") + "\n"
+	// Replace straight apostrophe with U+2019 in the CUE content.
+	cueContent = strings.ReplaceAll(cueContent, "It's", "It\u2019s")
+	cuePath := filepath.Join(tmpDir, "test.cue")
+	require.NoError(t, os.WriteFile(cuePath, []byte(cueContent), 0o600))
+
+	xFile := &xtractr.XFile{
+		FilePath:  cuePath,
+		OutputDir: outputDir,
+		FileMode:  0o600,
+		DirMode:   0o755,
+	}
+
+	_, files, _, err := xtractr.ExtractCUE(xFile)
+	require.NoError(t, err)
+	// Output filename must use ASCII apostrophe so Lidarr can find the file.
+	assert.Equal(t, "01 - It's Hard to Find a Way.flac", filepath.Base(files[0]))
 }
 
 func TestCueREMComments(t *testing.T) {

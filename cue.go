@@ -2,6 +2,8 @@ package xtractr
 
 import (
 	"bufio"
+	"bytes"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -10,11 +12,16 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode/utf16"
+	"unicode/utf8"
 
 	"github.com/mewkiz/flac"
 	"github.com/mewkiz/flac/frame"
 	"github.com/mewkiz/flac/meta"
 )
+
+// ErrUTF16LengthInvalid is returned when the length of a UTF-16 encoded byte slice is not even.
+var ErrUTF16LengthInvalid = errors.New("invalid UTF-16 length")
 
 // CueSheet represents a parsed CUE sheet.
 type CueSheet struct {
@@ -74,9 +81,10 @@ func ExtractCUE(xFile *XFile) (size uint64, files, archives []string, err error)
 
 	// Resolve the audio file path relative to the CUE file.
 	// Some CUE sheets say FILE "album.wav" WAVE but the file on disk is album.flac; try .flac when .wav is missing.
+	// If the FILE line still does not match (e.g. O vs Ö), try the FLAC with the same base name as the CUE file.
 	cueDir := filepath.Dir(xFile.FilePath)
 
-	audioPath, err := resolveCueAudioPath(cueDir, cue.File)
+	audioPath, err := resolveCueAudioPath(cueDir, cue.File, xFile.FilePath)
 	if err != nil {
 		return 0, nil, nil, err
 	}
@@ -113,14 +121,80 @@ func ExtractCUE(xFile *XFile) (size uint64, files, archives []string, err error)
 }
 
 // parseCueSheetFile parses a CUE sheet from a file path and returns the sheet plus raw timestamps.
+// It supports UTF-8, UTF-8 with BOM, and UTF-16 (LE/BE with BOM) encoded CUE files.
+// TL;dr Some CUE sheets really suck.
+//
+//nolint:cyclop // tell me about it.
 func parseCueSheetFile(path string) (*CueSheet, []cueTimestamp, error) {
-	file, err := os.Open(path)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, nil, fmt.Errorf("opening cue sheet: %w", err)
 	}
-	defer file.Close()
 
-	return parseCueSheet(file)
+	// Detect BOM and decode to UTF-8 so the scanner sees valid text.
+	// UTF-16 LE file has BOM bytes FF FE -> LittleEndian 0xFEFF.
+	// UTF-16 BE file has BOM bytes FE FF -> LittleEndian 0xFFFE.
+	const (
+		utf16LEBOM = 0xFEFF
+		utf16BEBOM = 0xFFFE
+	)
+
+	var reader io.Reader
+
+	if len(data) > 1 {
+		switch bom := binary.LittleEndian.Uint16(data[:2]); bom {
+		case utf16LEBOM:
+			// UTF-16 little-endian; decode data[2:] as LE.
+			decoded, errDec := decodeUTF16(data[2:], binary.LittleEndian)
+			if errDec != nil {
+				return nil, nil, fmt.Errorf("decoding UTF-16 LE cue sheet: %w", errDec)
+			}
+
+			reader = bytes.NewReader(decoded)
+		case utf16BEBOM:
+			// UTF-16 big-endian; decode data[2:] as BE.
+			decoded, errDec := decodeUTF16(data[2:], binary.BigEndian)
+			if errDec != nil {
+				return nil, nil, fmt.Errorf("decoding UTF-16 BE cue sheet: %w", errDec)
+			}
+
+			reader = bytes.NewReader(decoded)
+		}
+	}
+
+	if reader == nil {
+		// No UTF-16 BOM; strip UTF-8 BOM if present.
+		if len(data) >= 3 && data[0] == 0xEF && data[1] == 0xBB && data[2] == 0xBF {
+			data = data[3:]
+		}
+
+		reader = bytes.NewReader(data)
+	}
+
+	return parseCueSheet(reader)
+}
+
+// decodeUTF16 decodes a UTF-16 encoded byte slice to UTF-8.
+//
+//nolint:mnd
+func decodeUTF16(data []byte, order binary.ByteOrder) ([]byte, error) {
+	if len(data)%2 != 0 {
+		return nil, fmt.Errorf("%w: %d", ErrUTF16LengthInvalid, len(data))
+	}
+
+	u16 := make([]uint16, len(data)/2)
+	for i := range u16 {
+		u16[i] = order.Uint16(data[2*i:])
+	}
+
+	runes := utf16.Decode(u16)
+	// Encode runes to UTF-8.
+	buf := make([]byte, 0, len(runes)*utf8.UTFMax)
+	for _, r := range runes {
+		buf = utf8.AppendRune(buf, r)
+	}
+
+	return buf, nil
 }
 
 // parseCueSheet parses a CUE sheet from an io.Reader.
@@ -224,7 +298,9 @@ func parseCueSheet(reader io.Reader) (*CueSheet, []cueTimestamp, error) { //noli
 
 // resolveCueAudioPath returns the path to the audio file referenced by the CUE.
 // If the CUE says FILE "album.wav" but the file on disk is album.flac, the .flac path is returned.
-func resolveCueAudioPath(cueDir, cueFile string) (string, error) {
+// If the FILE line does not match any file (e.g. encoding or O vs Ö), it tries the FLAC with the same
+// base name as the CUE file (e.g. Artist - Album.cue -> Artist - Album.flac).
+func resolveCueAudioPath(cueDir, cueFile, cueFilePath string) (string, error) {
 	path := filepath.Join(cueDir, cueFile)
 
 	_, err := os.Stat(path)
@@ -240,6 +316,15 @@ func resolveCueAudioPath(cueDir, cueFile string) (string, error) {
 		if err == nil {
 			return flacPath, nil
 		}
+	}
+
+	// Fallback: try the FLAC with the same base name as the CUE file (handles O vs Ö, encoding mismatches).
+	baseNoExt := strings.TrimSuffix(filepath.Base(cueFilePath), filepath.Ext(cueFilePath))
+	fallbackPath := filepath.Join(cueDir, baseNoExt+".flac")
+
+	_, err = os.Stat(fallbackPath)
+	if err == nil {
+		return fallbackPath, nil
 	}
 
 	return "", fmt.Errorf("%w: %s", ErrAudioNotFound, path)
@@ -859,7 +944,14 @@ func formatTrackFilename(track *CueTrack) string {
 }
 
 // sanitizeFilename removes or replaces characters that are problematic in filenames.
+// It normalizes smart/curly quotes to ASCII so tools like Lidarr can find files reliably.
 func sanitizeFilename(name string) string {
+	// Normalize smart quotes and curly quotes to ASCII (fixes Lidarr "could not find file" when CUE has U+2019 etc).
+	name = strings.ReplaceAll(name, "\u2018", "'")  // LEFT SINGLE QUOTATION MARK
+	name = strings.ReplaceAll(name, "\u2019", "'")  // RIGHT SINGLE QUOTATION MARK
+	name = strings.ReplaceAll(name, "\u201C", "\"") // LEFT DOUBLE QUOTATION MARK
+	name = strings.ReplaceAll(name, "\u201D", "\"") // RIGHT DOUBLE QUOTATION MARK
+	// Remove other characters that are problematic in filenames or for downstream tools.
 	replacer := strings.NewReplacer(
 		"/", "-",
 		"\\", "-",
@@ -871,6 +963,19 @@ func sanitizeFilename(name string) string {
 		">", "",
 		"|", "",
 	)
+	name = replacer.Replace(name)
 
-	return replacer.Replace(name)
+	// Strip control characters and Unicode replacement character.
+	var data strings.Builder
+	data.Grow(len(name))
+
+	for _, r := range name {
+		if r == '\uFFFD' || r < 32 || r == 127 {
+			continue
+		}
+
+		data.WriteRune(r)
+	}
+
+	return data.String()
 }
