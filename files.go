@@ -134,6 +134,9 @@ type XFile struct {
 	// this true will cause the extracted content to be moved into the
 	// output folder, and the root folder in the archive to be removed.
 	SquashRoot bool
+	// SkipOnRecursion, if set by an extractor, lists paths that were copied into
+	// the output (e.g. a CUE sheet) and must not be re-extracted when recursing.
+	SkipOnRecursion []string
 	// Logger allows printing debug messages.
 	log       Logger
 	moveFiles func(fromPath, toPath string, overwrite bool) ([]string, error)

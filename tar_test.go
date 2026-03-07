@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"testing"
@@ -75,29 +76,38 @@ func TestTar(t *testing.T) {
 
 func writeTar(sourceDir string, destWriter io.Writer) error {
 	tarWriter := tar.NewWriter(destWriter)
+	walkFS := os.DirFS(sourceDir)
 
-	outErr := filepath.Walk(sourceDir, func(path string, info os.FileInfo, _ error) error {
-		if info.Mode().IsDir() {
+	err := fs.WalkDir(walkFS, ".", func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+
+		if entry.IsDir() {
 			return nil
 		}
 
-		relativePath := path[len(sourceDir):]
-		if relativePath == "" {
+		if path == "." {
 			return nil
 		}
 
-		fileReader, err := os.Open(path)
+		fileReader, err := walkFS.Open(path)
 		if err != nil {
 			return fmt.Errorf("failed to open file: %w", err)
 		}
 		defer fileReader.Close()
 
-		header, err := tar.FileInfoHeader(info, relativePath)
+		info, err := entry.Info()
+		if err != nil {
+			return fmt.Errorf("failed to get file info: %w", err)
+		}
+
+		header, err := tar.FileInfoHeader(info, path)
 		if err != nil {
 			return fmt.Errorf("failed to create tar header: %w", err)
 		}
 
-		header.Name = relativePath
+		header.Name = filepath.ToSlash(path)
 
 		err = tarWriter.WriteHeader(header)
 		if err != nil {
@@ -106,16 +116,16 @@ func writeTar(sourceDir string, destWriter io.Writer) error {
 
 		_, err = io.Copy(tarWriter, fileReader)
 		if err != nil {
-			return fmt.Errorf("failed to copy file (%s) into tar header: %w", fileReader.Name(), err)
+			return fmt.Errorf("failed to copy file (%s) into tar: %w", path, err)
 		}
 
 		return nil
 	})
-	if outErr == nil {
-		return nil
+	if err != nil {
+		return fmt.Errorf("failed to walk source directory: %w", err)
 	}
 
-	return fmt.Errorf("failed to walk source directory: %w", outErr)
+	return nil
 }
 
 func (c *tarCompressor) Compress(t *testing.T, sourceDir, destBase string) error {

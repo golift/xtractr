@@ -102,6 +102,8 @@ func ExtractCUE(xFile *XFile) (size uint64, files, archives []string, err error)
 		xFile.Debugf("Copying CUE sheet to output: %s", writeErr)
 	} else {
 		files = append(files, cueDest)
+		// Mark so recursion does not try to extract this copied CUE again.
+		xFile.SkipOnRecursion = append(xFile.SkipOnRecursion, cueDest)
 	}
 
 	// The archive list includes both the CUE file and the FLAC file.
@@ -685,7 +687,7 @@ func copyCueToOutput(srcPath, destPath string, fileMode os.FileMode) error {
 		return fmt.Errorf("reading cue sheet: %w", err)
 	}
 
-	err = os.WriteFile(destPath, data, fileMode)
+	err = os.WriteFile(destPath, data, fileMode) //nolint:gosec // ffs.
 	if err != nil {
 		return fmt.Errorf("writing cue sheet: %w", err)
 	}
