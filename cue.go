@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -71,7 +72,8 @@ func (t cueTimestamp) toSamples(sampleRate uint32) uint64 {
 	return samples
 }
 
-// ExtractCUE extracts individual tracks from a FLAC file referenced by a CUE sheet.
+// ExtractCUE extracts individual tracks from an audio file referenced by a CUE sheet.
+// FLAC files are split directly; APE files are converted to FLAC via ffmpeg first.
 // The xFile.FilePath should point to the .cue file.
 func ExtractCUE(xFile *XFile) (size uint64, files, archives []string, err error) {
 	cue, timestamps, err := parseCueSheetFile(xFile.FilePath)
@@ -89,13 +91,16 @@ func ExtractCUE(xFile *XFile) (size uint64, files, archives []string, err error)
 		return 0, nil, nil, err
 	}
 
-	// Only FLAC is supported for now.
 	ext := strings.ToLower(filepath.Ext(audioPath))
-	if ext != ".flac" {
+
+	switch ext {
+	case ".flac":
+		size, files, err = splitFLAC(xFile, audioPath, cue, timestamps)
+	case ".ape":
+		size, files, err = convertAndSplitAPE(xFile, audioPath, cue, timestamps)
+	default:
 		return 0, nil, nil, fmt.Errorf("%w: %s", ErrUnsupportedAudio, ext)
 	}
-
-	size, files, err = splitFLAC(xFile, audioPath, cue, timestamps)
 	if err != nil {
 		return 0, nil, nil, err
 	}
@@ -118,6 +123,56 @@ func ExtractCUE(xFile *XFile) (size uint64, files, archives []string, err error)
 	archives = []string{xFile.FilePath, audioPath}
 
 	return size, files, archives, nil
+}
+
+// convertAndSplitAPE converts an APE file to a temporary FLAC via ffmpeg,
+// then splits the FLAC using the existing splitFLAC pipeline.
+func convertAndSplitAPE(
+	xFile *XFile, apePath string, cue *CueSheet, timestamps []cueTimestamp,
+) (uint64, []string, error) {
+	flacPath, cleanup, err := convertToFLAC(apePath)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer cleanup()
+
+	xFile.Debugf("Converted APE to temporary FLAC: %s -> %s", apePath, flacPath)
+
+	return splitFLAC(xFile, flacPath, cue, timestamps)
+}
+
+// convertToFLAC converts an audio file (e.g. APE) to a temporary FLAC file using ffmpeg.
+// Returns the path to the temporary FLAC, a cleanup function to remove it, and any error.
+// The conversion uses compression level 0 for speed since the file will be split immediately.
+func convertToFLAC(audioPath string) (string, func(), error) {
+	ffmpegPath, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		return "", nil, fmt.Errorf("%w: ffmpeg is required for APE splitting", ErrFFmpegNotFound)
+	}
+
+	tmpDir, err := os.MkdirTemp("", "xtractr-ape-*")
+	if err != nil {
+		return "", nil, fmt.Errorf("creating temp dir: %w", err)
+	}
+
+	cleanup := func() { os.RemoveAll(tmpDir) }
+	outPath := filepath.Join(tmpDir, "converted.flac")
+
+	cmd := exec.Command(ffmpegPath, //nolint:gosec // audioPath is from resolved file on disk.
+		"-i", audioPath,
+		"-c:a", "flac",
+		"-compression_level", "0",
+		"-y", outPath,
+	)
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		cleanup()
+
+		return "", nil, fmt.Errorf("ffmpeg APE->FLAC conversion failed: %w\n%s", err, output)
+	}
+
+	return outPath, cleanup, nil
 }
 
 // parseCueSheetFile parses a CUE sheet from a file path and returns the sheet plus raw timestamps.
@@ -297,9 +352,10 @@ func parseCueSheet(reader io.Reader) (*CueSheet, []cueTimestamp, error) { //noli
 }
 
 // resolveCueAudioPath returns the path to the audio file referenced by the CUE.
-// If the CUE says FILE "album.wav" but the file on disk is album.flac, the .flac path is returned.
-// If the FILE line does not match any file (e.g. encoding or O vs Ö), it tries the FLAC with the same
-// base name as the CUE file (e.g. Artist - Album.cue -> Artist - Album.flac).
+// If the CUE says FILE "album.wav" but the file on disk is album.flac or album.ape,
+// it tries those extensions as fallbacks.
+// If the FILE line still does not match (e.g. encoding or O vs Ö), it tries files
+// with the same base name as the CUE file with .flac and .ape extensions.
 func resolveCueAudioPath(cueDir, cueFile, cueFilePath string) (string, error) {
 	path := filepath.Join(cueDir, cueFile)
 
@@ -308,23 +364,32 @@ func resolveCueAudioPath(cueDir, cueFile, cueFilePath string) (string, error) {
 		return path, nil
 	}
 
+	// Try alternate extensions when the referenced file doesn't exist.
 	ext := strings.ToLower(filepath.Ext(cueFile))
-	if ext == ".wav" {
-		flacPath := path[:len(path)-len(ext)] + ".flac"
+	basePath := path[:len(path)-len(ext)]
 
-		_, err = os.Stat(flacPath)
-		if err == nil {
-			return flacPath, nil
+	if ext == ".wav" {
+		for _, alt := range []string{".flac", ".ape"} {
+			altPath := basePath + alt
+
+			_, err = os.Stat(altPath)
+			if err == nil {
+				return altPath, nil
+			}
 		}
 	}
 
-	// Fallback: try the FLAC with the same base name as the CUE file (handles O vs Ö, encoding mismatches).
+	// Fallback: try same base name as the CUE file with supported extensions
+	// (handles O vs Ö, encoding mismatches).
 	baseNoExt := strings.TrimSuffix(filepath.Base(cueFilePath), filepath.Ext(cueFilePath))
-	fallbackPath := filepath.Join(cueDir, baseNoExt+".flac")
 
-	_, err = os.Stat(fallbackPath)
-	if err == nil {
-		return fallbackPath, nil
+	for _, alt := range []string{".flac", ".ape"} {
+		fallbackPath := filepath.Join(cueDir, baseNoExt+alt)
+
+		_, err = os.Stat(fallbackPath)
+		if err == nil {
+			return fallbackPath, nil
+		}
 	}
 
 	return "", fmt.Errorf("%w: %s", ErrAudioNotFound, path)

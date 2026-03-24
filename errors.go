@@ -26,7 +26,8 @@ var (
 	ErrNoCueFile        = errors.New("cue sheet does not reference a FILE")
 	ErrNoTracks         = errors.New("cue sheet contains no tracks")
 	ErrAudioNotFound    = errors.New("audio file referenced by cue sheet not found")
-	ErrUnsupportedAudio = errors.New("cue sheet references unsupported audio format (only FLAC is supported)")
+	ErrUnsupportedAudio = errors.New("cue sheet references unsupported audio format (only FLAC and APE are supported)")
+	ErrFFmpegNotFound   = errors.New("ffmpeg not found in PATH")
 
 	// RPM.
 

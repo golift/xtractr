@@ -947,3 +947,238 @@ func TestCueSupportedExtensions(t *testing.T) {
 
 	assert.True(t, found, ".cue should be in supported extensions list")
 }
+
+// TestCueAPEConvertAndSplit verifies that an APE+CUE album is converted to FLAC via ffmpeg
+// and split into individual tracks. This test requires ffmpeg on PATH; it is skipped otherwise.
+func TestCueAPEConvertAndSplit(t *testing.T) {
+	t.Parallel()
+
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skip("ffmpeg not found in PATH, skipping APE splitting test")
+	}
+
+	tmpDir := t.TempDir()
+	outputDir := filepath.Join(tmpDir, "output")
+
+	// Generate a test FLAC, then convert it to APE via ffmpeg to create test data.
+	totalSamples := uint64(3 * 60 * testSampleRate) // 3 minutes
+	flacPath := filepath.Join(tmpDir, "source.flac")
+	generateTestFLAC(t, flacPath, totalSamples)
+
+	apePath := filepath.Join(tmpDir, "album.ape")
+	cmd := exec.Command("ffmpeg", "-i", flacPath, "-c:a", "ape", "-y", apePath)
+	output, err := cmd.CombinedOutput()
+	require.NoError(t, err, "ffmpeg FLAC->APE conversion failed: %s", output)
+
+	// Remove the source FLAC so we know the CUE handler must use the APE.
+	require.NoError(t, os.Remove(flacPath))
+
+	cueContent := strings.Join([]string{
+		`PERFORMER "APE Test Artist"`,
+		`TITLE "APE Test Album"`,
+		`FILE "album.ape" WAVE`,
+		`  TRACK 01 AUDIO`,
+		`    TITLE "First Song"`,
+		`    INDEX 01 00:00:00`,
+		`  TRACK 02 AUDIO`,
+		`    TITLE "Second Song"`,
+		`    INDEX 01 01:30:00`,
+	}, "\n") + "\n"
+	cuePath := filepath.Join(tmpDir, "album.cue")
+	require.NoError(t, os.WriteFile(cuePath, []byte(cueContent), 0o600))
+
+	xFile := &xtractr.XFile{
+		FilePath:  cuePath,
+		OutputDir: outputDir,
+		FileMode:  0o600,
+		DirMode:   0o755,
+	}
+
+	size, files, archives, err := xtractr.ExtractCUE(xFile)
+	require.NoError(t, err, "ExtractCUE with APE file should succeed")
+	assert.Greater(t, size, uint64(0), "extracted size should be > 0")
+	assert.Len(t, files, 3, "should have 2 tracks + 1 CUE copy") // 2 tracks + cue
+	assert.Contains(t, archives, apePath, "archives should include the APE file")
+	assert.Contains(t, archives, cuePath, "archives should include the CUE file")
+
+	// Verify the split tracks are valid FLAC files.
+	track1Path := filepath.Join(outputDir, "01 - First Song.flac")
+	track2Path := filepath.Join(outputDir, "02 - Second Song.flac")
+	assert.FileExists(t, track1Path)
+	assert.FileExists(t, track2Path)
+
+	// Verify track 1 metadata.
+	f1, err := os.Open(track1Path)
+	require.NoError(t, err)
+
+	stream1, err := flac.Parse(f1)
+	require.NoError(t, err)
+	assert.Equal(t, uint32(testSampleRate), stream1.Info.SampleRate)
+	require.NoError(t, f1.Close())
+
+	// Verify track 2 metadata.
+	f2, err := os.Open(track2Path)
+	require.NoError(t, err)
+
+	stream2, err := flac.Parse(f2)
+	require.NoError(t, err)
+	assert.Equal(t, uint32(testSampleRate), stream2.Info.SampleRate)
+	require.NoError(t, f2.Close())
+
+	// Verify VorbisComment tags on track 1.
+	for _, blk := range stream1.Blocks {
+		if blk.Type == meta.TypeVorbisComment {
+			vc, ok := blk.Body.(*meta.VorbisComment)
+			require.True(t, ok)
+
+			tagMap := make(map[string]string)
+			for _, tag := range vc.Tags {
+				tagMap[strings.ToUpper(tag[0])] = tag[1]
+			}
+
+			assert.Equal(t, "APE Test Album", tagMap["ALBUM"])
+			assert.Equal(t, "APE Test Artist", tagMap["ARTIST"])
+			assert.Equal(t, "First Song", tagMap["TITLE"])
+			assert.Equal(t, "1", tagMap["TRACKNUMBER"])
+		}
+	}
+}
+
+// TestCueAPENoFFmpeg verifies that APE splitting returns ErrFFmpegNotFound
+// when ffmpeg is not available.
+func TestCueAPENoFFmpeg(t *testing.T) {
+	t.Parallel()
+
+	// This test manipulates PATH to hide ffmpeg. Skip if ffmpeg isn't even installed
+	// (the error path would be different).
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skip("ffmpeg not installed, cannot test the 'ffmpeg missing' error path meaningfully")
+	}
+
+	tmpDir := t.TempDir()
+	outputDir := filepath.Join(tmpDir, "output")
+
+	// Create a minimal fake APE file (just needs to exist for path resolution).
+	apePath := filepath.Join(tmpDir, "album.ape")
+	require.NoError(t, os.WriteFile(apePath, []byte("fake-ape-data"), 0o600))
+
+	cueContent := strings.Join([]string{
+		`FILE "album.ape" WAVE`,
+		`  TRACK 01 AUDIO`,
+		`    TITLE "Track"`,
+		`    INDEX 01 00:00:00`,
+	}, "\n") + "\n"
+	cuePath := filepath.Join(tmpDir, "album.cue")
+	require.NoError(t, os.WriteFile(cuePath, []byte(cueContent), 0o600))
+
+	// Override PATH to an empty directory so ffmpeg cannot be found.
+	emptyBin := filepath.Join(tmpDir, "emptybin")
+	require.NoError(t, os.MkdirAll(emptyBin, 0o755))
+	t.Setenv("PATH", emptyBin)
+
+	xFile := &xtractr.XFile{
+		FilePath:  cuePath,
+		OutputDir: outputDir,
+		FileMode:  0o600,
+		DirMode:   0o755,
+	}
+
+	_, _, _, err := xtractr.ExtractCUE(xFile) //nolint:dogsled
+	assert.ErrorIs(t, err, xtractr.ErrFFmpegNotFound)
+}
+
+// TestCueWavReferenceAPEFile verifies that when the CUE says FILE "album.wav" WAVE
+// but only album.ape exists on disk, we find and use the .ape file.
+func TestCueWavReferenceAPEFile(t *testing.T) {
+	t.Parallel()
+
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skip("ffmpeg not found in PATH, skipping APE resolution test")
+	}
+
+	tmpDir := t.TempDir()
+	outputDir := filepath.Join(tmpDir, "output")
+
+	// Generate test FLAC and convert to APE.
+	totalSamples := uint64(2 * 60 * testSampleRate) // 2 minutes
+	flacPath := filepath.Join(tmpDir, "source.flac")
+	generateTestFLAC(t, flacPath, totalSamples)
+
+	apePath := filepath.Join(tmpDir, "album.ape")
+	cmd := exec.Command("ffmpeg", "-i", flacPath, "-c:a", "ape", "-y", apePath)
+	output, err := cmd.CombinedOutput()
+	require.NoError(t, err, "ffmpeg FLAC->APE: %s", output)
+	require.NoError(t, os.Remove(flacPath))
+
+	// CUE references album.wav, but only album.ape exists.
+	cueContent := strings.Join([]string{
+		`PERFORMER "Test Artist"`,
+		`TITLE "Test Album"`,
+		`FILE "album.wav" WAVE`,
+		`  TRACK 01 AUDIO`,
+		`    TITLE "Only Track"`,
+		`    INDEX 01 00:00:00`,
+	}, "\n") + "\n"
+	cuePath := filepath.Join(tmpDir, "album.cue")
+	require.NoError(t, os.WriteFile(cuePath, []byte(cueContent), 0o600))
+
+	xFile := &xtractr.XFile{
+		FilePath:  cuePath,
+		OutputDir: outputDir,
+		FileMode:  0o600,
+		DirMode:   0o755,
+	}
+
+	size, files, _, err := xtractr.ExtractCUE(xFile)
+	require.NoError(t, err, "ExtractCUE should resolve .wav reference to .ape file")
+	assert.Greater(t, size, uint64(0))
+	assert.NotEmpty(t, files)
+	assert.FileExists(t, filepath.Join(outputDir, "01 - Only Track.flac"))
+}
+
+// TestCueBaseNameAPEFallback verifies that when the CUE FILE reference doesn't match
+// any file but a .ape file with the same basename as the CUE exists, it is found.
+func TestCueBaseNameAPEFallback(t *testing.T) {
+	t.Parallel()
+
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skip("ffmpeg not found in PATH, skipping APE basename fallback test")
+	}
+
+	tmpDir := t.TempDir()
+	outputDir := filepath.Join(tmpDir, "output")
+
+	totalSamples := uint64(2 * 60 * testSampleRate)
+	flacPath := filepath.Join(tmpDir, "source.flac")
+	generateTestFLAC(t, flacPath, totalSamples)
+
+	apePath := filepath.Join(tmpDir, "My Album.ape")
+	cmd := exec.Command("ffmpeg", "-i", flacPath, "-c:a", "ape", "-y", apePath)
+	output, err := cmd.CombinedOutput()
+	require.NoError(t, err, "ffmpeg FLAC->APE: %s", output)
+	require.NoError(t, os.Remove(flacPath))
+
+	// CUE references a non-existent file, but CUE basename matches "My Album.ape".
+	cueContent := strings.Join([]string{
+		`PERFORMER "Test Artist"`,
+		`TITLE "Test Album"`,
+		`FILE "nonexistent.wav" WAVE`,
+		`  TRACK 01 AUDIO`,
+		`    TITLE "Track One"`,
+		`    INDEX 01 00:00:00`,
+	}, "\n") + "\n"
+	cuePath := filepath.Join(tmpDir, "My Album.cue")
+	require.NoError(t, os.WriteFile(cuePath, []byte(cueContent), 0o600))
+
+	xFile := &xtractr.XFile{
+		FilePath:  cuePath,
+		OutputDir: outputDir,
+		FileMode:  0o600,
+		DirMode:   0o755,
+	}
+
+	size, files, _, err := xtractr.ExtractCUE(xFile)
+	require.NoError(t, err, "ExtractCUE should fall back to .ape with same basename as CUE")
+	assert.Greater(t, size, uint64(0))
+	assert.NotEmpty(t, files)
+}
