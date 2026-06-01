@@ -66,7 +66,10 @@ func extract7z(xFile *XFile) (uint64, []string, []string, error) {
 	for _, zipFile := range sevenZip.File {
 		fSize, wfile, err := xFile.un7zip(zipFile)
 		if err != nil {
-			return xFile.prog.Wrote, files, []string{xFile.FilePath}, fmt.Errorf("%s: %w", xFile.FilePath, err)
+			return xFile.prog.Wrote,
+				files,
+				normalizeVolumes(sevenZip.Volumes(), xFile.FilePath),
+				fmt.Errorf("%s: %w", xFile.FilePath, err)
 		}
 
 		files = append(files, filepath.Join(xFile.OutputDir, zipFile.Name))
@@ -76,7 +79,7 @@ func extract7z(xFile *XFile) (uint64, []string, []string, error) {
 
 	files, err = xFile.cleanup(files)
 
-	return xFile.prog.Wrote, files, []string{xFile.FilePath}, err
+	return xFile.prog.Wrote, files, normalizeVolumes(sevenZip.Volumes(), xFile.FilePath), err
 }
 
 func getUncompressed7zSize(reader *sevenzip.ReadCloser) (total, compressed uint64, count int) {
@@ -102,17 +105,17 @@ type sevenZipEntry struct {
 func (x *XFile) extract7zParallel(sevenZip *sevenzip.ReadCloser) (uint64, []string, []string, error) {
 	entries, files, err := x.sevenZipPrepareEntries(sevenZip)
 	if err != nil {
-		return x.prog.Wrote, files, []string{x.FilePath}, err
+		return x.prog.Wrote, files, normalizeVolumes(sevenZip.Volumes(), x.FilePath), err
 	}
 
 	workerErr := x.sevenZipDispatchWorkers(entries)
 	if workerErr != nil {
-		return x.prog.Wrote, files, []string{x.FilePath}, workerErr
+		return x.prog.Wrote, files, normalizeVolumes(sevenZip.Volumes(), x.FilePath), workerErr
 	}
 
 	files, err = x.cleanup(files)
 
-	return x.prog.Wrote, files, []string{x.FilePath}, err
+	return x.prog.Wrote, files, normalizeVolumes(sevenZip.Volumes(), x.FilePath), err
 }
 
 // sevenZipPrepareEntries iterates all entries, creates directories, validates paths,

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -157,4 +158,62 @@ func makeFile(t *testing.T, data []byte, fileName string) error {
 	_, err = openFile.Write(data)
 
 	return err
+}
+
+// TestMultiVolumeCleanup is the end-to-end regression guard for the bug where
+// only the entry volume of a multi-part archive was deleted, orphaning the
+// remaining parts. It extracts a multi-volume rar with DeleteOrig enabled and
+// asserts that every part file is removed from disk.
+func TestMultiVolumeCleanup(t *testing.T) {
+	t.Parallel()
+
+	srcParts, err := filepath.Glob(filepath.Join("test_data", "multivol.part*.rar"))
+	require.NoError(t, err, "reading multi-volume fixtures failed")
+	require.GreaterOrEqual(t, len(srcParts), 2, "fixture must contain multiple volumes")
+
+	dir := t.TempDir()
+	parts := make([]string, len(srcParts))
+
+	for idx, src := range srcParts {
+		data, err := os.ReadFile(src)
+		require.NoError(t, err, "reading fixture part failed")
+
+		parts[idx] = filepath.Join(dir, filepath.Base(src))
+		require.NoError(t, makeFile(t, data, parts[idx]), "copying fixture part failed")
+	}
+
+	queue := xtractr.NewQueue(&xtractr.Config{Logger: &testLogger{t: t}})
+	defer queue.Stop()
+
+	xFile := &xtractr.Xtract{
+		Name:       "MultiVolume",
+		Filter:     xtractr.Filter{Path: dir},
+		TempFolder: false,
+		DeleteOrig: true,
+		CBChannel:  make(chan *xtractr.Response),
+	}
+
+	_, err = queue.Extract(xFile)
+	require.NoError(t, err)
+
+	for {
+		select {
+		case resp, ok := <-xFile.CBChannel:
+			require.True(t, ok, "callback channel closed before extraction completed")
+			require.NoError(t, resp.Error, "the multi-volume archive should extract without error")
+
+			if resp.Done {
+				goto done
+			}
+		case <-time.After(15 * time.Second):
+			t.Fatal("timed out waiting for multi-volume extraction to complete")
+		}
+	}
+
+done:
+
+	// Every volume must be gone, not just the entry part.
+	for _, part := range parts {
+		assert.NoFileExists(t, part, "volume %s should have been deleted", filepath.Base(part))
+	}
 }
