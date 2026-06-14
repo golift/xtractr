@@ -13,7 +13,7 @@ require (
 	github.com/dsnet/compress v0.0.1
 	github.com/klauspost/compress v1.18.4
 	github.com/mewkiz/flac v1.0.13
-	github.com/nwaples/rardecode/v2 v2.2.2
+	github.com/nwaples/rardecode/v2 v2.2.5
 	github.com/peterebden/ar v0.0.0-20241106141004-20dc11b778e8
 	github.com/pierrec/lz4/v4 v4.1.26
 	github.com/saintfish/chardet v0.0.0-20230101081208-5e3ef4b5456d
