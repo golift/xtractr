@@ -996,10 +996,13 @@ func copyCueToOutput(srcPath, destPath string, fileMode os.FileMode) error {
 // in the header) with variable-blocksize frames (which encode a sample position) produces
 // an invalid FLAC stream that many decoders — including GStreamer's flacparse — will reject.
 func buildOutputFrame(src *frame.Frame, offset, count int) *frame.Frame {
-	// Always correlate to get proper L/R samples before slicing.
-	// Correlate is a no-op when the frame is already in correlated form.
-	src.Correlate()
-
+	// The decoder's Frame.Parse already correlates subframes to independent L/R
+	// samples (see mewkiz/flac frame.Parse), so src.Subframes hold actual L/R here.
+	// We must NOT correlate again: doing so double-transforms inter-channel
+	// decorrelated frames (mid/side, left/side, right/side) and corrupts the output
+	// (notably the right channel) for every such frame. The encoder's WriteFrame
+	// re-applies decorrelation based on Header.Channels, so we pass L/R straight
+	// through. ref: Unpackerr/unpackerr#634.
 	outFrame := &frame.Frame{
 		Header: frame.Header{
 			HasFixedBlockSize: false,
