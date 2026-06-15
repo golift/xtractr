@@ -9,6 +9,8 @@ linters:
     - nonamedreturns
     - forbidigo
     - wsl
+    - goconst
+    - gomodguard
   exclusions:
     rules:
       - linters:
