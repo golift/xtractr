@@ -15,7 +15,7 @@ require (
 	github.com/mewkiz/flac v1.0.13
 	github.com/nwaples/rardecode/v2 v2.2.5
 	github.com/peterebden/ar v0.0.0-20241106141004-20dc11b778e8
-	github.com/pierrec/lz4/v4 v4.1.26
+	github.com/pierrec/lz4/v4 v4.1.27
 	github.com/saintfish/chardet v0.0.0-20230101081208-5e3ef4b5456d
 	github.com/sshaman1101/dcompress v0.0.0-20200109162717-50436a6332de
 	github.com/stretchr/testify v1.11.1
