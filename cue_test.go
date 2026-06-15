@@ -947,3 +947,186 @@ func TestCueSupportedExtensions(t *testing.T) {
 
 	assert.True(t, found, ".cue should be in supported extensions list")
 }
+
+// generateStereoFLAC writes a stereo FLAC with distinct left/right channels using
+// mid/side inter-channel decorrelation, and returns the exact per-channel samples it
+// wrote. Real-world FLACs (libFLAC, ffmpeg) routinely use mid/side and left/side
+// decorrelation; this exercises the channel-handling path that plain L==R sine-wave
+// fixtures (which only ever produce independent L/R frames) never reach.
+func generateStereoFLAC(t *testing.T, path string, totalSamples uint64) (left, right []int32) {
+	t.Helper()
+
+	outFile, err := os.Create(path)
+	require.NoError(t, err, "creating stereo test FLAC file")
+
+	info := &meta.StreamInfo{
+		BlockSizeMin:  testBlockSize,
+		BlockSizeMax:  testBlockSize,
+		SampleRate:    testSampleRate,
+		NChannels:     testNChannels,
+		BitsPerSample: testBitsPerSample,
+		NSamples:      totalSamples,
+	}
+
+	enc, err := flac.NewEncoder(outFile, info)
+	require.NoError(t, err, "creating stereo FLAC encoder")
+
+	left = make([]int32, 0, totalSamples)
+	right = make([]int32, 0, totalSamples)
+
+	samplesWritten := uint64(0)
+	for samplesWritten < totalSamples {
+		blockSize := uint64(testBlockSize)
+		if samplesWritten+blockSize > totalSamples {
+			blockSize = totalSamples - samplesWritten
+		}
+
+		leftSamples := make([]int32, blockSize)
+		rightSamples := make([]int32, blockSize)
+
+		for i := range blockSize {
+			n := samplesWritten + i
+			// Distinct, correlated-but-not-equal channels so the encoder benefits
+			// from mid/side decorrelation (and side = L-R is non-zero).
+			leftSamples[i] = int32(15000 * math.Sin(2*math.Pi*440*float64(n)/float64(testSampleRate)))
+			rightSamples[i] = int32(12000 * math.Sin(2*math.Pi*443*float64(n)/float64(testSampleRate)))
+		}
+
+		left = append(left, leftSamples...)
+		right = append(right, rightSamples...)
+
+		audioFrame := &frame.Frame{
+			Header: frame.Header{
+				HasFixedBlockSize: false,
+				BlockSize:         uint16(blockSize),
+				SampleRate:        testSampleRate,
+				// Force mid/side inter-channel decorrelation; the encoder converts
+				// the L/R samples we provide into mid/side on write.
+				Channels:      frame.ChannelsMidSide,
+				BitsPerSample: testBitsPerSample,
+			},
+			Subframes: []*frame.Subframe{
+				{
+					SubHeader: frame.SubHeader{Pred: frame.PredVerbatim, Order: 0},
+					Samples:   leftSamples,
+					NSamples:  int(blockSize),
+				},
+				{
+					SubHeader: frame.SubHeader{Pred: frame.PredVerbatim, Order: 0},
+					Samples:   rightSamples,
+					NSamples:  int(blockSize),
+				},
+			},
+		}
+
+		require.NoError(t, enc.WriteFrame(audioFrame), "writing stereo FLAC frame")
+
+		samplesWritten += blockSize
+	}
+
+	require.NoError(t, enc.Close(), "closing stereo FLAC encoder")
+
+	return left, right
+}
+
+// readAllSamples decodes every frame of a FLAC file and returns the per-channel samples.
+func readAllSamples(t *testing.T, path string) (left, right []int32) {
+	t.Helper()
+
+	file, err := os.Open(path)
+	require.NoError(t, err, "opening FLAC for sample verification: %s", path)
+
+	defer file.Close()
+
+	stream, err := flac.Parse(file)
+	require.NoError(t, err, "parsing FLAC for sample verification: %s", path)
+
+	require.Equal(t, uint8(testNChannels), stream.Info.NChannels, "expected stereo: %s", path)
+
+	for {
+		frm, err := stream.ParseNext()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+
+		require.NoError(t, err, "decoding frame from: %s", path)
+
+		left = append(left, frm.Subframes[0].Samples...)
+		right = append(right, frm.Subframes[1].Samples...)
+	}
+
+	return left, right
+}
+
+// TestCueStereoSampleAccuracy verifies that splitting a stereo FLAC encoded with
+// mid/side inter-channel decorrelation produces sample-accurate output. The decoder
+// already correlates subframes to L/R on Parse, so any extra Correlate() before
+// re-encoding double-transforms the samples and corrupts the right channel of every
+// non-independent-stereo frame (see Unpackerr/unpackerr#634).
+func TestCueStereoSampleAccuracy(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	outputDir := filepath.Join(tmpDir, "output")
+
+	totalSamples := uint64(30 * testSampleRate)
+	flacPath := filepath.Join(tmpDir, "album.flac")
+	srcLeft, srcRight := generateStereoFLAC(t, flacPath, totalSamples)
+
+	// Single track spanning the whole file: the split output must be sample-identical
+	// to the source across every frame.
+	cueContent := strings.Join([]string{
+		`PERFORMER "Artist"`,
+		`TITLE "Album"`,
+		`FILE "album.flac" WAVE`,
+		`  TRACK 01 AUDIO`,
+		`    TITLE "Whole"`,
+		`    INDEX 01 00:00:00`,
+	}, "\n") + "\n"
+	cuePath := filepath.Join(tmpDir, "album.cue")
+	require.NoError(t, os.WriteFile(cuePath, []byte(cueContent), 0o600))
+
+	xFile := &xtractr.XFile{
+		FilePath:  cuePath,
+		OutputDir: outputDir,
+		FileMode:  0o600,
+		DirMode:   0o755,
+	}
+
+	_, files, _, err := xtractr.ExtractCUE(xFile)
+	require.NoError(t, err, "extracting stereo CUE+FLAC")
+
+	trackPath := filepath.Join(outputDir, "01 - Whole.flac")
+	assert.Contains(t, files, trackPath)
+
+	gotLeft, gotRight := readAllSamples(t, trackPath)
+
+	require.Len(t, gotLeft, len(srcLeft), "left channel sample count")
+	require.Len(t, gotRight, len(srcRight), "right channel sample count")
+	assertSamplesEqual(t, "left", srcLeft, gotLeft)
+	assertSamplesEqual(t, "right", srcRight, gotRight)
+}
+
+// assertSamplesEqual compares two sample slices and fails with the first mismatch
+// (and a count) instead of dumping millions of values like assert.Equal would.
+func assertSamplesEqual(t *testing.T, channel string, want, got []int32) {
+	t.Helper()
+
+	mismatches := 0
+	firstIdx := -1
+
+	for i := range want {
+		if want[i] != got[i] {
+			if firstIdx < 0 {
+				firstIdx = i
+			}
+
+			mismatches++
+		}
+	}
+
+	if mismatches > 0 {
+		t.Errorf("%s channel: %d/%d samples differ; first mismatch at index %d: want %d, got %d",
+			channel, mismatches, len(want), firstIdx, want[firstIdx], got[firstIdx])
+	}
+}
