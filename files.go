@@ -782,11 +782,8 @@ func (x *XFile) writeFile(file *file, parallel bool) (uint64, error) {
 		return uint64(size), fmt.Errorf("copying archived file '%s' io: %w", file.Path, err)
 	}
 
-	// If this sucks, make it a defer and ignore the error, like xFile.mkDir().
-	err = os.Chtimes(file.Path, file.Atime, file.Mtime)
-	if err != nil {
-		return uint64(size), fmt.Errorf("changing archived file times: %w", err)
-	}
+	// The error is ignored because it's not critical and pops up on OSes like Windows.
+	defer os.Chtimes(file.Path, file.Atime, file.Mtime)
 
 	return uint64(size), nil
 }
