@@ -154,10 +154,14 @@ func readAPESeekTable(file *os.File, info *apeInfo, junk int64) error {
 	// The seek table stores one uint32 entry per frame. Only read TotalFrames entries (all
 	// later code needs) rather than the file-controlled SeekTableBytes count, so a crafted
 	// descriptor cannot drive a giant allocation.
+	maxInt := int(^uint(0) >> 1)
+	if info.Header.TotalFrames > uint32(maxInt) {
+		return fmt.Errorf("%w: %d frames exceeds platform limits", ErrAPESeekTable, info.Header.TotalFrames)
+	}
 	numEntries := int(info.Header.TotalFrames)
 
 	declaredEntries := int64(info.Descriptor.SeekTableBytes) / bytesPerUint32
-	if declaredEntries < int64(numEntries) {
+	if declaredEntries < int64(info.Header.TotalFrames) {
 		return fmt.Errorf("%w: %d entries for %d frames", ErrAPESeekTable, declaredEntries, info.Header.TotalFrames)
 	}
 
@@ -276,7 +280,7 @@ func id3v2TagSize(hdr []byte) int64 {
 func apeSkipNullPadding(file *os.File, junk int64) int64 {
 	var b [1]byte
 
-	for {
+	for scanned := 0; scanned < apeMaxMagicScan; scanned++ {
 		n, err := file.Read(b[:])
 		if err != nil || n == 0 || b[0] != 0 {
 			return junk
@@ -284,6 +288,8 @@ func apeSkipNullPadding(file *os.File, junk int64) int64 {
 
 		junk++
 	}
+
+	return junk
 }
 
 // apeScanForMagic scans forward from junk for the "MAC " / "MACF" descriptor magic
