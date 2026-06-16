@@ -99,6 +99,7 @@ func ExtractCUE(xFile *XFile) (size uint64, files, archives []string, err error)
 	default:
 		return 0, nil, nil, fmt.Errorf("%w: %s", ErrUnsupportedAudio, ext)
 	}
+
 	if err != nil {
 		return 0, nil, nil, err
 	}
