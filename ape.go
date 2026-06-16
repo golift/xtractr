@@ -356,10 +356,10 @@ func roundUpToUint32(n int) int {
 	return n
 }
 
-// copyFrameData copies compressed frame data from srcFile to dst for R=0 tracks.
+// copyFrameData copies compressed frame data from srcFile to dst for R=0 tracks. io.CopyN
+// copies exactly the requested size and returns a nil error even when the source's final
+// Read reports data together with io.EOF, so a frame that ends at EOF is not a failure.
 func copyFrameData(dst io.Writer, srcFile *os.File, info *apeInfo, startFrame, endFrame int) error {
-	buf := make([]byte, apeCopyBuf)
-
 	for frameIdx := startFrame; frameIdx <= endFrame; frameIdx++ {
 		srcOffset := info.SeekTable[frameIdx] + info.JunkBytes
 		size := apeFrameDataSize(info, frameIdx)
@@ -369,23 +369,9 @@ func copyFrameData(dst io.Writer, srcFile *os.File, info *apeInfo, startFrame, e
 			return fmt.Errorf("seeking to frame %d in source: %w", frameIdx, err)
 		}
 
-		remaining := size
-		for remaining > 0 {
-			toRead := min(int64(len(buf)), remaining)
-
-			readN, readErr := srcFile.Read(buf[:toRead])
-			if readN > 0 {
-				_, writeErr := dst.Write(buf[:readN])
-				if writeErr != nil {
-					return fmt.Errorf("writing frame data: %w", writeErr)
-				}
-
-				remaining -= int64(readN)
-			}
-
-			if readErr != nil {
-				return fmt.Errorf("reading frame %d from source: %w", frameIdx, readErr)
-			}
+		_, err = io.CopyN(dst, srcFile, size)
+		if err != nil {
+			return fmt.Errorf("copying frame %d from source: %w", frameIdx, err)
 		}
 	}
 
@@ -694,28 +680,86 @@ func writeAPEFrameData(
 		return copyFrameData(dst, srcFile, info, startFrame, endFrame)
 	}
 
-	// R≠0: read from the aligned position (pad prefix bytes + frame data + trailing bytes
-	// to keep the tail uint32 complete), reverse the byte rearrangement, then write.
+	// R≠0: stream from the uint32-aligned position (pad prefix bytes belong to the previous
+	// frame) and reverse the byte rearrangement on the fly. Streaming keeps memory bounded
+	// instead of buffering the whole (potentially huge) track at once.
 	alignedStart := info.SeekTable[startFrame] + info.JunkBytes - int64(pad)
-	totalRead := int64(pad) + trackDataSize + apeTailPadding
 
 	_, err := srcFile.Seek(alignedStart, io.SeekStart)
 	if err != nil {
 		return fmt.Errorf("seeking to aligned frame data: %w", err)
 	}
 
-	raw := make([]byte, totalRead)
+	return streamRealignFrameData(dst, srcFile, pad, trackDataSize)
+}
 
-	readN, readErr := io.ReadFull(srcFile, raw)
-	if readErr != nil && int64(readN) < int64(pad)+trackDataSize {
-		return fmt.Errorf("reading frame data for realignment: %w", readErr)
+// streamRealignFrameData is the streaming equivalent of realignFrameData: it reads the
+// uint32-aligned source bytes for a misaligned track, reverses the FixupFrame byte
+// rearrangement in fixed-size chunks, and writes exactly dataSize bytes to dst. It never
+// buffers the whole track. realignFrameData is kept as the in-memory reference that this
+// function is property-tested against.
+func streamRealignFrameData(dst io.Writer, src io.Reader, pad int, dataSize int64) error {
+	inBuf := make([]byte, apeCopyBuf) // length is a multiple of 4
+
+	var (
+		carry   = make([]byte, 0, bytesPerUint32) // logical bytes (< 4) carried between reads
+		dropped int                               // count of the pad prefix bytes dropped so far
+		written int64
+	)
+
+	for written < dataSize {
+		readN, readErr := io.ReadFull(src, inBuf)
+		atEnd := readErr != nil
+
+		// Zero-pad a short final read up to a whole word, then swap into logical (MSB-first) order.
+		swapLen := roundUpToUint32(readN)
+		for i := readN; i < swapLen; i++ {
+			inBuf[i] = 0
+		}
+
+		chunk := inBuf[:swapLen]
+		byteSwapUint32s(chunk)
+
+		// Drop the pad-byte prefix (previous frame's tail) exactly once, at the very start.
+		offset := 0
+		if dropped < pad {
+			offset = min(pad-dropped, len(chunk))
+			dropped += offset
+		}
+
+		// Combine carried logical bytes with this chunk, emit whole words (all of it at EOF).
+		work := make([]byte, 0, len(carry)+len(chunk))
+		work = append(work, carry...)
+		work = append(work, chunk[offset:]...)
+
+		flush := len(work) - len(work)%bytesPerUint32
+		if atEnd {
+			flush = roundUpToUint32(len(work))
+		}
+
+		out := make([]byte, flush)
+		copy(out, work)
+		byteSwapUint32s(out) // back to little-endian file order
+
+		toWrite := min(int64(len(out)), dataSize-written)
+
+		_, err := dst.Write(out[:toWrite])
+		if err != nil {
+			return fmt.Errorf("writing realigned frame data: %w", err)
+		}
+
+		written += toWrite
+
+		if atEnd {
+			break
+		}
+
+		// Carry the leftover (< 4) logical bytes that didn't fill a whole word into the next read.
+		carry = append(carry[:0], work[flush:]...)
 	}
 
-	realigned := realignFrameData(raw[:readN], pad)
-
-	_, err = dst.Write(realigned[:trackDataSize])
-	if err != nil {
-		return fmt.Errorf("writing realigned frame data: %w", err)
+	if written < dataSize {
+		return fmt.Errorf("reading frame data for realignment: %w", io.ErrUnexpectedEOF)
 	}
 
 	return nil

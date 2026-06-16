@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/md5" //nolint:gosec // MD5 is the APE file integrity hash, not security.
 	"encoding/binary"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -222,6 +223,99 @@ func TestRealignFrameDataPadZeroIsPassthrough(t *testing.T) {
 
 	data := []byte{1, 2, 3, 4, 5}
 	assert.Equal(t, data, realignFrameData(data, 0))
+}
+
+// TestStreamRealignMatchesInMemory verifies the streaming realigner used in production
+// produces byte-identical output to the in-memory reference implementation across many pad
+// values and data sizes, including sizes that aren't a multiple of the 4-byte word.
+func TestStreamRealignMatchesInMemory(t *testing.T) {
+	t.Parallel()
+
+	const maxPad = 4
+
+	// Sizes include values larger than apeCopyBuf to exercise the multi-read carry path.
+	sizes := []int{1, 3, 4, 7, 16, 33, 4095, 4096, 4097, 100000, apeCopyBuf + 1, 2*apeCopyBuf + 7}
+
+	for pad := 1; pad < maxPad; pad++ {
+		for _, dataSize := range sizes {
+			// Source bytes: pad prefix + dataSize of frame data + a few trailing bytes.
+			src := make([]byte, roundUpToUint32(pad+dataSize+8))
+			for i := range src {
+				src[i] = byte(i*37 + pad*5 + 1)
+			}
+
+			want := realignFrameData(src, pad)[:dataSize]
+
+			var got bytes.Buffer
+			require.NoError(t, streamRealignFrameData(&got, bytes.NewReader(src), pad, int64(dataSize)))
+
+			assert.Equal(t, want, got.Bytes(), "pad=%d dataSize=%d", pad, dataSize)
+		}
+	}
+}
+
+// TestStreamRealignExactEOF covers the last-track case where the source ends exactly at the
+// end of the frame data (no trailing bytes), which must still produce the full output.
+func TestStreamRealignExactEOF(t *testing.T) {
+	t.Parallel()
+
+	const (
+		pad      = 2
+		dataSize = 30
+	)
+
+	src := make([]byte, pad+dataSize) // nothing after the frame data
+	for i := range src {
+		src[i] = byte(i + 1)
+	}
+
+	want := realignFrameData(src, pad)[:dataSize]
+
+	var got bytes.Buffer
+	require.NoError(t, streamRealignFrameData(&got, bytes.NewReader(src), pad, int64(dataSize)))
+	assert.Equal(t, want, got.Bytes())
+}
+
+// TestStreamRealignTruncatedSource ensures a source shorter than the requested track errors
+// rather than emitting silently padded data.
+func TestStreamRealignTruncatedSource(t *testing.T) {
+	t.Parallel()
+
+	src := make([]byte, 10)
+
+	var got bytes.Buffer
+
+	err := streamRealignFrameData(&got, bytes.NewReader(src), 2, 1000)
+	require.ErrorIs(t, err, io.ErrUnexpectedEOF)
+}
+
+// TestCopyFrameDataFrameEndsAtEOF verifies copyFrameData succeeds when the final frame's
+// data ends exactly at end-of-file (io.CopyN must not report this as an error).
+func TestCopyFrameDataFrameEndsAtEOF(t *testing.T) {
+	t.Parallel()
+
+	// Two frames laid out back to back, file ends exactly after the second frame.
+	frame0 := []byte{1, 2, 3, 4}
+	frame1 := []byte{10, 20, 30, 40, 50, 60}
+
+	info := &apeInfo{
+		Header:    apeHeader{TotalFrames: 2},
+		SeekTable: []int64{0, int64(len(frame0))},
+		FrameData: uint64(len(frame0) + len(frame1)),
+	}
+
+	tmp := filepath.Join(t.TempDir(), "frames.bin")
+	require.NoError(t, os.WriteFile(tmp, append(append([]byte{}, frame0...), frame1...), 0o600))
+
+	srcFile, err := os.Open(tmp)
+	require.NoError(t, err)
+
+	defer srcFile.Close()
+
+	var out bytes.Buffer
+
+	require.NoError(t, copyFrameData(&out, srcFile, info, 0, 1))
+	assert.Equal(t, append(append([]byte{}, frame0...), frame1...), out.Bytes())
 }
 
 func TestParseAPEBasic(t *testing.T) {
