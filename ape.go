@@ -151,15 +151,30 @@ func parseAPE(path string) (*apeInfo, error) {
 // readAPESeekTable reads the seek table (a uint32 LE array, one entry per frame) into
 // info.SeekTable, converting to int64 with 4 GB overflow handling (APEHeader.cpp:116-131).
 func readAPESeekTable(file *os.File, info *apeInfo, junk int64) error {
-	// The new format stores one entry per frame; reject files that don't so we never index past the table.
-	numEntries := int(info.Descriptor.SeekTableBytes / bytesPerUint32)
-	if numEntries < int(info.Header.TotalFrames) {
-		return fmt.Errorf("%w: %d entries for %d frames", ErrAPESeekTable, numEntries, info.Header.TotalFrames)
+	// The seek table stores one uint32 entry per frame. Only read TotalFrames entries (all
+	// later code needs) rather than the file-controlled SeekTableBytes count, so a crafted
+	// descriptor cannot drive a giant allocation.
+	numEntries := int(info.Header.TotalFrames)
+
+	declaredEntries := int64(info.Descriptor.SeekTableBytes) / bytesPerUint32
+	if declaredEntries < int64(numEntries) {
+		return fmt.Errorf("%w: %d entries for %d frames", ErrAPESeekTable, declaredEntries, info.Header.TotalFrames)
 	}
 
 	tableOffset := junk + int64(info.Descriptor.DescriptorBytes) + int64(info.Descriptor.HeaderBytes)
 
-	_, err := file.Seek(tableOffset, io.SeekStart)
+	// Bound the entry count against the real file size so a corrupt TotalFrames (up to 4 billion)
+	// cannot trigger a huge allocation before the read fails.
+	stat, err := file.Stat()
+	if err != nil {
+		return fmt.Errorf("stat ape file: %w", err)
+	}
+
+	if avail := (stat.Size() - tableOffset) / bytesPerUint32; int64(numEntries) > avail {
+		return fmt.Errorf("%w: %d frames exceed %d available entries", ErrAPESeekTable, numEntries, avail)
+	}
+
+	_, err = file.Seek(tableOffset, io.SeekStart)
 	if err != nil {
 		return fmt.Errorf("seeking to ape seek table: %w", err)
 	}
@@ -212,8 +227,14 @@ func apeSkipID3v2Tag(file *os.File) (int64, error) {
 
 	var id3hdr [id3v2HeaderLen]byte
 
-	n, _ := file.Read(id3hdr[:])
-	if !isID3v2Header(id3hdr[:], n) {
+	_, err = io.ReadFull(file, id3hdr[:])
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return 0, nil // File is too small to hold an ID3v2 tag.
+	} else if err != nil {
+		return 0, fmt.Errorf("reading id3v2 header: %w", err)
+	}
+
+	if !isID3v2Header(id3hdr[:]) {
 		return 0, nil
 	}
 
@@ -237,9 +258,9 @@ func apeSkipID3v2Tag(file *os.File) (int64, error) {
 	return junk, nil
 }
 
-// isID3v2Header reports whether the n bytes read into hdr begin with an ID3v2 tag.
-func isID3v2Header(hdr []byte, n int) bool {
-	return n >= id3v2HeaderLen && hdr[0] == 'I' && hdr[1] == 'D' && hdr[2] == '3'
+// isID3v2Header reports whether hdr (a full id3v2HeaderLen-byte header) begins with an ID3v2 tag.
+func isID3v2Header(hdr []byte) bool {
+	return len(hdr) >= id3v2HeaderLen && hdr[0] == 'I' && hdr[1] == 'D' && hdr[2] == '3'
 }
 
 // id3v2TagSize decodes the sync-safe (7 significant bits per byte) ID3v2 tag size.
@@ -693,6 +714,28 @@ func writeAPEFrameData(
 	return streamRealignFrameData(dst, srcFile, pad, trackDataSize)
 }
 
+// readRealignChunk reads the next source block into inBuf, zero-pads a short final read up to
+// a whole uint32, and byte-swaps it into logical (MSB-first) order. It reports atEnd on an EOF
+// (full or partial) and returns any other I/O error so it is never mistaken for end-of-stream.
+func readRealignChunk(src io.Reader, inBuf []byte) (chunk []byte, atEnd bool, err error) {
+	readN, readErr := io.ReadFull(src, inBuf)
+
+	atEnd = errors.Is(readErr, io.EOF) || errors.Is(readErr, io.ErrUnexpectedEOF)
+	if readErr != nil && !atEnd {
+		return nil, false, fmt.Errorf("reading frame data for realignment: %w", readErr)
+	}
+
+	swapLen := roundUpToUint32(readN)
+	for i := readN; i < swapLen; i++ {
+		inBuf[i] = 0
+	}
+
+	chunk = inBuf[:swapLen]
+	byteSwapUint32s(chunk)
+
+	return chunk, atEnd, nil
+}
+
 // streamRealignFrameData is the streaming equivalent of realignFrameData: it reads the
 // uint32-aligned source bytes for a misaligned track, reverses the FixupFrame byte
 // rearrangement in fixed-size chunks, and writes exactly dataSize bytes to dst. It never
@@ -708,17 +751,10 @@ func streamRealignFrameData(dst io.Writer, src io.Reader, pad int, dataSize int6
 	)
 
 	for written < dataSize {
-		readN, readErr := io.ReadFull(src, inBuf)
-		atEnd := readErr != nil
-
-		// Zero-pad a short final read up to a whole word, then swap into logical (MSB-first) order.
-		swapLen := roundUpToUint32(readN)
-		for i := readN; i < swapLen; i++ {
-			inBuf[i] = 0
+		chunk, atEnd, err := readRealignChunk(src, inBuf)
+		if err != nil {
+			return err
 		}
-
-		chunk := inBuf[:swapLen]
-		byteSwapUint32s(chunk)
 
 		// Drop the pad-byte prefix (previous frame's tail) exactly once, at the very start.
 		offset := 0
@@ -743,9 +779,9 @@ func streamRealignFrameData(dst io.Writer, src io.Reader, pad int, dataSize int6
 
 		toWrite := min(int64(len(out)), dataSize-written)
 
-		_, err := dst.Write(out[:toWrite])
-		if err != nil {
-			return fmt.Errorf("writing realigned frame data: %w", err)
+		_, writeErr := dst.Write(out[:toWrite])
+		if writeErr != nil {
+			return fmt.Errorf("writing realigned frame data: %w", writeErr)
 		}
 
 		written += toWrite

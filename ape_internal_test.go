@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -618,4 +619,114 @@ func TestSplitAPESingleTrack(t *testing.T) {
 	info, err := parseAPE(files[0])
 	require.NoError(t, err)
 	assert.Equal(t, uint32(3), info.Header.TotalFrames, "single track should contain every frame")
+}
+
+// writeTwoTrackAPECue writes a 4-frame synthetic .ape (named apeName) and an album.cue that
+// references fileLine into dir, then returns the .cue path. With the test fixture's sample
+// rate (100) the second track's INDEX 00:02:00 (200 samples) lands on frame 2.
+func writeTwoTrackAPECue(t *testing.T, dir, apeName, fileLine string) string {
+	t.Helper()
+
+	apeBytes := defaultSyntheticAPE(equalFrames(4)).bytes()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, apeName), apeBytes, 0o600))
+
+	cueContent := strings.Join([]string{
+		`PERFORMER "Test Artist"`,
+		`TITLE "Test Album"`,
+		`FILE "` + fileLine + `" WAVE`,
+		`  TRACK 01 AUDIO`,
+		`    TITLE "First Song"`,
+		`    INDEX 01 00:00:00`,
+		`  TRACK 02 AUDIO`,
+		`    TITLE "Second Song"`,
+		`    INDEX 01 00:02:00`,
+	}, "\n") + "\n"
+
+	cuePath := filepath.Join(dir, "album.cue")
+	require.NoError(t, os.WriteFile(cuePath, []byte(cueContent), 0o600))
+
+	return cuePath
+}
+
+// assertExtractCUEAPE runs ExtractCUE and checks that it produced two parseable .ape tracks
+// plus the copied CUE sheet, and that the archive list references the source CUE and audio file.
+func assertExtractCUEAPE(t *testing.T, cuePath, audioPath, outDir string) {
+	t.Helper()
+
+	xFile := &XFile{FilePath: cuePath, OutputDir: outDir, FileMode: 0o600, DirMode: 0o755}
+
+	size, files, archives, err := ExtractCUE(xFile)
+	require.NoError(t, err, "ExtractCUE with .ape audio")
+	assert.Positive(t, size)
+	require.Len(t, files, 3, "expected 2 track files + copied CUE sheet")
+	require.Len(t, archives, 2, "archive list should contain the cue and ape files")
+	assert.Contains(t, archives, cuePath)
+	assert.Contains(t, archives, audioPath)
+
+	for _, name := range []string{"01 - First Song.ape", "02 - Second Song.ape"} {
+		trackPath := filepath.Join(outDir, name)
+		assert.Contains(t, files, trackPath)
+
+		info, parseErr := parseAPE(trackPath)
+		require.NoError(t, parseErr, "split track must be a parseable APE file: %s", name)
+		assert.Equal(t, uint32(2), info.Header.TotalFrames, "each track spans two source frames")
+	}
+}
+
+// TestExtractCUEAPEEndToEnd exercises the public ExtractCUE entrypoint dispatching to splitAPE
+// when the CUE FILE line points directly at an existing .ape file.
+func TestExtractCUEAPEEndToEnd(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	cuePath := writeTwoTrackAPECue(t, dir, "album.ape", "album.ape")
+
+	assertExtractCUEAPE(t, cuePath, filepath.Join(dir, "album.ape"), filepath.Join(dir, "output"))
+}
+
+// TestExtractCUEAPEWavFallback covers resolveCueAudioPath: the CUE references album.wav but
+// only album.ape exists on disk, so the .wav -> .ape fallback must find it.
+func TestExtractCUEAPEWavFallback(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	cuePath := writeTwoTrackAPECue(t, dir, "album.ape", "album.wav")
+
+	assertExtractCUEAPE(t, cuePath, filepath.Join(dir, "album.ape"), filepath.Join(dir, "output"))
+}
+
+// TestExtractCUEAPEBasenameFallback covers the same-basename fallback: the CUE FILE line names
+// a file that does not exist (and is not a .wav), so resolution falls back to the .ape that
+// shares the CUE file's base name (album.cue -> album.ape).
+func TestExtractCUEAPEBasenameFallback(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	cuePath := writeTwoTrackAPECue(t, dir, "album.ape", "totally-different-name.cda")
+
+	assertExtractCUEAPE(t, cuePath, filepath.Join(dir, "album.ape"), filepath.Join(dir, "output"))
+}
+
+// TestReadAPESeekTableRejectsHugeTotalFrames verifies the seek-table reader refuses a crafted
+// header whose TotalFrames (and SeekTableBytes) claim far more entries than the file can hold,
+// rather than attempting a massive allocation.
+func TestReadAPESeekTableRejectsHugeTotalFrames(t *testing.T) {
+	t.Parallel()
+
+	raw := defaultSyntheticAPE(equalFrames(4)).bytes()
+
+	const (
+		descSeekTableBytesOffset = 16                     // apeDescriptor.SeekTableBytes
+		headerTotalFramesOffset  = apeDescriptorSize + 12 // apeHeader.TotalFrames
+		huge                     = uint32(0x10000000)     // 268M entries -> ~2GB if allocated
+	)
+
+	binary.LittleEndian.PutUint32(raw[descSeekTableBytesOffset:], huge*bytesPerUint32)
+	binary.LittleEndian.PutUint32(raw[headerTotalFramesOffset:], huge)
+
+	path := filepath.Join(t.TempDir(), "huge.ape")
+	require.NoError(t, os.WriteFile(path, raw, 0o600))
+
+	_, err := parseAPE(path)
+	require.ErrorIs(t, err, ErrAPESeekTable)
 }
