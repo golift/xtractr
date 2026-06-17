@@ -491,7 +491,15 @@ func TestBuildAPETrackContainer(t *testing.T) {
 
 	assert.Equal(t, uint32(2), con.descriptor.SeekTableBytes/bytesPerUint32)
 	assert.Equal(t, int64(2*testAPEFrameLen), con.trackDataSize)
-	assert.Equal(t, uint32(2*testAPEFrameLen), con.descriptor.FrameDataBytes)
+
+	// The frame-data region is padded after the last frame to a uint32 boundary plus a uint32 of
+	// read-ahead, so FFmpeg's last-frame size (floor4 of fileSize-lastFramePos) keeps every byte.
+	wantPad := (bytesPerUint32-testAPEFrameLen%bytesPerUint32)%bytesPerUint32 + apeTailPadding
+	assert.Equal(t, wantPad, con.framePadding)
+	assert.Equal(t, uint32(2*testAPEFrameLen+wantPad), con.descriptor.FrameDataBytes)
+	// The final frame must span a whole number of uint32 words (last frame length + padding).
+	assert.Zero(t, (int(con.descriptor.FrameDataBytes)-testAPEFrameLen)%bytesPerUint32)
+
 	assert.Equal(t, [4]byte{'M', 'A', 'C', ' '}, con.descriptor.ID)
 
 	// CREATE_WAV_HEADER flag must be set and there must be no stored header data.
@@ -598,9 +606,12 @@ func TestSplitAPEEndToEnd(t *testing.T) {
 	dataOffset := int(desc.DescriptorBytes + desc.HeaderBytes + desc.SeekTableBytes)
 	gotFrameData := track1[dataOffset : dataOffset+int(desc.FrameDataBytes)]
 
-	wantFrameData := frames[0]
-	wantFrameData = append(wantFrameData, frames[1]...)
-	assert.Equal(t, wantFrameData, gotFrameData, "aligned track frame data should be copied verbatim")
+	wantFrameData := append(append([]byte{}, frames[0]...), frames[1]...)
+	// The real compressed frames are copied verbatim; the remainder is zero alignment/read-ahead padding.
+	require.Greater(t, len(gotFrameData), len(wantFrameData), "frame data must include trailing padding")
+	assert.Equal(t, wantFrameData, gotFrameData[:len(wantFrameData)], "aligned track frame data should be copied verbatim")
+	padding := gotFrameData[len(wantFrameData):]
+	assert.Equal(t, make([]byte, len(padding)), padding, "trailing padding must be zero")
 }
 
 func TestSplitAPESingleTrack(t *testing.T) {
