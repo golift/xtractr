@@ -355,6 +355,8 @@ func getCompressedFiles(path string, filter *Filter, fileList []os.FileInfo, dep
 // are resolved next to the entry archive file, where split archive volumes are
 // expected to live. No filesystem probing is performed so the resulting cleanup
 // paths are deterministic and independent of the process working directory.
+// Empty or "." volume entries are dropped so cleanup never targets a directory;
+// if no usable volumes remain, the entry file path is returned instead.
 func normalizeVolumes(volumes []string, filePath string) []string {
 	filePath = filepath.Clean(filePath)
 
@@ -363,16 +365,24 @@ func normalizeVolumes(volumes []string, filePath string) []string {
 	}
 
 	dir := filepath.Dir(filePath)
-	normalized := make([]string, len(volumes))
+	normalized := make([]string, 0, len(volumes))
 
-	for idx, volume := range volumes {
+	for _, volume := range volumes {
 		volume = filepath.Clean(volume)
-		if filepath.IsAbs(volume) || volume != filepath.Base(volume) {
-			normalized[idx] = volume
+		if volume == "." {
 			continue
 		}
 
-		normalized[idx] = filepath.Join(dir, filepath.Base(volume))
+		if filepath.IsAbs(volume) || volume != filepath.Base(volume) {
+			normalized = append(normalized, volume)
+			continue
+		}
+
+		normalized = append(normalized, filepath.Join(dir, filepath.Base(volume)))
+	}
+
+	if len(normalized) == 0 {
+		return []string{filePath}
 	}
 
 	return normalized

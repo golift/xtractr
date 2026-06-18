@@ -196,6 +196,9 @@ func TestMultiVolumeCleanup(t *testing.T) {
 	_, err = queue.Extract(xFile)
 	require.NoError(t, err)
 
+	timeout := time.NewTimer(15 * time.Second)
+	defer timeout.Stop()
+
 	for {
 		select {
 		case resp, ok := <-xFile.CBChannel:
@@ -205,7 +208,7 @@ func TestMultiVolumeCleanup(t *testing.T) {
 			if resp.Done {
 				goto done
 			}
-		case <-time.After(15 * time.Second):
+		case <-timeout.C:
 			t.Fatal("timed out waiting for multi-volume extraction to complete")
 		}
 	}

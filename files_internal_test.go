@@ -85,4 +85,27 @@ func TestNormalizeVolumes(t *testing.T) {
 			),
 		)
 	})
+
+	t.Run("empty and dot volumes are dropped", func(t *testing.T) {
+		t.Parallel()
+
+		entry := filepath.Join("test_data", "vol.part1.rar")
+
+		assert.Equal(t,
+			[]string{filepath.Join("test_data", "vol.part2.rar")},
+			normalizeVolumes([]string{"", ".", "vol.part2.rar"}, entry),
+			"empty/dot entries must never normalize to the entry directory",
+		)
+	})
+
+	t.Run("only empty volumes fall back to entry path", func(t *testing.T) {
+		t.Parallel()
+
+		entry := filepath.Join("test_data", "vol.part1.rar")
+
+		assert.Equal(t,
+			[]string{entry},
+			normalizeVolumes([]string{"", "."}, entry),
+		)
+	})
 }
