@@ -348,6 +348,46 @@ func getCompressedFiles(path string, filter *Filter, fileList []os.FileInfo, dep
 	return files
 }
 
+// normalizeVolumes maps the volume list reported by an archive decoder into
+// cleaned, deletable paths. Decoders are inconsistent: some return bare
+// basenames (rardecode) while others return relative paths (sevenzip). Absolute
+// paths and relative paths with directory components are preserved; bare names
+// are resolved next to the entry archive file, where split archive volumes are
+// expected to live. No filesystem probing is performed so the resulting cleanup
+// paths are deterministic and independent of the process working directory.
+// Empty or "." volume entries are dropped so cleanup never targets a directory;
+// if no usable volumes remain, the entry file path is returned instead.
+func normalizeVolumes(volumes []string, filePath string) []string {
+	filePath = filepath.Clean(filePath)
+
+	if len(volumes) == 0 {
+		return []string{filePath}
+	}
+
+	dir := filepath.Dir(filePath)
+	normalized := make([]string, 0, len(volumes))
+
+	for _, volume := range volumes {
+		volume = filepath.Clean(volume)
+		if volume == "." {
+			continue
+		}
+
+		if filepath.IsAbs(volume) || volume != filepath.Base(volume) {
+			normalized = append(normalized, volume)
+			continue
+		}
+
+		normalized = append(normalized, filepath.Join(dir, filepath.Base(volume)))
+	}
+
+	if len(normalized) == 0 {
+		return []string{filePath}
+	}
+
+	return normalized
+}
+
 // Extract calls the correct procedure for the type of file being extracted.
 // Returns size of extracted data, list of extracted files, and/or error.
 func (x *XFile) Extract() (size uint64, filesList, archiveList []string, err error) {
