@@ -552,6 +552,7 @@ type apeTrackContainer struct {
 	headerBytes    []byte
 	seekTableBytes []byte
 	trackDataSize  int64
+	framePadding   int // zero bytes appended after the frame data (uint32 alignment + read-ahead)
 }
 
 // buildAPETrackContainer computes the descriptor, header and seek table for a new APE file
@@ -579,6 +580,17 @@ func buildAPETrackContainer(info *apeInfo, startFrame, endFrame int) (*apeTrackC
 		trackDataSize += apeFrameDataSize(info, startFrame+i)
 	}
 
+	// FFmpeg's APE demuxer sizes the final frame as floor4(fileSize - lastFramePos) — it rounds
+	// the last frame DOWN to a uint32 boundary (libavformat/ape.c). A verbatim frame copy can
+	// leave the final frame ending mid-word, so FFmpeg drops the last 1-3 compressed bytes and
+	// then starves the range coder on the frame's final block ("Error decoding frame"). Real
+	// encoders always pad the frame-data region to a uint32 boundary; match that and add one
+	// extra uint32 of read-ahead slack the range decoder consumes past a frame's logical end.
+	lastFrameSize := apeFrameDataSize(info, endFrame)
+	alignPad := (bytesPerUint32 - int(lastFrameSize%bytesPerUint32)) % bytesPerUint32
+	framePadding := alignPad + apeTailPadding
+	paddedDataSize := trackDataSize + int64(framePadding)
+
 	hdr := apeHeader{
 		CompressionLevel: info.Header.CompressionLevel,
 		FormatFlags:      info.Header.FormatFlags | apeFormatFlagCreateWAV,
@@ -603,14 +615,15 @@ func buildAPETrackContainer(info *apeInfo, startFrame, endFrame int) (*apeTrackC
 			HeaderBytes:        apeHeaderSize,
 			SeekTableBytes:     seekTableSize,
 			HeaderDataBytes:    0, // CREATE_WAV_HEADER flag is set in the header above.
-			FrameDataBytes:     uint32(trackDataSize & maxUint32),
-			FrameDataBytesHigh: uint32((trackDataSize >> highDWordShift) & maxUint32),
+			FrameDataBytes:     uint32(paddedDataSize & maxUint32),
+			FrameDataBytesHigh: uint32((paddedDataSize >> highDWordShift) & maxUint32),
 			TerminatingBytes:   0,
 			// FileMD5 stays zero here; it's computed and patched in after the data is written.
 		},
 		headerBytes:    headerBytes,
 		seekTableBytes: seekTableBytes,
 		trackDataSize:  trackDataSize,
+		framePadding:   framePadding,
 	}, nil
 }
 
@@ -650,6 +663,17 @@ func writeTrackAPEContents(
 	err = writeAPEFrameData(dst, srcFile, info, startFrame, endFrame, con.trackDataSize)
 	if err != nil {
 		return 0, err
+	}
+
+	// Pad the frame-data region to a uint32 boundary (+ read-ahead) so FFmpeg's last-frame size
+	// calc keeps every compressed byte. These bytes are part of the frame-data region the format
+	// hashes, so they go to the file (via dst) and into the MD5. MAC ignores them: the final
+	// frame decodes FinalFrameBlocks samples and stops.
+	if con.framePadding > 0 {
+		_, err = dst.Write(make([]byte, con.framePadding))
+		if err != nil {
+			return 0, fmt.Errorf("writing ape frame padding: %w", err)
+		}
 	}
 
 	// The format hashes (header data) + frame data + (terminating data) + header + seek table.
