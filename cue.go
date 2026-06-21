@@ -89,13 +89,17 @@ func ExtractCUE(xFile *XFile) (size uint64, files, archives []string, err error)
 		return 0, nil, nil, err
 	}
 
-	// Only FLAC is supported for now.
 	ext := strings.ToLower(filepath.Ext(audioPath))
-	if ext != ".flac" {
+
+	switch ext {
+	case ".flac":
+		size, files, err = splitFLAC(xFile, audioPath, cue, timestamps)
+	case ".ape":
+		size, files, err = splitAPE(xFile, audioPath, cue, timestamps)
+	default:
 		return 0, nil, nil, fmt.Errorf("%w: %s", ErrUnsupportedAudio, ext)
 	}
 
-	size, files, err = splitFLAC(xFile, audioPath, cue, timestamps)
 	if err != nil {
 		return 0, nil, nil, err
 	}
@@ -316,15 +320,25 @@ func resolveCueAudioPath(cueDir, cueFile, cueFilePath string) (string, error) {
 		if err == nil {
 			return flacPath, nil
 		}
+
+		apePath := path[:len(path)-len(ext)] + ".ape"
+
+		_, err = os.Stat(apePath)
+		if err == nil {
+			return apePath, nil
+		}
 	}
 
-	// Fallback: try the FLAC with the same base name as the CUE file (handles O vs Ö, encoding mismatches).
+	// Fallback: try audio files with the same base name as the CUE file (handles O vs Ö, encoding mismatches).
 	baseNoExt := strings.TrimSuffix(filepath.Base(cueFilePath), filepath.Ext(cueFilePath))
-	fallbackPath := filepath.Join(cueDir, baseNoExt+".flac")
 
-	_, err = os.Stat(fallbackPath)
-	if err == nil {
-		return fallbackPath, nil
+	for _, fallbackExt := range []string{".flac", ".ape"} {
+		fallbackPath := filepath.Join(cueDir, baseNoExt+fallbackExt)
+
+		_, err = os.Stat(fallbackPath)
+		if err == nil {
+			return fallbackPath, nil
+		}
 	}
 
 	return "", fmt.Errorf("%w: %s", ErrAudioNotFound, path)
@@ -630,7 +644,7 @@ func (s *trackSplitter) openReachedTracks(frameEnd uint64) error {
 // openEncoder creates the output file and FLAC encoder for a single track.
 func (s *trackSplitter) openEncoder(idx int) (*trackEncoder, error) {
 	track := &s.cue.Tracks[idx]
-	outputPath := filepath.Join(s.xFile.OutputDir, formatTrackFilename(track))
+	outputPath := filepath.Join(s.xFile.OutputDir, formatTrackFilename(track, ".flac"))
 	blocks := buildTrackMetadataBlocks(s.cue, track, s.flacMeta)
 
 	trackInfo := &meta.StreamInfo{
@@ -1033,7 +1047,8 @@ func buildOutputFrame(src *frame.Frame, offset, count int) *frame.Frame {
 }
 
 // formatTrackFilename generates a filename for an extracted track.
-func formatTrackFilename(track *CueTrack) string {
+// The ext parameter should include the dot (e.g. ".flac", ".ape").
+func formatTrackFilename(track *CueTrack, ext string) string {
 	title := track.Title
 	if title == "" {
 		title = fmt.Sprintf("Track %d", track.Number)
@@ -1041,7 +1056,7 @@ func formatTrackFilename(track *CueTrack) string {
 
 	title = sanitizeFilename(title)
 
-	return fmt.Sprintf("%02d - %s.flac", track.Number, title)
+	return fmt.Sprintf("%02d - %s%s", track.Number, title, ext)
 }
 
 // sanitizeFilename removes or replaces characters that are problematic in filenames.
