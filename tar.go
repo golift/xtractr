@@ -172,7 +172,7 @@ func (x *XFile) untarFile(header *tar.Header, tarReader *tar.Reader) (uint64, er
 		file.Atime = time.Now()
 	}
 
-	if !strings.HasPrefix(file.Path, x.OutputDir) {
+	if !x.pathWithinOutput(file.Path) {
 		// The file being written is trying to write outside of our base path. Malicious archive?
 		return 0, fmt.Errorf("%s: %w: %s (from: %s)", x.FilePath, ErrInvalidPath, file.Path, header.Name)
 	}
@@ -198,6 +198,39 @@ func (x *XFile) untarFile(header *tar.Header, tarReader *tar.Reader) (uint64, er
 	return x.write(file)
 }
 
+// pathWithinOutput reports whether path is OutputDir or a descendant of it.
+// Uses filepath.Rel so prefix tricks like OutputDir=/tmp/out and path=/tmp/outside fail.
+func (x *XFile) pathWithinOutput(path string) bool {
+	outputDir := filepath.Clean(x.OutputDir)
+	cleanPath := filepath.Clean(path)
+
+	rel, err := filepath.Rel(outputDir, cleanPath)
+	if err != nil {
+		return false
+	}
+
+	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
+}
+
+// resolveLinkTarget returns the cleaned filesystem path a link would resolve to.
+func resolveLinkTarget(linkPath, linkName string) string {
+	if filepath.IsAbs(linkName) {
+		return filepath.Clean(linkName)
+	}
+
+	return filepath.Clean(filepath.Join(filepath.Dir(linkPath), linkName))
+}
+
+// ensureLinkWithinOutput rejects symlink targets that escape OutputDir.
+func (x *XFile) ensureLinkWithinOutput(linkPath, linkName string) error {
+	resolved := resolveLinkTarget(linkPath, linkName)
+	if !x.pathWithinOutput(resolved) {
+		return fmt.Errorf("%s: %w: %s (from: %s)", x.FilePath, ErrInvalidPath, resolved, linkName)
+	}
+
+	return nil
+}
+
 // untarLink creates a symlink or hard link from a tar header.
 func (x *XFile) untarLink(header *tar.Header, path string) (uint64, error) {
 	err := x.mkDir(filepath.Dir(path), x.DirMode, header.ModTime)
@@ -205,37 +238,65 @@ func (x *XFile) untarLink(header *tar.Header, path string) (uint64, error) {
 		return 0, fmt.Errorf("making tar link parent dir: %w", err)
 	}
 
-	// Replace anything already at path so Symlink/Link can succeed.
-	_ = os.Remove(path)
+	err = os.Remove(path)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return 0, fmt.Errorf("%s: removing existing path for link: %w: %s", x.FilePath, err, path)
+	}
 
 	switch header.Typeflag {
 	case tar.TypeSymlink:
-		x.Debugf("Writing archived symlink: %s -> %s", path, header.Linkname)
-
-		err = os.Symlink(header.Linkname, path)
-		if err != nil {
-			return 0, fmt.Errorf("%s: creating symlink: %w: %s -> %s", x.FilePath, err, path, header.Linkname)
-		}
+		return 0, x.createSymlink(path, header.Linkname)
 	case tar.TypeLink:
-		target := x.clean(header.Linkname)
-		if !strings.HasPrefix(target, x.OutputDir) {
-			return 0, fmt.Errorf("%s: %w: %s (from: %s)", x.FilePath, ErrInvalidPath, target, header.Linkname)
-		}
-
-		x.Debugf("Writing archived hard link: %s => %s", path, target)
-
-		err = os.Link(target, path)
-		if err != nil {
-			// Fall back to a symlink when hard links are unavailable (e.g. target
-			// not extracted yet, or the filesystem does not support them).
-			x.Debugf("Hard link failed (%v); falling back to symlink: %s -> %s", err, path, header.Linkname)
-
-			err = os.Symlink(header.Linkname, path)
-			if err != nil {
-				return 0, fmt.Errorf("%s: creating hard link: %w: %s => %s", x.FilePath, err, path, target)
-			}
-		}
+		return 0, x.createHardLink(path, header.Linkname)
 	}
 
 	return 0, nil
+}
+
+func (x *XFile) createSymlink(path, linkName string) error {
+	err := x.ensureLinkWithinOutput(path, linkName)
+	if err != nil {
+		return err
+	}
+
+	x.Debugf("Writing archived symlink: %s -> %s", path, linkName)
+
+	err = os.Symlink(linkName, path)
+	if err != nil {
+		return fmt.Errorf("%s: creating symlink: %w: %s -> %s", x.FilePath, err, path, linkName)
+	}
+
+	return nil
+}
+
+func (x *XFile) createHardLink(path, linkName string) error {
+	// Hard-link names are archive member paths, not arbitrary filesystem paths.
+	if linkName == "" || filepath.IsAbs(linkName) {
+		return fmt.Errorf("%s: %w: %s", x.FilePath, ErrInvalidPath, linkName)
+	}
+
+	target := x.clean(linkName)
+	if !x.pathWithinOutput(target) {
+		return fmt.Errorf("%s: %w: %s (from: %s)", x.FilePath, ErrInvalidPath, target, linkName)
+	}
+
+	x.Debugf("Writing archived hard link: %s => %s", path, target)
+
+	err := os.Link(target, path)
+	if err == nil {
+		return nil
+	}
+
+	linkErr := err
+
+	rel, relErr := filepath.Rel(filepath.Dir(path), target)
+	if relErr != nil {
+		return fmt.Errorf("%s: creating hard link: %w: %s => %s", x.FilePath, linkErr, path, target)
+	}
+
+	// Fall back to a relative symlink when hard links are unavailable
+	// (e.g. target not extracted yet, or the filesystem does not support them).
+	x.Debugf("Hard link failed (%v); falling back to symlink: %s -> %s", linkErr, path, rel)
+
+	return x.createSymlink(path, rel)
 }

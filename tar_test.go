@@ -81,6 +81,12 @@ func TestTarSymlinks(t *testing.T) {
 	t.Parallel()
 
 	tmp := t.TempDir()
+
+	err := os.Symlink("target", filepath.Join(tmp, "symlink-probe"))
+	if err != nil {
+		t.Skipf("symlinks unavailable on this platform: %v", err)
+	}
+
 	archivePath := filepath.Join(tmp, "libs.tar.gz")
 	extractDir := filepath.Join(tmp, "out")
 
@@ -124,7 +130,66 @@ func TestTarSymlinks(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, "libfoo.so.1.2.3", got)
 	} else {
-		assert.Equal(t, info.Size(), mustFileSize(t, realFile))
+		assert.Equal(t, mustFileSize(t, realFile), info.Size())
+	}
+}
+
+// TestTarSymlinkEscape rejects symlink and hard-link targets that leave OutputDir.
+func TestTarSymlinkEscape(t *testing.T) {
+	t.Parallel()
+
+	tmp := t.TempDir()
+
+	err := os.Symlink("target", filepath.Join(tmp, "symlink-probe"))
+	if err != nil {
+		t.Skipf("symlinks unavailable on this platform: %v", err)
+	}
+
+	for _, testCase := range []struct {
+		name     string
+		linkName string
+		kind     byte
+	}{
+		{
+			name:     "absolute_symlink",
+			linkName: filepath.Join(tmp, "outside"),
+			kind:     tar.TypeSymlink,
+		},
+		{
+			name:     "relative_symlink",
+			linkName: "../outside",
+			kind:     tar.TypeSymlink,
+		},
+		{
+			name:     "absolute_hardlink",
+			linkName: filepath.Join(tmp, "outside"),
+			kind:     tar.TypeLink,
+		},
+		{
+			// filepath.Rel-based checks must reject .. escapes that HasPrefix can miss.
+			name:     "relative_hardlink_escape",
+			linkName: "../outside",
+			kind:     tar.TypeLink,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			archivePath := filepath.Join(tmp, testCase.name+".tar.gz")
+			extractDir := filepath.Join(tmp, testCase.name+"-out")
+
+			require.NoError(t, createLinkOnlyTarGzip(archivePath, "escape.link", testCase.linkName, testCase.kind))
+
+			// Call ExtractTarGzip directly: ExtractFile falls back to plain gzip on error.
+			_, _, err := xtractr.ExtractTarGzip(&xtractr.XFile{
+				FilePath:  archivePath,
+				OutputDir: extractDir,
+				FileMode:  0o755,
+				DirMode:   0o755,
+			})
+			require.Error(t, err)
+			assert.ErrorIs(t, err, xtractr.ErrInvalidPath)
+		})
 	}
 }
 
@@ -191,6 +256,35 @@ func createSymlinkTarGzip(dest string) error {
 		if err != nil {
 			return fmt.Errorf("failed to write link header: %w", err)
 		}
+	}
+
+	return nil
+}
+
+func createLinkOnlyTarGzip(dest, name, linkName string, kind byte) error {
+	archiveFile, err := os.Create(dest)
+	if err != nil {
+		return fmt.Errorf("failed to create archive: %w", err)
+	}
+	defer archiveFile.Close()
+
+	gzipWriter := gzip.NewWriter(archiveFile)
+	defer gzipWriter.Close()
+
+	tarWriter := tar.NewWriter(gzipWriter)
+	defer tarWriter.Close()
+
+	header := &tar.Header{
+		Name:     name,
+		Linkname: linkName,
+		Mode:     0o755,
+		Typeflag: kind,
+		ModTime:  time.Now(),
+	}
+
+	err = tarWriter.WriteHeader(header)
+	if err != nil {
+		return fmt.Errorf("failed to write link header: %w", err)
 	}
 
 	return nil
