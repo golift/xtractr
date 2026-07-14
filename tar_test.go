@@ -98,7 +98,7 @@ func TestTarSymlinks(t *testing.T) {
 	realFile := filepath.Join(extractDir, "libfoo.so.1.2.3")
 	info, err := os.Lstat(realFile)
 	require.NoError(t, err)
-	assert.False(t, info.Mode()&os.ModeSymlink != 0, "real library should not be a symlink")
+	assert.Zero(t, info.Mode()&os.ModeSymlink, "real library should not be a symlink")
 	assert.Positive(t, info.Size())
 
 	for linkName, wantTarget := range map[string]string{
@@ -108,7 +108,7 @@ func TestTarSymlinks(t *testing.T) {
 		linkPath := filepath.Join(extractDir, linkName)
 		info, err = os.Lstat(linkPath)
 		require.NoError(t, err, linkName)
-		require.NotEqual(t, 0, info.Mode()&os.ModeSymlink, "%s should be a symlink, not a regular file", linkName)
+		require.NotZero(t, info.Mode()&os.ModeSymlink, "%s should be a symlink, not a regular file", linkName)
 
 		got, err := os.Readlink(linkPath)
 		require.NoError(t, err, linkName)
@@ -138,31 +138,36 @@ func mustFileSize(t *testing.T, path string) int64 {
 }
 
 func createSymlinkTarGzip(dest string) error {
-	f, err := os.Create(dest)
+	archiveFile, err := os.Create(dest)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create archive: %w", err)
 	}
-	defer f.Close()
+	defer archiveFile.Close()
 
-	gz := gzip.NewWriter(f)
-	defer gz.Close()
+	gzipWriter := gzip.NewWriter(archiveFile)
+	defer gzipWriter.Close()
 
-	tw := tar.NewWriter(gz)
-	defer tw.Close()
+	tarWriter := tar.NewWriter(gzipWriter)
+	defer tarWriter.Close()
 
 	payload := []byte("shared-object-bytes")
-	hdr := &tar.Header{
+
+	header := &tar.Header{
 		Name:     "libfoo.so.1.2.3",
 		Mode:     0o755,
 		Size:     int64(len(payload)),
 		Typeflag: tar.TypeReg,
 		ModTime:  time.Now(),
 	}
-	if err := tw.WriteHeader(hdr); err != nil {
-		return err
+
+	err = tarWriter.WriteHeader(header)
+	if err != nil {
+		return fmt.Errorf("failed to write tar header: %w", err)
 	}
-	if _, err := tw.Write(payload); err != nil {
-		return err
+
+	_, err = tarWriter.Write(payload)
+	if err != nil {
+		return fmt.Errorf("failed to write tar payload: %w", err)
 	}
 
 	for _, link := range []struct {
@@ -174,15 +179,17 @@ func createSymlinkTarGzip(dest string) error {
 		{"libfoo.so", "libfoo.so.1", tar.TypeSymlink},
 		{"libfoo.hard", "libfoo.so.1.2.3", tar.TypeLink},
 	} {
-		hdr = &tar.Header{
+		header = &tar.Header{
 			Name:     link.name,
 			Linkname: link.target,
 			Mode:     0o755,
 			Typeflag: link.kind,
 			ModTime:  time.Now(),
 		}
-		if err := tw.WriteHeader(hdr); err != nil {
-			return err
+
+		err = tarWriter.WriteHeader(header)
+		if err != nil {
+			return fmt.Errorf("failed to write link header: %w", err)
 		}
 	}
 
