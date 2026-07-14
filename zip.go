@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -98,7 +99,7 @@ func (x *XFile) zipPrepareEntries(
 		decodedName := decodeZipFilename(zipFile.Name, zipFile.Extra, zipFile.NonUTF8, decoder)
 		cleanPath := x.clean(decodedName)
 
-		if !x.pathWithinOutput(cleanPath) {
+		if !strings.HasPrefix(cleanPath, x.OutputDir) {
 			return nil, files, fmt.Errorf("%s: %s: %w: %s (from: %s)",
 				x.FilePath, zipFile.FileInfo().Name(), ErrInvalidPath, cleanPath, decodedName)
 		}
@@ -195,7 +196,7 @@ func (x *XFile) unzipWithName(zipFile *zip.File, name string) (uint64, string, e
 		Atime:    time.Now(),
 	}
 
-	if !x.pathWithinOutput(file.Path) {
+	if !strings.HasPrefix(file.Path, x.OutputDir) {
 		// The file being written is trying to write outside of our base path. Malicious archive?
 		err := fmt.Errorf("%s: %w: %s (from: %s)", zipFile.FileInfo().Name(), ErrInvalidPath, file.Path, name)
 		return 0, file.Path, err

@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	lzw "github.com/sshaman1101/dcompress"
@@ -202,6 +203,20 @@ func (x *XFile) untarFile(header *tar.Header, tarReader *tar.Reader) (uint64, er
 	x.Debugf("Writing archived file: %s (bytes: %d)", file.Path, header.FileInfo().Size())
 
 	return x.write(file)
+}
+
+// pathWithinOutput reports whether path is OutputDir or a descendant of it.
+// Uses filepath.Rel so prefix tricks like OutputDir=/tmp/out and path=/tmp/outside fail.
+func (x *XFile) pathWithinOutput(path string) bool {
+	outputDir := filepath.Clean(x.OutputDir)
+	cleanPath := filepath.Clean(path)
+
+	rel, err := filepath.Rel(outputDir, cleanPath)
+	if err != nil {
+		return false
+	}
+
+	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
 }
 
 // resolveLinkTarget returns the cleaned filesystem path a link would resolve to.

@@ -902,18 +902,3 @@ func (x *XFile) clean(filePath string, trim ...string) string {
 
 	return filepath.Clean(filepath.Join(x.OutputDir, filePath))
 }
-
-// pathWithinOutput reports whether path is OutputDir or a descendant of it.
-// Uses filepath.Rel so sibling-prefix tricks like OutputDir=/tmp/out and
-// path=/tmp/out_evil fail (unlike strings.HasPrefix).
-func (x *XFile) pathWithinOutput(path string) bool {
-	outputDir := filepath.Clean(x.OutputDir)
-	cleanPath := filepath.Clean(path)
-
-	rel, err := filepath.Rel(outputDir, cleanPath)
-	if err != nil {
-		return false
-	}
-
-	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
-}
