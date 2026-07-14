@@ -575,13 +575,13 @@ func truncateToBytes(str string, maxBytes int) string {
 		return str
 	}
 
-	bytes := []byte(str)
-	for len(bytes) > maxBytes {
-		_, size := utf8.DecodeLastRune(bytes)
-		bytes = bytes[:len(bytes)-size]
+	raw := []byte(str)
+	for len(raw) > maxBytes {
+		_, size := utf8.DecodeLastRune(raw)
+		raw = raw[:len(raw)-size]
 	}
 
-	return string(bytes)
+	return string(raw)
 }
 
 // openFile opens path with the given flags and mode. If the path exceeds
