@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/dsnet/compress/bzip2"
 	"github.com/stretchr/testify/assert"
@@ -72,6 +73,120 @@ func TestTar(t *testing.T) {
 			assert.Len(t, archives, testFilesInfo.archiveCount)
 		})
 	}
+}
+
+// TestTarSymlinks ensures symlink (and hard-link) members are restored as links
+// instead of empty regular files. Regression for https://github.com/golift/xtractr/issues/153
+func TestTarSymlinks(t *testing.T) {
+	t.Parallel()
+
+	tmp := t.TempDir()
+	archivePath := filepath.Join(tmp, "libs.tar.gz")
+	extractDir := filepath.Join(tmp, "out")
+
+	require.NoError(t, createSymlinkTarGzip(archivePath))
+
+	_, files, _, err := xtractr.ExtractFile(&xtractr.XFile{
+		FilePath:  archivePath,
+		OutputDir: extractDir,
+		FileMode:  0o755,
+		DirMode:   0o755,
+	})
+	require.NoError(t, err)
+	assert.Len(t, files, 4)
+
+	realFile := filepath.Join(extractDir, "libfoo.so.1.2.3")
+	info, err := os.Lstat(realFile)
+	require.NoError(t, err)
+	assert.False(t, info.Mode()&os.ModeSymlink != 0, "real library should not be a symlink")
+	assert.Positive(t, info.Size())
+
+	for linkName, wantTarget := range map[string]string{
+		"libfoo.so.1": "libfoo.so.1.2.3",
+		"libfoo.so":   "libfoo.so.1",
+	} {
+		linkPath := filepath.Join(extractDir, linkName)
+		info, err = os.Lstat(linkPath)
+		require.NoError(t, err, linkName)
+		require.NotEqual(t, 0, info.Mode()&os.ModeSymlink, "%s should be a symlink, not a regular file", linkName)
+
+		got, err := os.Readlink(linkPath)
+		require.NoError(t, err, linkName)
+		assert.Equal(t, wantTarget, got, linkName)
+	}
+
+	hardPath := filepath.Join(extractDir, "libfoo.hard")
+	info, err = os.Lstat(hardPath)
+	require.NoError(t, err)
+	// Hard link when supported; otherwise we fall back to a symlink.
+	if info.Mode()&os.ModeSymlink != 0 {
+		got, err := os.Readlink(hardPath)
+		require.NoError(t, err)
+		assert.Equal(t, "libfoo.so.1.2.3", got)
+	} else {
+		assert.Equal(t, info.Size(), mustFileSize(t, realFile))
+	}
+}
+
+func mustFileSize(t *testing.T, path string) int64 {
+	t.Helper()
+
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+
+	return info.Size()
+}
+
+func createSymlinkTarGzip(dest string) error {
+	f, err := os.Create(dest)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	gz := gzip.NewWriter(f)
+	defer gz.Close()
+
+	tw := tar.NewWriter(gz)
+	defer tw.Close()
+
+	payload := []byte("shared-object-bytes")
+	hdr := &tar.Header{
+		Name:     "libfoo.so.1.2.3",
+		Mode:     0o755,
+		Size:     int64(len(payload)),
+		Typeflag: tar.TypeReg,
+		ModTime:  time.Now(),
+	}
+	if err := tw.WriteHeader(hdr); err != nil {
+		return err
+	}
+	if _, err := tw.Write(payload); err != nil {
+		return err
+	}
+
+	for _, link := range []struct {
+		name   string
+		target string
+		kind   byte
+	}{
+		{"libfoo.so.1", "libfoo.so.1.2.3", tar.TypeSymlink},
+		{"libfoo.so", "libfoo.so.1", tar.TypeSymlink},
+		{"libfoo.hard", "libfoo.so.1.2.3", tar.TypeLink},
+	} {
+		hdr = &tar.Header{
+			Name:     link.name,
+			Linkname: link.target,
+			Mode:     0o755,
+			Typeflag: link.kind,
+			ModTime:  time.Now(),
+		}
+		if err := tw.WriteHeader(hdr); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func writeTar(sourceDir string, destWriter io.Writer) error {

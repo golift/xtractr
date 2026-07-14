@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -175,7 +177,8 @@ func (x *XFile) untarFile(header *tar.Header, tarReader *tar.Reader) (uint64, er
 		return 0, fmt.Errorf("%s: %w: %s (from: %s)", x.FilePath, ErrInvalidPath, file.Path, header.Name)
 	}
 
-	if header.Typeflag == tar.TypeDir {
+	switch header.Typeflag {
+	case tar.TypeDir:
 		x.Debugf("Writing archived directory: %s", file.Path)
 
 		err := x.mkDir(file.Path, header.FileInfo().Mode(), header.ModTime)
@@ -184,9 +187,55 @@ func (x *XFile) untarFile(header *tar.Header, tarReader *tar.Reader) (uint64, er
 		}
 
 		return 0, nil
+	case tar.TypeSymlink, tar.TypeLink:
+		// Symlinks (and hard links) have no file payload; writing them as regular
+		// files produces empty stubs — see https://github.com/golift/xtractr/issues/153
+		return x.untarLink(header, file.Path)
 	}
 
 	x.Debugf("Writing archived file: %s (bytes: %d)", file.Path, header.FileInfo().Size())
 
 	return x.write(file)
+}
+
+// untarLink creates a symlink or hard link from a tar header.
+func (x *XFile) untarLink(header *tar.Header, path string) (uint64, error) {
+	err := x.mkDir(filepath.Dir(path), x.DirMode, header.ModTime)
+	if err != nil {
+		return 0, fmt.Errorf("making tar link parent dir: %w", err)
+	}
+
+	// Replace anything already at path so Symlink/Link can succeed.
+	_ = os.Remove(path)
+
+	switch header.Typeflag {
+	case tar.TypeSymlink:
+		x.Debugf("Writing archived symlink: %s -> %s", path, header.Linkname)
+
+		err = os.Symlink(header.Linkname, path)
+		if err != nil {
+			return 0, fmt.Errorf("%s: creating symlink: %w: %s -> %s", x.FilePath, err, path, header.Linkname)
+		}
+	case tar.TypeLink:
+		target := x.clean(header.Linkname)
+		if !strings.HasPrefix(target, x.OutputDir) {
+			return 0, fmt.Errorf("%s: %w: %s (from: %s)", x.FilePath, ErrInvalidPath, target, header.Linkname)
+		}
+
+		x.Debugf("Writing archived hard link: %s => %s", path, target)
+
+		err = os.Link(target, path)
+		if err != nil {
+			// Fall back to a symlink when hard links are unavailable (e.g. target
+			// not extracted yet, or the filesystem does not support them).
+			x.Debugf("Hard link failed (%v); falling back to symlink: %s -> %s", err, path, header.Linkname)
+
+			err = os.Symlink(header.Linkname, path)
+			if err != nil {
+				return 0, fmt.Errorf("%s: creating hard link: %w: %s => %s", x.FilePath, err, path, target)
+			}
+		}
+	}
+
+	return 0, nil
 }
