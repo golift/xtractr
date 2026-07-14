@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"strings"
 
 	"golift.io/udf"
 )
@@ -121,7 +122,8 @@ func (x *XFile) unUDFFile(entry *udf.File, parent string) (uint64, []string, err
 		Mtime:    entry.ModTime(),
 	}
 
-	if !x.pathWithinOutput(output.Path) {
+	//nolint:gocritic
+	if !strings.HasPrefix(output.Path, filepath.Join(x.OutputDir)) {
 		return 0, nil, fmt.Errorf("%s: %w: %s != %s (from: %s)",
 			x.FilePath, ErrInvalidPath, output.Path, x.OutputDir, entry.Name())
 	}

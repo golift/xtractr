@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/peterebden/ar"
 )
@@ -52,7 +53,7 @@ func (x *XFile) unAr(reader io.Reader) ([]string, error) {
 			Mtime:    header.ModTime,
 		}
 
-		if !x.pathWithinOutput(file.Path) {
+		if !strings.HasPrefix(file.Path, x.OutputDir) {
 			// The file being written is trying to write outside of our base path. Malicious archive?
 			return files, fmt.Errorf("%s: %w: %s (from: %s)", x.FilePath, ErrInvalidPath, file.Path, header.Name)
 		}

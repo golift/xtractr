@@ -3,6 +3,7 @@ package xtractr
 import (
 	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/bodgit/sevenzip"
@@ -126,7 +127,7 @@ func (x *XFile) sevenZipPrepareEntries(sevenZip *sevenzip.ReadCloser) ([]sevenZi
 	for _, zipFile := range sevenZip.File {
 		cleanPath := x.clean(zipFile.Name)
 
-		if !x.pathWithinOutput(cleanPath) {
+		if !strings.HasPrefix(cleanPath, x.OutputDir) {
 			return nil, files, fmt.Errorf("%s: %s: %w: %s (from: %s)",
 				x.FilePath, zipFile.FileInfo().Name(), ErrInvalidPath, cleanPath, zipFile.Name)
 		}
@@ -223,7 +224,7 @@ func (x *XFile) un7zip(zipFile *sevenzip.File) (uint64, string, error) {
 		Atime:    zipFile.Accessed,
 	}
 
-	if !x.pathWithinOutput(file.Path) {
+	if !strings.HasPrefix(file.Path, x.OutputDir) {
 		// The file being written is trying to write outside of our base path. Malicious archive?
 		err := fmt.Errorf("%s: %w: %s (from: %s)", zipFile.FileInfo().Name(), ErrInvalidPath, file.Path, zipFile.Name)
 		return 0, file.Path, err
