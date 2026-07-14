@@ -917,3 +917,82 @@ func (x *XFile) pathWithinOutput(path string) bool {
 
 	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
 }
+
+// resolveLinkTarget returns the cleaned filesystem path a link would resolve to.
+func resolveLinkTarget(linkPath, linkName string) string {
+	if filepath.IsAbs(linkName) {
+		return filepath.Clean(linkName)
+	}
+
+	return filepath.Clean(filepath.Join(filepath.Dir(linkPath), linkName))
+}
+
+// ensureLinkWithinOutput rejects symlink targets that escape OutputDir.
+func (x *XFile) ensureLinkWithinOutput(linkPath, linkName string) error {
+	resolved := resolveLinkTarget(linkPath, linkName)
+	if !x.pathWithinOutput(resolved) {
+		return fmt.Errorf("%s: %w: %s (from: %s)", x.FilePath, ErrInvalidPath, resolved, linkName)
+	}
+
+	return nil
+}
+
+func (x *XFile) createSymlink(path, linkName string) error {
+	if linkName == "" {
+		x.Printf("Warning: skipping symlink with empty target: %s", path)
+
+		return errSkipEntry
+	}
+
+	err := x.ensureLinkWithinOutput(path, linkName)
+	if err != nil {
+		return err
+	}
+
+	x.Debugf("Writing archived symlink: %s -> %s", path, linkName)
+
+	err = os.Symlink(linkName, path)
+	if err != nil {
+		return fmt.Errorf("%s: creating symlink: %w: %s -> %s", x.FilePath, err, path, linkName)
+	}
+
+	return nil
+}
+
+func (x *XFile) createHardLink(path, linkName string) error {
+	if linkName == "" {
+		x.Printf("Warning: skipping hard link with empty target: %s", path)
+
+		return errSkipEntry
+	}
+
+	// Hard-link names are archive member paths, not arbitrary filesystem paths.
+	if filepath.IsAbs(linkName) {
+		return fmt.Errorf("%s: %w: %s", x.FilePath, ErrInvalidPath, linkName)
+	}
+
+	target := x.clean(linkName)
+	if !x.pathWithinOutput(target) {
+		return fmt.Errorf("%s: %w: %s (from: %s)", x.FilePath, ErrInvalidPath, target, linkName)
+	}
+
+	x.Debugf("Writing archived hard link: %s => %s", path, target)
+
+	err := os.Link(target, path)
+	if err == nil {
+		return nil
+	}
+
+	linkErr := err
+
+	rel, relErr := filepath.Rel(filepath.Dir(path), target)
+	if relErr != nil {
+		return fmt.Errorf("%s: creating hard link: %w: %s => %s", x.FilePath, linkErr, path, target)
+	}
+
+	// Fall back to a relative symlink when hard links are unavailable
+	// (e.g. target not extracted yet, or the filesystem does not support them).
+	x.Debugf("Hard link failed (%v); falling back to symlink: %s -> %s", linkErr, path, rel)
+
+	return x.createSymlink(path, rel)
+}
