@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -119,6 +120,14 @@ func (x *XFile) unrar(rarReader *rardecode.ReadCloser) ([]string, error) {
 			DirMode:  x.DirMode,
 			Mtime:    header.ModificationTime,
 			Atime:    header.AccessTime,
+			Linkname: header.Linkname,
+		}
+
+		// RAR5 stores symlink targets in a redirection record (not file payload).
+		// Ensure ModeSymlink is set when we have a unix/windows symlink redirection.
+		switch header.RedirType {
+		case rardecode.RedirUnixSymlink, rardecode.RedirWindowsSymlink, rardecode.RedirWindowsJunction:
+			file.FileMode |= os.ModeSymlink
 		}
 		//nolint:gocritic // this 1-argument filepath.Join removes a ./ prefix should there be one.
 		if !strings.HasPrefix(file.Path, filepath.Join(x.OutputDir)) {

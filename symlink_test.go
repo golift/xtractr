@@ -160,6 +160,58 @@ func TestSevenZipSymlinks(t *testing.T) {
 	assert.Equal(t, "payload\n", string(data))
 }
 
+// TestRarSymlinks covers RAR5 unix symlinks (targets live in redirection records).
+func TestRarSymlinks(t *testing.T) {
+	t.Parallel()
+
+	tmp := t.TempDir()
+
+	err := os.Symlink("target", filepath.Join(tmp, "symlink-probe"))
+	if err != nil {
+		t.Skipf("symlinks unavailable on this platform: %v", err)
+	}
+
+	rarBin, err := exec.LookPath("rar")
+	if err != nil {
+		t.Skip("rar not available to build symlink fixture")
+	}
+
+	require.NoError(t, os.WriteFile(filepath.Join(tmp, "target.txt"), []byte("payload\n"), 0o600))
+	require.NoError(t, os.Symlink("target.txt", filepath.Join(tmp, "link.txt")))
+
+	archivePath := filepath.Join(tmp, "symlink.rar")
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+
+	// -ol stores symbolic links as the link instead of the file.
+	cmd := exec.CommandContext(ctx, rarBin, "a", "-ol", "-y", "-ep1", archivePath, "target.txt", "link.txt") //nolint:gosec
+	cmd.Dir = tmp
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, string(out))
+
+	extractDir := filepath.Join(tmp, "out")
+	_, files, _, err := xtractr.ExtractRAR(&xtractr.XFile{
+		FilePath:  archivePath,
+		OutputDir: extractDir,
+		FileMode:  0o644,
+		DirMode:   0o755,
+	})
+	require.NoError(t, err)
+	assert.Len(t, files, 2)
+
+	info, err := os.Lstat(filepath.Join(extractDir, "link.txt"))
+	require.NoError(t, err)
+	require.NotZero(t, info.Mode()&os.ModeSymlink, "RAR symlink should be restored as a symlink")
+
+	got, err := os.Readlink(filepath.Join(extractDir, "link.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, "target.txt", got)
+
+	data, err := os.ReadFile(filepath.Join(extractDir, "target.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, "payload\n", string(data))
+}
+
 func createSymlinkZip(dest string) error {
 	archiveFile, err := os.Create(dest)
 	if err != nil {

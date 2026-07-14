@@ -619,6 +619,9 @@ type file struct {
 	DirMode  os.FileMode
 	Mtime    time.Time
 	Atime    time.Time
+	// Linkname is an explicit symlink target when the archive format stores it
+	// outside the file payload (e.g. RAR5 redirection records).
+	Linkname string
 }
 
 // Rename is an attempt to deal with "invalid cross link device" on weird file systems.
@@ -849,18 +852,29 @@ func (x *XFile) writeFile(file *file, parallel bool) (uint64, error) {
 	return uint64(size), nil
 }
 
-// writeSymlink reads a symlink target from file.Data and creates the link at file.Path.
+// writeSymlink reads a symlink target and creates the link at file.Path.
+// Prefer file.Linkname when set (RAR5 redirections); otherwise read file.Data
+// (ZIP/7z store the target as the member payload).
 func (x *XFile) writeSymlink(file *file) error {
-	var buf bytes.Buffer
+	linkName := file.Linkname
+	if linkName == "" && file.Data != nil {
+		var buf bytes.Buffer
 
-	_, err := io.Copy(&buf, file.Data)
-	if err != nil {
-		return fmt.Errorf("reading archived symlink '%s' target: %w", file.Path, err)
+		_, err := io.Copy(&buf, file.Data)
+		if err != nil {
+			return fmt.Errorf("reading archived symlink '%s' target: %w", file.Path, err)
+		}
+
+		linkName = strings.TrimRight(buf.String(), "\x00")
 	}
 
-	linkName := strings.TrimRight(buf.String(), "\x00")
+	if linkName == "" {
+		x.Printf("Warning: skipping symlink with empty target: %s", file.Path)
 
-	err = os.Remove(file.Path)
+		return errSkipEntry
+	}
+
+	err := os.Remove(file.Path)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("%s: removing existing path for symlink: %w: %s", x.FilePath, err, file.Path)
 	}
