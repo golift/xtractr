@@ -3,6 +3,8 @@ package xtractr
 /* Code to find, write, move and delete files. */
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -811,6 +813,18 @@ func (x *XFile) writeFile(file *file, parallel bool) (uint64, error) {
 		return 0, fmt.Errorf("writing archived file '%s' parent folder: %w", filepath.Base(file.Path), err)
 	}
 
+	// ZIP/RAR/7z (and similar) store symlink targets as the member payload with
+	// ModeSymlink set. Writing them as regular files leaves a text stub instead
+	// of a real link — the same class of bug as tar (#153), different symptom.
+	if file.FileMode&os.ModeSymlink != 0 {
+		err := x.writeSymlink(file)
+		if errors.Is(err, errSkipEntry) {
+			return 0, nil
+		}
+
+		return 0, err
+	}
+
 	fout, pathUsed, err := openFile(file.Path, os.O_RDWR|os.O_CREATE|os.O_TRUNC, x.safeFileMode(file.FileMode))
 	if err != nil {
 		return 0, err
@@ -833,6 +847,25 @@ func (x *XFile) writeFile(file *file, parallel bool) (uint64, error) {
 	defer os.Chtimes(file.Path, file.Atime, file.Mtime)
 
 	return uint64(size), nil
+}
+
+// writeSymlink reads a symlink target from file.Data and creates the link at file.Path.
+func (x *XFile) writeSymlink(file *file) error {
+	var buf bytes.Buffer
+
+	_, err := io.Copy(&buf, file.Data)
+	if err != nil {
+		return fmt.Errorf("reading archived symlink '%s' target: %w", file.Path, err)
+	}
+
+	linkName := strings.TrimRight(buf.String(), "\x00")
+
+	err = os.Remove(file.Path)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("%s: removing existing path for symlink: %w: %s", x.FilePath, err, file.Path)
+	}
+
+	return x.createSymlink(file.Path, linkName)
 }
 
 // clean returns an absolute path for a file inside the OutputDir.

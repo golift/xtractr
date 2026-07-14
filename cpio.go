@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -96,9 +95,9 @@ func (x *XFile) uncpioFile(cpioFile *cpio.Header, cpioReader *cpio.Reader) (uint
 
 	// This turns hard links into symlinks.
 	if cpioFile.Linkname != "" {
-		err := os.Symlink(cpioFile.Linkname, file.Path)
+		err := x.createSymlink(file.Path, cpioFile.Linkname)
 		if err != nil {
-			return 0, fmt.Errorf("%s symlink: %w: %s (from: %s)", cpioFile.FileInfo().Name(), err, file.Path, cpioFile.Name)
+			return 0, fmt.Errorf("%s: %w", cpioFile.FileInfo().Name(), err)
 		}
 
 		return 0, nil
