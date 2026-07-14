@@ -3,6 +3,7 @@ package xtractr
 /* Code to find, write, move and delete files. */
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -573,13 +574,13 @@ func truncateToBytes(str string, maxBytes int) string {
 		return str
 	}
 
-	bytes := []byte(str)
-	for len(bytes) > maxBytes {
-		_, size := utf8.DecodeLastRune(bytes)
-		bytes = bytes[:len(bytes)-size]
+	raw := []byte(str)
+	for len(raw) > maxBytes {
+		_, size := utf8.DecodeLastRune(raw)
+		raw = raw[:len(raw)-size]
 	}
 
-	return string(bytes)
+	return string(raw)
 }
 
 // openFile opens path with the given flags and mode. If the path exceeds
@@ -617,6 +618,9 @@ type file struct {
 	DirMode  os.FileMode
 	Mtime    time.Time
 	Atime    time.Time
+	// Linkname is an explicit symlink target when the archive format stores it
+	// outside the file payload (e.g. RAR5 redirection records).
+	Linkname string
 }
 
 // Rename is an attempt to deal with "invalid cross link device" on weird file systems.
@@ -811,6 +815,18 @@ func (x *XFile) writeFile(file *file, parallel bool) (uint64, error) {
 		return 0, fmt.Errorf("writing archived file '%s' parent folder: %w", filepath.Base(file.Path), err)
 	}
 
+	// ZIP/RAR/7z (and similar) store symlink targets as the member payload with
+	// ModeSymlink set. Writing them as regular files leaves a text stub instead
+	// of a real link — the same class of bug as tar (#153), different symptom.
+	if file.FileMode&os.ModeSymlink != 0 {
+		err := x.writeSymlink(file)
+		if errors.Is(err, errSkipEntry) {
+			return 0, nil
+		}
+
+		return 0, err
+	}
+
 	fout, pathUsed, err := openFile(file.Path, os.O_RDWR|os.O_CREATE|os.O_TRUNC, x.safeFileMode(file.FileMode))
 	if err != nil {
 		return 0, err
@@ -833,6 +849,45 @@ func (x *XFile) writeFile(file *file, parallel bool) (uint64, error) {
 	defer os.Chtimes(file.Path, file.Atime, file.Mtime)
 
 	return uint64(size), nil
+}
+
+// maxSymlinkTarget is the maximum bytes allowed for a symlink target read from
+// an archive member payload. Prevents a ModeSymlink entry with a huge payload
+// from exhausting memory.
+const maxSymlinkTarget = 8 * 1024
+
+// writeSymlink reads a symlink target and creates the link at file.Path.
+// Prefer file.Linkname when set (RAR5 redirections); otherwise read file.Data
+// (ZIP/7z store the target as the member payload).
+func (x *XFile) writeSymlink(file *file) error {
+	linkName := file.Linkname
+	if linkName == "" && file.Data != nil {
+		limited := io.LimitReader(file.Data, maxSymlinkTarget+1)
+
+		raw, err := io.ReadAll(limited)
+		if err != nil {
+			return fmt.Errorf("reading archived symlink '%s' target: %w", file.Path, err)
+		}
+
+		if len(raw) > maxSymlinkTarget {
+			return fmt.Errorf("%s: %w: %s", x.FilePath, ErrSymlinkTooLong, file.Path)
+		}
+
+		linkName = strings.TrimRight(string(raw), "\x00")
+	}
+
+	if linkName == "" {
+		x.Printf("Warning: skipping symlink with empty target: %s", file.Path)
+
+		return errSkipEntry
+	}
+
+	err := os.Remove(file.Path)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("%s: removing existing path for symlink: %w: %s", x.FilePath, err, file.Path)
+	}
+
+	return x.createSymlink(file.Path, linkName)
 }
 
 // clean returns an absolute path for a file inside the OutputDir.
