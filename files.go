@@ -166,6 +166,13 @@ func (x *XFile) Debugf(format string, v ...any) {
 	}
 }
 
+// Printf calls the print method on the logger if it's not nil.
+func (x *XFile) Printf(format string, v ...any) {
+	if x.log != nil {
+		x.log.Printf(format, v...)
+	}
+}
+
 // GetFileList returns all the files in a path or paths.
 // This is non-recursive and only returns files _in_ the base paths provided.
 // This is a helper method and only exposed for convenience. You do not have to call this.

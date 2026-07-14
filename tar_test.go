@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/dsnet/compress/bzip2"
 	"github.com/stretchr/testify/assert"
@@ -72,6 +73,303 @@ func TestTar(t *testing.T) {
 			assert.Len(t, archives, testFilesInfo.archiveCount)
 		})
 	}
+}
+
+// TestTarSymlinks ensures symlink (and hard-link) members are restored as links
+// instead of empty regular files. Regression for https://github.com/golift/xtractr/issues/153
+func TestTarSymlinks(t *testing.T) {
+	t.Parallel()
+
+	tmp := t.TempDir()
+
+	err := os.Symlink("target", filepath.Join(tmp, "symlink-probe"))
+	if err != nil {
+		t.Skipf("symlinks unavailable on this platform: %v", err)
+	}
+
+	archivePath := filepath.Join(tmp, "libs.tar.gz")
+	extractDir := filepath.Join(tmp, "out")
+
+	require.NoError(t, createSymlinkTarGzip(archivePath))
+
+	_, files, _, err := xtractr.ExtractFile(&xtractr.XFile{
+		FilePath:  archivePath,
+		OutputDir: extractDir,
+		FileMode:  0o755,
+		DirMode:   0o755,
+	})
+	require.NoError(t, err)
+	assert.Len(t, files, 4)
+
+	realFile := filepath.Join(extractDir, "libfoo.so.1.2.3")
+	info, err := os.Lstat(realFile)
+	require.NoError(t, err)
+	assert.Zero(t, info.Mode()&os.ModeSymlink, "real library should not be a symlink")
+	assert.Positive(t, info.Size())
+
+	for linkName, wantTarget := range map[string]string{
+		"libfoo.so.1": "libfoo.so.1.2.3",
+		"libfoo.so":   "libfoo.so.1",
+	} {
+		linkPath := filepath.Join(extractDir, linkName)
+		info, err = os.Lstat(linkPath)
+		require.NoError(t, err, linkName)
+		require.NotZero(t, info.Mode()&os.ModeSymlink, "%s should be a symlink, not a regular file", linkName)
+
+		got, err := os.Readlink(linkPath)
+		require.NoError(t, err, linkName)
+		assert.Equal(t, wantTarget, got, linkName)
+	}
+
+	hardPath := filepath.Join(extractDir, "libfoo.hard")
+	info, err = os.Lstat(hardPath)
+	require.NoError(t, err)
+	// Hard link when supported; otherwise we fall back to a symlink.
+	if info.Mode()&os.ModeSymlink != 0 {
+		got, err := os.Readlink(hardPath)
+		require.NoError(t, err)
+		assert.Equal(t, "libfoo.so.1.2.3", got)
+	} else {
+		assert.Equal(t, mustFileSize(t, realFile), info.Size())
+	}
+}
+
+// TestTarSymlinkEscape rejects symlink and hard-link targets that leave OutputDir.
+func TestTarSymlinkEscape(t *testing.T) {
+	t.Parallel()
+
+	tmp := t.TempDir()
+
+	err := os.Symlink("target", filepath.Join(tmp, "symlink-probe"))
+	if err != nil {
+		t.Skipf("symlinks unavailable on this platform: %v", err)
+	}
+
+	for _, testCase := range []struct {
+		name     string
+		linkName string
+		kind     byte
+	}{
+		{
+			name:     "absolute_symlink",
+			linkName: filepath.Join(tmp, "outside"),
+			kind:     tar.TypeSymlink,
+		},
+		{
+			name:     "relative_symlink",
+			linkName: "../outside",
+			kind:     tar.TypeSymlink,
+		},
+		{
+			name:     "absolute_hardlink",
+			linkName: filepath.Join(tmp, "outside"),
+			kind:     tar.TypeLink,
+		},
+		{
+			// filepath.Rel-based checks must reject .. escapes that HasPrefix can miss.
+			name:     "relative_hardlink_escape",
+			linkName: "../outside",
+			kind:     tar.TypeLink,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			archivePath := filepath.Join(tmp, testCase.name+".tar.gz")
+			extractDir := filepath.Join(tmp, testCase.name+"-out")
+
+			require.NoError(t, createLinkOnlyTarGzip(archivePath, "escape.link", testCase.linkName, testCase.kind))
+
+			// Call ExtractTarGzip directly: ExtractFile falls back to plain gzip on error.
+			_, _, err := xtractr.ExtractTarGzip(&xtractr.XFile{
+				FilePath:  archivePath,
+				OutputDir: extractDir,
+				FileMode:  0o755,
+				DirMode:   0o755,
+			})
+			require.Error(t, err)
+			assert.ErrorIs(t, err, xtractr.ErrInvalidPath)
+		})
+	}
+}
+
+// TestTarEmptyLinkSkipped warns and continues when a link target is empty.
+func TestTarEmptyLinkSkipped(t *testing.T) {
+	t.Parallel()
+
+	tmp := t.TempDir()
+
+	err := os.Symlink("target", filepath.Join(tmp, "symlink-probe"))
+	if err != nil {
+		t.Skipf("symlinks unavailable on this platform: %v", err)
+	}
+
+	archivePath := filepath.Join(tmp, "empty-link.tar.gz")
+	extractDir := filepath.Join(tmp, "out")
+
+	require.NoError(t, createEmptyLinkWithFileTarGzip(archivePath))
+
+	_, files, err := xtractr.ExtractTarGzip(&xtractr.XFile{
+		FilePath:  archivePath,
+		OutputDir: extractDir,
+		FileMode:  0o755,
+		DirMode:   0o755,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"keep.txt"}, files)
+
+	_, err = os.Lstat(filepath.Join(extractDir, "empty.link"))
+	require.Error(t, err)
+	assert.True(t, os.IsNotExist(err))
+
+	data, err := os.ReadFile(filepath.Join(extractDir, "keep.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, "kept", string(data))
+}
+
+func mustFileSize(t *testing.T, path string) int64 {
+	t.Helper()
+
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+
+	return info.Size()
+}
+
+func createSymlinkTarGzip(dest string) error {
+	archiveFile, err := os.Create(dest)
+	if err != nil {
+		return fmt.Errorf("failed to create archive: %w", err)
+	}
+	defer archiveFile.Close()
+
+	gzipWriter := gzip.NewWriter(archiveFile)
+	defer gzipWriter.Close()
+
+	tarWriter := tar.NewWriter(gzipWriter)
+	defer tarWriter.Close()
+
+	payload := []byte("shared-object-bytes")
+
+	header := &tar.Header{
+		Name:     "libfoo.so.1.2.3",
+		Mode:     0o755,
+		Size:     int64(len(payload)),
+		Typeflag: tar.TypeReg,
+		ModTime:  time.Now(),
+	}
+
+	err = tarWriter.WriteHeader(header)
+	if err != nil {
+		return fmt.Errorf("failed to write tar header: %w", err)
+	}
+
+	_, err = tarWriter.Write(payload)
+	if err != nil {
+		return fmt.Errorf("failed to write tar payload: %w", err)
+	}
+
+	for _, link := range []struct {
+		name   string
+		target string
+		kind   byte
+	}{
+		{"libfoo.so.1", "libfoo.so.1.2.3", tar.TypeSymlink},
+		{"libfoo.so", "libfoo.so.1", tar.TypeSymlink},
+		{"libfoo.hard", "libfoo.so.1.2.3", tar.TypeLink},
+	} {
+		header = &tar.Header{
+			Name:     link.name,
+			Linkname: link.target,
+			Mode:     0o755,
+			Typeflag: link.kind,
+			ModTime:  time.Now(),
+		}
+
+		err = tarWriter.WriteHeader(header)
+		if err != nil {
+			return fmt.Errorf("failed to write link header: %w", err)
+		}
+	}
+
+	return nil
+}
+
+func createLinkOnlyTarGzip(dest, name, linkName string, kind byte) error {
+	archiveFile, err := os.Create(dest)
+	if err != nil {
+		return fmt.Errorf("failed to create archive: %w", err)
+	}
+	defer archiveFile.Close()
+
+	gzipWriter := gzip.NewWriter(archiveFile)
+	defer gzipWriter.Close()
+
+	tarWriter := tar.NewWriter(gzipWriter)
+	defer tarWriter.Close()
+
+	header := &tar.Header{
+		Name:     name,
+		Linkname: linkName,
+		Mode:     0o755,
+		Typeflag: kind,
+		ModTime:  time.Now(),
+	}
+
+	err = tarWriter.WriteHeader(header)
+	if err != nil {
+		return fmt.Errorf("failed to write link header: %w", err)
+	}
+
+	return nil
+}
+
+func createEmptyLinkWithFileTarGzip(dest string) error {
+	archiveFile, err := os.Create(dest)
+	if err != nil {
+		return fmt.Errorf("failed to create archive: %w", err)
+	}
+	defer archiveFile.Close()
+
+	gzipWriter := gzip.NewWriter(archiveFile)
+	defer gzipWriter.Close()
+
+	tarWriter := tar.NewWriter(gzipWriter)
+	defer tarWriter.Close()
+
+	emptyLink := &tar.Header{
+		Name:     "empty.link",
+		Linkname: "",
+		Mode:     0o755,
+		Typeflag: tar.TypeSymlink,
+		ModTime:  time.Now(),
+	}
+
+	err = tarWriter.WriteHeader(emptyLink)
+	if err != nil {
+		return fmt.Errorf("failed to write empty link header: %w", err)
+	}
+
+	payload := []byte("kept")
+	fileHeader := &tar.Header{
+		Name:     "keep.txt",
+		Mode:     0o644,
+		Size:     int64(len(payload)),
+		Typeflag: tar.TypeReg,
+		ModTime:  time.Now(),
+	}
+
+	err = tarWriter.WriteHeader(fileHeader)
+	if err != nil {
+		return fmt.Errorf("failed to write file header: %w", err)
+	}
+
+	_, err = tarWriter.Write(payload)
+	if err != nil {
+		return fmt.Errorf("failed to write file payload: %w", err)
+	}
+
+	return nil
 }
 
 func writeTar(sourceDir string, destWriter io.Writer) error {
