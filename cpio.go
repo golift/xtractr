@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
-	"strings"
 
 	"github.com/cavaliergopher/cpio"
 )
@@ -79,7 +78,7 @@ func (x *XFile) uncpioFile(cpioFile *cpio.Header, cpioReader *cpio.Reader) (uint
 		Mtime:    cpioFile.ModTime,
 	}
 
-	if !strings.HasPrefix(file.Path, x.OutputDir) {
+	if !x.pathWithinOutput(file.Path) {
 		// The file being written is trying to write outside of the base path. Malicious archive?
 		return 0, fmt.Errorf("%s: %w: %s (from: %s)", cpioFile.FileInfo().Name(), ErrInvalidPath, file.Path, cpioFile.Name)
 	}
