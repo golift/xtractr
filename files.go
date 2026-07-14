@@ -3,7 +3,6 @@ package xtractr
 /* Code to find, write, move and delete files. */
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -852,20 +851,29 @@ func (x *XFile) writeFile(file *file, parallel bool) (uint64, error) {
 	return uint64(size), nil
 }
 
+// maxSymlinkTarget is the maximum bytes allowed for a symlink target read from
+// an archive member payload. Prevents a ModeSymlink entry with a huge payload
+// from exhausting memory.
+const maxSymlinkTarget = 8 * 1024
+
 // writeSymlink reads a symlink target and creates the link at file.Path.
 // Prefer file.Linkname when set (RAR5 redirections); otherwise read file.Data
 // (ZIP/7z store the target as the member payload).
 func (x *XFile) writeSymlink(file *file) error {
 	linkName := file.Linkname
 	if linkName == "" && file.Data != nil {
-		var buf bytes.Buffer
+		limited := io.LimitReader(file.Data, maxSymlinkTarget+1)
 
-		_, err := io.Copy(&buf, file.Data)
+		raw, err := io.ReadAll(limited)
 		if err != nil {
 			return fmt.Errorf("reading archived symlink '%s' target: %w", file.Path, err)
 		}
 
-		linkName = strings.TrimRight(buf.String(), "\x00")
+		if len(raw) > maxSymlinkTarget {
+			return fmt.Errorf("%s: %w: %s", x.FilePath, ErrSymlinkTooLong, file.Path)
+		}
+
+		linkName = strings.TrimRight(string(raw), "\x00")
 	}
 
 	if linkName == "" {

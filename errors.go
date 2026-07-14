@@ -17,6 +17,7 @@ var (
 	ErrUnknownArchiveType = errors.New("unknown archive file type")
 	ErrInvalidPath        = errors.New("archived file contains invalid path")
 	ErrInvalidHead        = errors.New("archived file contains invalid header file")
+	ErrSymlinkTooLong     = errors.New("archived symlink target exceeds maximum length")
 	ErrQueueRunning       = errors.New("extractor queue running, cannot start")
 	ErrNoConfig           = errors.New("call NewQueue() to initialize a queue")
 	ErrNoLogger           = errors.New("xtractr.Config.Logger must be non-nil")
