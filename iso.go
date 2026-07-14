@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/Unpackerr/iso9660"
 )
@@ -138,8 +137,7 @@ func (x *XFile) unisofile(isoFile *iso9660.File, wfile string) (uint64, []string
 		Mtime:    isoFile.ModTime(),
 	}
 
-	//nolint:gocritic // this 1-argument filepath.Join removes a ./ prefix should there be one.
-	if !strings.HasPrefix(file.Path, filepath.Join(x.OutputDir)) {
+	if !x.pathWithinOutput(file.Path) {
 		// The file being written is trying to write outside of our base path. Malicious ISO?
 		return 0, nil, fmt.Errorf("%s: %w: %s != %s (from: %s)",
 			x.FilePath, ErrInvalidPath, file.Path, x.OutputDir, isoFile.Name())
