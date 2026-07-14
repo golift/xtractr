@@ -193,6 +193,40 @@ func TestTarSymlinkEscape(t *testing.T) {
 	}
 }
 
+// TestTarEmptyLinkSkipped warns and continues when a link target is empty.
+func TestTarEmptyLinkSkipped(t *testing.T) {
+	t.Parallel()
+
+	tmp := t.TempDir()
+
+	err := os.Symlink("target", filepath.Join(tmp, "symlink-probe"))
+	if err != nil {
+		t.Skipf("symlinks unavailable on this platform: %v", err)
+	}
+
+	archivePath := filepath.Join(tmp, "empty-link.tar.gz")
+	extractDir := filepath.Join(tmp, "out")
+
+	require.NoError(t, createEmptyLinkWithFileTarGzip(archivePath))
+
+	_, files, err := xtractr.ExtractTarGzip(&xtractr.XFile{
+		FilePath:  archivePath,
+		OutputDir: extractDir,
+		FileMode:  0o755,
+		DirMode:   0o755,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"keep.txt"}, files)
+
+	_, err = os.Lstat(filepath.Join(extractDir, "empty.link"))
+	require.Error(t, err)
+	assert.True(t, os.IsNotExist(err))
+
+	data, err := os.ReadFile(filepath.Join(extractDir, "keep.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, "kept", string(data))
+}
+
 func mustFileSize(t *testing.T, path string) int64 {
 	t.Helper()
 
@@ -285,6 +319,54 @@ func createLinkOnlyTarGzip(dest, name, linkName string, kind byte) error {
 	err = tarWriter.WriteHeader(header)
 	if err != nil {
 		return fmt.Errorf("failed to write link header: %w", err)
+	}
+
+	return nil
+}
+
+func createEmptyLinkWithFileTarGzip(dest string) error {
+	archiveFile, err := os.Create(dest)
+	if err != nil {
+		return fmt.Errorf("failed to create archive: %w", err)
+	}
+	defer archiveFile.Close()
+
+	gzipWriter := gzip.NewWriter(archiveFile)
+	defer gzipWriter.Close()
+
+	tarWriter := tar.NewWriter(gzipWriter)
+	defer tarWriter.Close()
+
+	emptyLink := &tar.Header{
+		Name:     "empty.link",
+		Linkname: "",
+		Mode:     0o755,
+		Typeflag: tar.TypeSymlink,
+		ModTime:  time.Now(),
+	}
+
+	err = tarWriter.WriteHeader(emptyLink)
+	if err != nil {
+		return fmt.Errorf("failed to write empty link header: %w", err)
+	}
+
+	payload := []byte("kept")
+	fileHeader := &tar.Header{
+		Name:     "keep.txt",
+		Mode:     0o644,
+		Size:     int64(len(payload)),
+		Typeflag: tar.TypeReg,
+		ModTime:  time.Now(),
+	}
+
+	err = tarWriter.WriteHeader(fileHeader)
+	if err != nil {
+		return fmt.Errorf("failed to write file header: %w", err)
+	}
+
+	_, err = tarWriter.Write(payload)
+	if err != nil {
+		return fmt.Errorf("failed to write file payload: %w", err)
 	}
 
 	return nil

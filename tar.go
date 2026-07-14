@@ -128,6 +128,9 @@ func ExtractTarLzip(xFile *XFile) (size uint64, filesList []string, err error) {
 	return xFile.prog.Wrote, files, err
 }
 
+// errSkipEntry is returned for non-fatal archive members that should be ignored.
+var errSkipEntry = errors.New("skip archive entry")
+
 func (x *XFile) untar(reader io.Reader) ([]string, error) {
 	tarReader := tar.NewReader(reader)
 	files := []string{}
@@ -143,6 +146,10 @@ func (x *XFile) untar(reader io.Reader) ([]string, error) {
 		}
 
 		fSize, err := x.untarFile(header, tarReader)
+		if errors.Is(err, errSkipEntry) {
+			continue
+		}
+
 		if err != nil {
 			return files, err
 		}
@@ -254,6 +261,12 @@ func (x *XFile) untarLink(header *tar.Header, path string) (uint64, error) {
 }
 
 func (x *XFile) createSymlink(path, linkName string) error {
+	if linkName == "" {
+		x.Printf("Warning: skipping symlink with empty target: %s", path)
+
+		return errSkipEntry
+	}
+
 	err := x.ensureLinkWithinOutput(path, linkName)
 	if err != nil {
 		return err
@@ -270,8 +283,14 @@ func (x *XFile) createSymlink(path, linkName string) error {
 }
 
 func (x *XFile) createHardLink(path, linkName string) error {
+	if linkName == "" {
+		x.Printf("Warning: skipping hard link with empty target: %s", path)
+
+		return errSkipEntry
+	}
+
 	// Hard-link names are archive member paths, not arbitrary filesystem paths.
-	if linkName == "" || filepath.IsAbs(linkName) {
+	if filepath.IsAbs(linkName) {
 		return fmt.Errorf("%s: %w: %s", x.FilePath, ErrInvalidPath, linkName)
 	}
 
