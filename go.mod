@@ -21,7 +21,7 @@ require (
 	github.com/stretchr/testify v1.11.1
 	github.com/therootcompany/xz v1.0.1
 	github.com/ulikunitz/xz v0.5.15
-	golang.org/x/text v0.38.0
+	golang.org/x/text v0.40.0
 	golift.io/udf v0.0.1
 )
 
