@@ -2,7 +2,7 @@ module golift.io/xtractr
 
 go 1.25.7
 
-toolchain go1.26.4
+toolchain go1.26.5
 
 require (
 	github.com/Unpackerr/iso9660 v0.0.3
