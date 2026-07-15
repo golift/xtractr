@@ -6,12 +6,12 @@ toolchain go1.26.4
 
 require (
 	github.com/Unpackerr/iso9660 v0.0.3
-	github.com/andybalholm/brotli v1.2.1
-	github.com/bodgit/sevenzip v1.6.4
+	github.com/andybalholm/brotli v1.2.2
+	github.com/bodgit/sevenzip v1.6.5
 	github.com/cavaliergopher/cpio v1.0.1
 	github.com/cavaliergopher/rpm v1.3.0
 	github.com/dsnet/compress v0.0.1
-	github.com/klauspost/compress v1.18.6
+	github.com/klauspost/compress v1.19.0
 	github.com/mewkiz/flac v1.0.13
 	github.com/nwaples/rardecode/v2 v2.2.5
 	github.com/peterebden/ar v0.0.0-20241106141004-20dc11b778e8
@@ -21,7 +21,7 @@ require (
 	github.com/stretchr/testify v1.11.1
 	github.com/therootcompany/xz v1.0.1
 	github.com/ulikunitz/xz v0.5.15
-	golang.org/x/text v0.38.0
+	golang.org/x/text v0.40.0
 	golift.io/udf v0.0.1
 )
 
