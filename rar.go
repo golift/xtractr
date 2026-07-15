@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/nwaples/rardecode/v2"
@@ -129,8 +128,8 @@ func (x *XFile) unrar(rarReader *rardecode.ReadCloser) ([]string, error) {
 		case rardecode.RedirUnixSymlink, rardecode.RedirWindowsSymlink, rardecode.RedirWindowsJunction:
 			file.FileMode |= os.ModeSymlink
 		}
-		//nolint:gocritic // this 1-argument filepath.Join removes a ./ prefix should there be one.
-		if !strings.HasPrefix(file.Path, filepath.Join(x.OutputDir)) {
+
+		if !x.pathWithinOutput(file.Path) {
 			// The file being written is trying to write outside of our base path. Malicious archive?
 			return files, fmt.Errorf("%s: %w: %s != %s (from: %s)",
 				x.FilePath, ErrInvalidPath, file.Path, x.OutputDir, header.Name)
