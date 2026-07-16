@@ -464,7 +464,12 @@ func ExtractFile(xFile *XFile) (size uint64, filesList, archiveList []string, er
 	}
 
 	// Fall back to file signature (magic number) detection.
-	xFile.Debugf("falling back to signature detection for %s (extension error: %v)", xFile.FilePath, err)
+	if err != nil {
+		xFile.Debugf("extension-based extraction failed for %s, falling back to signature detection: %v",
+			xFile.FilePath, err)
+	} else {
+		xFile.Debugf("no extension match for %s, falling back to signature detection", xFile.FilePath)
+	}
 
 	extractFn, archiveType, sigErr := detectBySignature(xFile.FilePath)
 	if sigErr != nil {
@@ -678,12 +683,14 @@ func (x *Xtractr) Rename(oldpath, newpath string) error {
 		return &ExtractError{Errs: []error{origErr, fmt.Errorf("os.Stat(): %w", err)}}
 	}
 
-	oldFile, err := os.Open(oldpath) // do not forget to close this!
+	oldFile, err := os.Open(oldpath)
 	if err != nil {
 		return &ExtractError{Errs: []error{origErr, fmt.Errorf("os.Open(): %w", err)}}
 	}
 
-	newFile, _, err := openFile(newpath, os.O_TRUNC|os.O_CREATE|os.O_WRONLY, oldFileStat.Mode())
+	defer oldFile.Close() // also closed explicitly before the delete below.
+
+	newFile, pathUsed, err := openFile(newpath, os.O_TRUNC|os.O_CREATE|os.O_WRONLY, oldFileStat.Mode())
 	if err != nil {
 		return &ExtractError{Errs: []error{origErr, err}}
 	}
@@ -694,7 +701,8 @@ func (x *Xtractr) Rename(oldpath, newpath string) error {
 		return &ExtractError{Errs: []error{origErr, fmt.Errorf("io.Copy(): %w", err)}}
 	}
 
-	_ = os.Chtimes(newpath, oldFileStat.ModTime(), oldFileStat.ModTime())
+	// pathUsed may differ from newpath if the name had to be truncated.
+	_ = os.Chtimes(pathUsed, oldFileStat.ModTime(), oldFileStat.ModTime())
 	// The copy was successful, so now delete the original file
 	_ = oldFile.Close() // Needs to be closed before delete.
 	_ = os.Remove(oldpath)
