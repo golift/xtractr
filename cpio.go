@@ -94,7 +94,13 @@ func (x *XFile) uncpioFile(cpioFile *cpio.Header, cpioReader *cpio.Reader) (uint
 
 	// This turns hard links into symlinks.
 	if cpioFile.Linkname != "" {
-		err := x.createSymlink(file.Path, cpioFile.Linkname)
+		// The link's parent folder may not have its own entry in the archive.
+		err := x.mkDir(filepath.Dir(file.Path), x.DirMode, cpioFile.ModTime)
+		if err != nil {
+			return 0, fmt.Errorf("making cpio link parent dir: %w", err)
+		}
+
+		err = x.createSymlink(file.Path, cpioFile.Linkname)
 		if err != nil {
 			return 0, fmt.Errorf("%s: %w", cpioFile.FileInfo().Name(), err)
 		}

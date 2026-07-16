@@ -106,8 +106,14 @@ func ExtractCUE(xFile *XFile) (size uint64, files, archives []string, err error)
 
 	// Write the CUE sheet into the output directory so the folder is self-contained
 	// (tracks, art, and the exact split definition for archival and re-rip verification).
+	// filepath.Base strips any directory components, and the join is verified to
+	// stay inside the output folder.
 	cueBase := filepath.Base(xFile.FilePath)
 	cueDest := filepath.Join(xFile.OutputDir, cueBase)
+
+	if !xFile.pathWithinOutput(cueDest) {
+		return 0, nil, nil, fmt.Errorf("%s: %w: %s", xFile.FilePath, ErrInvalidPath, cueDest)
+	}
 
 	writeErr := copyCueToOutput(xFile.FilePath, cueDest, xFile.FileMode)
 	if writeErr != nil {
@@ -306,6 +312,12 @@ func parseCueSheet(reader io.Reader) (*CueSheet, []cueTimestamp, error) { //noli
 // base name as the CUE file (e.g. Artist - Album.cue -> Artist - Album.flac).
 func resolveCueAudioPath(cueDir, cueFile, cueFilePath string) (string, error) {
 	path := filepath.Join(cueDir, cueFile)
+
+	// A CUE sheet must not reference audio outside its own folder; a crafted
+	// FILE entry like "../../secret.flac" would read and copy that file.
+	if !pathWithin(cueDir, path) {
+		return "", fmt.Errorf("%w: %s", ErrInvalidPath, cueFile)
+	}
 
 	_, err := os.Stat(path)
 	if err == nil {
@@ -995,7 +1007,9 @@ func copyCueToOutput(srcPath, destPath string, fileMode os.FileMode) error {
 		return fmt.Errorf("reading cue sheet: %w", err)
 	}
 
-	err = os.WriteFile(destPath, data, fileMode) //nolint:gosec // ffs.
+	// destPath is built from filepath.Base(srcPath) joined onto the output
+	// folder and verified to stay inside it at the call site; it cannot traverse.
+	err = os.WriteFile(destPath, data, fileMode) //nolint:gosec // G703: destPath is output-folder-contained (see above).
 	if err != nil {
 		return fmt.Errorf("writing cue sheet: %w", err)
 	}
