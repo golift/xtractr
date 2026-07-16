@@ -191,6 +191,53 @@ func TestParallelZIPErrorPropagation(t *testing.T) {
 	assert.ErrorIs(t, extractErr, xtractr.ErrInvalidPath)
 }
 
+// TestParallelZIPWorkerErrorPropagation covers errors that surface in the
+// worker phase (after dispatch), unlike TestParallelZIPErrorPropagation which
+// fails during the sequential prepare pass. Run with -race to validate the
+// shared first-error handling in dispatchWorkers.
+func TestParallelZIPWorkerErrorPropagation(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	zipPath := filepath.Join(tmpDir, "worker_error.zip")
+	outFile, err := os.Create(zipPath)
+	require.NoError(t, err)
+
+	zipWriter := zip.NewWriter(outFile)
+
+	// A directory entry, then a file entry with the same name: the file write
+	// fails in a worker because "adir" already exists as a directory.
+	_, err = zipWriter.Create("adir/")
+	require.NoError(t, err)
+
+	badWriter, err := zipWriter.Create("adir")
+	require.NoError(t, err)
+
+	_, err = badWriter.Write([]byte("collides with the directory"))
+	require.NoError(t, err)
+
+	// Extra files keep the dispatch loop running while the worker error lands.
+	for fileIdx := range parallelFileCount {
+		writer, createErr := zipWriter.Create(fmt.Sprintf("extra/file_%03d.txt", fileIdx))
+		require.NoError(t, createErr)
+
+		_, writeErr := writer.Write(generateTestContent(fileIdx, testContentSize))
+		require.NoError(t, writeErr)
+	}
+
+	require.NoError(t, zipWriter.Close())
+	require.NoError(t, outFile.Close())
+
+	_, _, extractErr := xtractr.ExtractZIP(&xtractr.XFile{
+		FilePath:    zipPath,
+		OutputDir:   filepath.Join(tmpDir, "out"),
+		FileMode:    0o600,
+		DirMode:     0o700,
+		FileWorkers: parallelWorkerCount,
+	})
+	require.Error(t, extractErr)
+}
+
 func TestFileWorkersDefault(t *testing.T) {
 	t.Parallel()
 

@@ -13,6 +13,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 )
@@ -92,6 +94,43 @@ func ChngInt(smallFn func(*XFile) (uint64, []string, error)) Interface {
 		size, files, err := smallFn(xFile)
 		return size, files, []string{xFile.FilePath}, err
 	}
+}
+
+// dispatchWorkers runs work for each entry using a bounded worker pool.
+// Dispatch stops when a worker reports an error, in-flight entries finish,
+// and the first error encountered is returned. Used by the random-access
+// extractors (ZIP, 7z) when XFile.FileWorkers > 1.
+func dispatchWorkers[T any](count int, entries []T, work func(T) error) error {
+	var (
+		waitGroup sync.WaitGroup
+		firstErr  atomic.Pointer[error]
+		semaphore = make(chan struct{}, count)
+	)
+
+	for idx := range entries {
+		if firstErr.Load() != nil {
+			break
+		}
+
+		semaphore <- struct{}{} // acquire worker slot
+
+		waitGroup.Go(func() {
+			defer func() { <-semaphore }() // release worker slot
+
+			err := work(entries[idx])
+			if err != nil {
+				firstErr.CompareAndSwap(nil, &err)
+			}
+		})
+	}
+
+	waitGroup.Wait()
+
+	if err := firstErr.Load(); err != nil {
+		return *err
+	}
+
+	return nil
 }
 
 // SupportedExtensions returns a slice of file extensions this library recognizes.

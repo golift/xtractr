@@ -3,7 +3,6 @@ package xtractr
 import (
 	"fmt"
 	"path/filepath"
-	"sync"
 
 	"github.com/bodgit/sevenzip"
 )
@@ -105,7 +104,7 @@ func (x *XFile) extract7zParallel(sevenZip *sevenzip.ReadCloser) (uint64, []stri
 		return x.prog.Wrote, files, normalizeVolumes(sevenZip.Volumes(), x.FilePath), err
 	}
 
-	workerErr := x.sevenZipDispatchWorkers(entries)
+	workerErr := dispatchWorkers(x.FileWorkers, entries, x.extract7zEntry)
 	if workerErr != nil {
 		return x.prog.Wrote, files, normalizeVolumes(sevenZip.Volumes(), x.FilePath), workerErr
 	}
@@ -144,39 +143,6 @@ func (x *XFile) sevenZipPrepareEntries(sevenZip *sevenzip.ReadCloser) ([]sevenZi
 	}
 
 	return entries, files, nil
-}
-
-// sevenZipDispatchWorkers sends file entries to a bounded worker pool for extraction.
-func (x *XFile) sevenZipDispatchWorkers(entries []sevenZipEntry) error {
-	var (
-		waitGroup sync.WaitGroup
-		firstErr  error
-		errOnce   sync.Once
-		semaphore = make(chan struct{}, x.FileWorkers)
-	)
-
-	for idx := range entries {
-		entry := entries[idx]
-
-		if firstErr != nil {
-			break
-		}
-
-		semaphore <- struct{}{} // acquire worker slot
-
-		waitGroup.Go(func() {
-			defer func() { <-semaphore }() // release worker slot
-
-			err := x.extract7zEntry(entry)
-			if err != nil {
-				errOnce.Do(func() { firstErr = err })
-			}
-		})
-	}
-
-	waitGroup.Wait()
-
-	return firstErr
 }
 
 // extract7zEntry extracts a single 7z file entry (used by parallel workers).
