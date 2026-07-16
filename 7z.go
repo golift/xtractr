@@ -23,14 +23,12 @@ func Extract7z(xFile *XFile) (size uint64, filesList, archiveList []string, err 
 	}
 
 	for idx, password := range passwords {
-		size, files, archives, err := extract7z(&XFile{
-			FilePath:    xFile.FilePath,
-			OutputDir:   xFile.OutputDir,
-			FileMode:    xFile.FileMode,
-			DirMode:     xFile.DirMode,
-			Password:    password,
-			FileWorkers: xFile.FileWorkers,
-		})
+		// Copy the input so the retry keeps the logger, progress callbacks,
+		// SquashRoot and the rest of the caller-provided configuration.
+		attempt := *xFile
+		attempt.Password = password
+
+		size, files, archives, err := extract7z(&attempt)
 		if err != nil && idx == len(passwords)-1 {
 			return size, files, archives, fmt.Errorf("used password %d of %d: %w", idx+1, len(passwords), err)
 		} else if err == nil {

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -25,6 +26,48 @@ func TestExtractRAR(t *testing.T) {
 	assert.Equal(t, testDataSize, size)
 	assert.Len(t, archives, 1)
 	assert.Len(t, files, len(filesInTestArchive))
+}
+
+// TestExtractRARPasswordRetryKeepsConfig guards against the password-retry
+// path dropping the caller-provided XFile configuration: the retries used to
+// build a bare XFile, silently losing the logger (and SquashRoot, progress
+// callbacks, etc.) for every attempt after the first.
+func TestExtractRARPasswordRetryKeepsConfig(t *testing.T) {
+	t.Parallel()
+
+	logger := &countingLogger{t: t}
+	xFile := &xtractr.XFile{
+		FilePath:  "./test_data/archive.rar",
+		OutputDir: t.TempDir(),
+		Passwords: []string{"wrong-password", "some_password"}, // correct password is second.
+	}
+	xFile.SetLogger(logger)
+
+	size, files, archives, err := xtractr.ExtractRAR(xFile)
+
+	require.NoError(t, err)
+	assert.Equal(t, testDataSize, size)
+	assert.Len(t, archives, 1)
+	assert.Len(t, files, len(filesInTestArchive))
+	assert.Positive(t, logger.debugCount.Load(),
+		"the winning password retry must keep the caller's logger")
+}
+
+// countingLogger counts log lines so tests can verify a logger is wired up.
+type countingLogger struct {
+	t          *testing.T
+	printCount atomic.Int64
+	debugCount atomic.Int64
+}
+
+func (c *countingLogger) Printf(format string, v ...any) {
+	c.printCount.Add(1)
+	c.t.Logf(format, v...)
+}
+
+func (c *countingLogger) Debugf(format string, v ...any) {
+	c.debugCount.Add(1)
+	c.t.Logf(format, v...)
 }
 
 // TestExtractRARMultiVolume guards against the regression where only the entry
