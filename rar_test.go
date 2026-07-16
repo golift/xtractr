@@ -110,7 +110,9 @@ func TestExtractRARMultiVolumeOldScheme(t *testing.T) {
 		}
 
 		link := filepath.Join(dir, name)
-		if err := os.Symlink(payload, link); err != nil {
+
+		err := os.Symlink(payload, link)
+		if err != nil {
 			t.Skipf("symlinks unavailable on this platform: %v", err)
 		}
 

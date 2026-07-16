@@ -196,6 +196,106 @@ func TestZipSymlinkTooLong(t *testing.T) {
 	assert.ErrorIs(t, err, xtractr.ErrSymlinkTooLong)
 }
 
+// TestPreExistingSymlinkDirEscape ensures a symlink already present in the
+// output folder is not followed when an archive writes files beneath it.
+// The lexical path (out/sub/file.txt) looks safe, but sub -> ../evil would
+// land the payload outside the output folder.
+func TestPreExistingSymlinkDirEscape(t *testing.T) {
+	t.Parallel()
+
+	tmp := t.TempDir()
+
+	err := os.Symlink("target", filepath.Join(tmp, "symlink-probe"))
+	if err != nil {
+		t.Skipf("symlinks unavailable on this platform: %v", err)
+	}
+
+	payload := []byte("escape attempt")
+
+	for _, archive := range []struct {
+		name    string
+		path    string
+		extract func(*xtractr.XFile) (uint64, []string, error)
+	}{
+		{name: "zip", path: filepath.Join(tmp, "escape.zip"), extract: xtractr.ExtractZIP},
+		{name: "tar", path: filepath.Join(tmp, "escape.tar"), extract: xtractr.ExtractTar},
+	} {
+		switch filepath.Ext(archive.path) {
+		case ".zip":
+			require.NoError(t, writeZipWithTraversal(archive.path, "sub/file.txt", string(payload)))
+		case ".tar":
+			require.NoError(t, writeTarWithTraversal(archive.path, "sub/file.txt", string(payload)))
+		}
+
+		outputDir := filepath.Join(tmp, archive.name+"-out")
+		evilDir := filepath.Join(tmp, archive.name+"-evil")
+
+		require.NoError(t, os.MkdirAll(outputDir, 0o750))
+		require.NoError(t, os.MkdirAll(evilDir, 0o750))
+		// The pre-existing symlink an attacker left in the output folder.
+		require.NoError(t, os.Symlink(evilDir, filepath.Join(outputDir, "sub")))
+
+		_, _, err := archive.extract(&xtractr.XFile{
+			FilePath:  archive.path,
+			OutputDir: outputDir,
+			FileMode:  0o644,
+			DirMode:   0o755,
+		})
+		require.Error(t, err, archive.name)
+		require.ErrorIs(t, err, xtractr.ErrInvalidPath, archive.name)
+
+		_, statErr := os.Stat(filepath.Join(evilDir, "file.txt"))
+		assert.ErrorIs(t, statErr, os.ErrNotExist, archive.name+": payload must not land outside the output folder")
+	}
+}
+
+// TestFinalComponentSymlinkNotFollowed ensures a pre-existing symlink at the
+// exact path an archive member writes to is replaced, not followed through.
+func TestFinalComponentSymlinkNotFollowed(t *testing.T) {
+	t.Parallel()
+
+	tmp := t.TempDir()
+
+	err := os.Symlink("target", filepath.Join(tmp, "symlink-probe"))
+	if err != nil {
+		t.Skipf("symlinks unavailable on this platform: %v", err)
+	}
+
+	const payload = "archive payload"
+
+	victim := filepath.Join(tmp, "victim.txt")
+	require.NoError(t, os.WriteFile(victim, []byte("original"), 0o600))
+
+	archivePath := filepath.Join(tmp, "replace.zip")
+	require.NoError(t, writeZipWithTraversal(archivePath, "file.txt", payload))
+
+	outputDir := filepath.Join(tmp, "out")
+	require.NoError(t, os.MkdirAll(outputDir, 0o750))
+	require.NoError(t, os.Symlink(victim, filepath.Join(outputDir, "file.txt")))
+
+	_, _, err = xtractr.ExtractZIP(&xtractr.XFile{
+		FilePath:  archivePath,
+		OutputDir: outputDir,
+		FileMode:  0o644,
+		DirMode:   0o755,
+	})
+	require.NoError(t, err)
+
+	// The victim file outside the output folder must be untouched.
+	data, err := os.ReadFile(victim)
+	require.NoError(t, err)
+	assert.Equal(t, "original", string(data))
+
+	// And the archive member must have replaced the link with a regular file.
+	info, err := os.Lstat(filepath.Join(outputDir, "file.txt"))
+	require.NoError(t, err)
+	assert.Zero(t, info.Mode()&os.ModeSymlink, "symlink must be replaced by a regular file")
+
+	data, err = os.ReadFile(filepath.Join(outputDir, "file.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, payload, string(data))
+}
+
 func createSymlinkZip(dest string) error {
 	archiveFile, err := os.Create(dest)
 	if err != nil {

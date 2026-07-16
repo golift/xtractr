@@ -995,7 +995,7 @@ func copyCueToOutput(srcPath, destPath string, fileMode os.FileMode) error {
 		return fmt.Errorf("reading cue sheet: %w", err)
 	}
 
-	err = os.WriteFile(destPath, data, fileMode) //nolint:gosec // ffs.
+	err = os.WriteFile(destPath, data, fileMode)
 	if err != nil {
 		return fmt.Errorf("writing cue sheet: %w", err)
 	}
