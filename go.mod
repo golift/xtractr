@@ -11,7 +11,7 @@ require (
 	github.com/cavaliergopher/cpio v1.0.1
 	github.com/cavaliergopher/rpm v1.3.0
 	github.com/dsnet/compress v0.0.1
-	github.com/klauspost/compress v1.18.6
+	github.com/klauspost/compress v1.19.1
 	github.com/mewkiz/flac v1.0.13
 	github.com/nwaples/rardecode/v2 v2.2.5
 	github.com/peterebden/ar v0.0.0-20241106141004-20dc11b778e8
