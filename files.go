@@ -894,12 +894,12 @@ func (x *XFile) writeFile(file *file, parallel bool) (uint64, error) {
 		return 0, err
 	}
 
-	flags, err := openFlagsForExtract(file.Path)
+	flags, usedPath, err := openFlagsForExtract(file.Path)
 	if err != nil {
 		return 0, err
 	}
 
-	fout, pathUsed, err := openFile(file.Path, flags, x.safeFileMode(file.FileMode))
+	fout, pathUsed, err := openFile(usedPath, flags, x.safeFileMode(file.FileMode))
 	if err != nil {
 		return 0, err
 	}
@@ -924,25 +924,63 @@ func (x *XFile) writeFile(file *file, parallel bool) (uint64, error) {
 }
 
 // openFlagsForExtract returns OpenFile flags that will not follow a symlink at
-// path. A symlink already sitting at the write target is followed by O_TRUNC,
-// so it is removed and the file is created with O_EXCL. O_EXCL is also used
-// when the path does not exist, so a symlink planted in the race window cannot
-// be followed either.
-func openFlagsForExtract(path string) (int, error) {
+// path, plus the path those flags apply to. A symlink already sitting at the
+// write target is followed by O_TRUNC, so it is removed and the file is created
+// with O_EXCL. O_EXCL is also used when the path does not exist, so a symlink
+// planted in the race window cannot be followed either.
+//
+// If Lstat fails with ENAMETOOLONG, the path is truncated first (via
+// TruncatePathForFS) and the symlink check runs against that shorter name.
+// Otherwise openFile would later truncate and OpenFile with O_TRUNC, following
+// a planted link at the truncated target.
+func openFlagsForExtract(path string) (int, string, error) {
 	info, statErr := os.Lstat(path)
+	if IsErrNameTooLong(statErr) {
+		shortPath, err := TruncatePathForFS(path)
+		if err != nil {
+			return 0, "", err
+		}
+
+		path = shortPath
+		info, statErr = os.Lstat(path)
+	}
+
 	switch {
 	case statErr == nil && info.Mode()&os.ModeSymlink != 0:
 		err := os.Remove(path)
 		if err != nil {
-			return 0, fmt.Errorf("removing symlink at archived file path '%s': %w", path, err)
+			return 0, "", fmt.Errorf("removing symlink at archived file path '%s': %w", path, err)
 		}
 
-		return os.O_RDWR | os.O_CREATE | os.O_EXCL, nil
+		return os.O_RDWR | os.O_CREATE | os.O_EXCL, path, nil
 	case errors.Is(statErr, os.ErrNotExist):
-		return os.O_RDWR | os.O_CREATE | os.O_EXCL, nil
+		return os.O_RDWR | os.O_CREATE | os.O_EXCL, path, nil
 	default:
-		return os.O_RDWR | os.O_CREATE | os.O_TRUNC, nil
+		return os.O_RDWR | os.O_CREATE | os.O_TRUNC, path, nil
 	}
+}
+
+// writeExtractFile writes data to path without following a final-component
+// symlink. Used for non-archive output (CUE copy, embedded pictures) that
+// otherwise goes through os.WriteFile, which follows links.
+func writeExtractFile(path string, data []byte, mode os.FileMode) error {
+	flags, usedPath, err := openFlagsForExtract(path)
+	if err != nil {
+		return err
+	}
+
+	fout, _, err := openFile(usedPath, flags, mode)
+	if err != nil {
+		return err
+	}
+	defer fout.Close()
+
+	_, err = fout.Write(data)
+	if err != nil {
+		return fmt.Errorf("writing file '%s': %w", usedPath, err)
+	}
+
+	return nil
 }
 
 // maxSymlinkTarget is the maximum bytes allowed for a symlink target read from

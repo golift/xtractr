@@ -987,7 +987,7 @@ func writePicturesToFiles(outputDir string, pictures []*meta.Picture, fileMode o
 		name += "." + ext
 		path := filepath.Join(outputDir, name)
 
-		err := os.WriteFile(path, pic.Data, fileMode)
+		err := writeExtractFile(path, pic.Data, fileMode)
 		if err != nil {
 			return paths, totalBytes, fmt.Errorf("writing %s: %w", name, err)
 		}
@@ -1007,9 +1007,7 @@ func copyCueToOutput(srcPath, destPath string, fileMode os.FileMode) error {
 		return fmt.Errorf("reading cue sheet: %w", err)
 	}
 
-	// destPath is built from filepath.Base(srcPath) joined onto the output
-	// folder and verified to stay inside it at the call site; it cannot traverse.
-	err = os.WriteFile(destPath, data, fileMode) //nolint:gosec // G703: destPath is output-folder-contained (see above).
+	err = writeExtractFile(destPath, data, fileMode)
 	if err != nil {
 		return fmt.Errorf("writing cue sheet: %w", err)
 	}

@@ -3,6 +3,7 @@ package xtractr
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -149,4 +150,57 @@ func TestMkDirRefusesPreExistingSymlinkDir(t *testing.T) {
 	info, err := os.Stat(evil)
 	require.NoError(t, err)
 	assert.Equal(t, oldTime.Unix(), info.ModTime().Unix(), "rejected path must not be Chtimes'd")
+}
+
+// TestOpenFlagsForExtractNameTooLongUsesExcl is the Copilot finding: Lstat of a
+// too-long name fails with ENAMETOOLONG, which used to fall through to O_TRUNC.
+// openFile then truncates and OpenFile-follows a raced symlink at the short name.
+func TestOpenFlagsForExtractNameTooLongUsesExcl(t *testing.T) {
+	t.Parallel()
+
+	tmp := t.TempDir()
+	long := filepath.Join(tmp, strings.Repeat("a", 300)+".txt")
+
+	_, err := os.Lstat(long)
+	if !IsErrNameTooLong(err) {
+		t.Skipf("filesystem accepted a 300-byte filename (got %v)", err)
+	}
+
+	flags, usedPath, err := openFlagsForExtract(long)
+	require.NoError(t, err)
+	assert.Equal(t, os.O_RDWR|os.O_CREATE|os.O_EXCL, flags)
+	assert.LessOrEqual(t, len(filepath.Base(usedPath)), nameMax)
+}
+
+// TestWriteExtractFileNameTooLongDoesNotFollowTruncatedSymlink plants a symlink
+// at the truncated name, then writes a too-long path. The victim must stay intact.
+func TestWriteExtractFileNameTooLongDoesNotFollowTruncatedSymlink(t *testing.T) {
+	t.Parallel()
+
+	tmp := t.TempDir()
+
+	err := os.Symlink("target", filepath.Join(tmp, "symlink-probe"))
+	if err != nil {
+		t.Skipf("symlinks unavailable on this platform: %v", err)
+	}
+
+	long := filepath.Join(tmp, strings.Repeat("a", 300)+".txt")
+
+	_, err = os.Lstat(long)
+	if !IsErrNameTooLong(err) {
+		t.Skipf("filesystem accepted a 300-byte filename (got %v)", err)
+	}
+
+	victim := filepath.Join(tmp, "victim")
+	require.NoError(t, os.WriteFile(victim, []byte("secret"), 0o600))
+
+	short, err := TruncatePathForFS(long)
+	require.NoError(t, err)
+	require.NoError(t, os.Symlink(victim, short))
+
+	require.NoError(t, writeExtractFile(long, []byte("payload"), 0o600))
+
+	got, err := os.ReadFile(victim)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("secret"), got, "must not follow symlink at truncated path")
 }
