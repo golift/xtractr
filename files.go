@@ -844,16 +844,24 @@ func openStatFile(path string) (*os.File, os.FileInfo, error) {
 // mkDir creates a folder (and parents) with safe permissions.
 // It refuses to leave the output folder through a pre-existing symlink.
 func (x *XFile) mkDir(path string, mode os.FileMode, mtime time.Time) error {
-	defer os.Chtimes(path, time.Time{}, mtime)
+	// Check before MkdirAll so we do not create directories (or Chtimes them)
+	// through a symlink that already points outside OutputDir.
+	if !x.resolvedWithinOutput(path) {
+		return fmt.Errorf("%s: %w: %s resolves outside the output folder", x.FilePath, ErrInvalidPath, path)
+	}
 
 	err := os.MkdirAll(path, x.safeDirMode(mode))
 	if err != nil {
 		return err //nolint:wrapcheck
 	}
 
+	// Recheck after create: MkdirAll follows symlinks, so a race could still
+	// land the new folder outside OutputDir.
 	if !x.resolvedWithinOutput(path) {
 		return fmt.Errorf("%s: %w: %s resolves outside the output folder", x.FilePath, ErrInvalidPath, path)
 	}
+
+	_ = os.Chtimes(path, time.Time{}, mtime)
 
 	return nil
 }
@@ -886,18 +894,12 @@ func (x *XFile) writeFile(file *file, parallel bool) (uint64, error) {
 		return 0, err
 	}
 
-	// A symlink already sitting at the target path is followed by O_TRUNC,
-	// writing the archived data wherever the link points. Remove it so the
-	// archive member replaces it instead of writing through it.
-	info, statErr := os.Lstat(file.Path)
-	if statErr == nil && info.Mode()&os.ModeSymlink != 0 {
-		err := os.Remove(file.Path)
-		if err != nil {
-			return 0, fmt.Errorf("removing symlink at archived file path '%s': %w", file.Path, err)
-		}
+	flags, err := openFlagsForExtract(file.Path)
+	if err != nil {
+		return 0, err
 	}
 
-	fout, pathUsed, err := openFile(file.Path, os.O_RDWR|os.O_CREATE|os.O_TRUNC, x.safeFileMode(file.FileMode))
+	fout, pathUsed, err := openFile(file.Path, flags, x.safeFileMode(file.FileMode))
 	if err != nil {
 		return 0, err
 	}
@@ -919,6 +921,28 @@ func (x *XFile) writeFile(file *file, parallel bool) (uint64, error) {
 	defer os.Chtimes(file.Path, file.Atime, file.Mtime)
 
 	return uint64(size), nil
+}
+
+// openFlagsForExtract returns OpenFile flags that will not follow a symlink at
+// path. A symlink already sitting at the write target is followed by O_TRUNC,
+// so it is removed and the file is created with O_EXCL. O_EXCL is also used
+// when the path does not exist, so a symlink planted in the race window cannot
+// be followed either.
+func openFlagsForExtract(path string) (int, error) {
+	info, statErr := os.Lstat(path)
+	switch {
+	case statErr == nil && info.Mode()&os.ModeSymlink != 0:
+		err := os.Remove(path)
+		if err != nil {
+			return 0, fmt.Errorf("removing symlink at archived file path '%s': %w", path, err)
+		}
+
+		return os.O_RDWR | os.O_CREATE | os.O_EXCL, nil
+	case errors.Is(statErr, os.ErrNotExist):
+		return os.O_RDWR | os.O_CREATE | os.O_EXCL, nil
+	default:
+		return os.O_RDWR | os.O_CREATE | os.O_TRUNC, nil
+	}
 }
 
 // maxSymlinkTarget is the maximum bytes allowed for a symlink target read from
@@ -1045,10 +1069,11 @@ func resolveLinkTarget(linkPath, linkName string) string {
 	return filepath.Clean(filepath.Join(filepath.Dir(linkPath), linkName))
 }
 
-// ensureLinkWithinOutput rejects symlink targets that escape OutputDir.
+// ensureLinkWithinOutput rejects symlink targets that escape OutputDir,
+// including those that only escape after following a pre-existing symlink.
 func (x *XFile) ensureLinkWithinOutput(linkPath, linkName string) error {
 	resolved := resolveLinkTarget(linkPath, linkName)
-	if !x.pathWithinOutput(resolved) {
+	if !x.pathWithinOutput(resolved) || !x.resolvedWithinOutput(resolved) {
 		return fmt.Errorf("%s: %w: %s (from: %s)", x.FilePath, ErrInvalidPath, resolved, linkName)
 	}
 

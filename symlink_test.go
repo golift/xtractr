@@ -245,7 +245,11 @@ func TestPreExistingSymlinkDirEscape(t *testing.T) {
 		require.ErrorIs(t, err, xtractr.ErrInvalidPath, archive.name)
 
 		_, statErr := os.Stat(filepath.Join(evilDir, "file.txt"))
-		assert.ErrorIs(t, statErr, os.ErrNotExist, archive.name+": payload must not land outside the output folder")
+		require.ErrorIs(t, statErr, os.ErrNotExist, archive.name+": payload must not land outside the output folder")
+
+		entries, readErr := os.ReadDir(evilDir)
+		require.NoError(t, readErr, archive.name)
+		assert.Empty(t, entries, archive.name+": mkDir must not create directories through the output-folder symlink")
 	}
 }
 
@@ -294,6 +298,42 @@ func TestFinalComponentSymlinkNotFollowed(t *testing.T) {
 	data, err = os.ReadFile(filepath.Join(outputDir, "file.txt"))
 	require.NoError(t, err)
 	assert.Equal(t, payload, string(data))
+}
+
+// TestSymlinkThroughPlantedDirRejected ensures an archive symlink whose
+// lexical target is inside OutputDir is still rejected when it would resolve
+// through a pre-existing symlink that points outside.
+func TestSymlinkThroughPlantedDirRejected(t *testing.T) {
+	t.Parallel()
+
+	tmp := t.TempDir()
+
+	err := os.Symlink("target", filepath.Join(tmp, "symlink-probe"))
+	if err != nil {
+		t.Skipf("symlinks unavailable on this platform: %v", err)
+	}
+
+	outputDir := filepath.Join(tmp, "out")
+	evilDir := filepath.Join(tmp, "evil")
+
+	require.NoError(t, os.MkdirAll(outputDir, 0o750))
+	require.NoError(t, os.MkdirAll(evilDir, 0o750))
+	require.NoError(t, os.Symlink(evilDir, filepath.Join(outputDir, "sub")))
+
+	archivePath := filepath.Join(tmp, "through.zip")
+	require.NoError(t, createLinkOnlyZip(archivePath, "mylink", "sub/pwned"))
+
+	_, _, err = xtractr.ExtractZIP(&xtractr.XFile{
+		FilePath:  archivePath,
+		OutputDir: outputDir,
+		FileMode:  0o644,
+		DirMode:   0o755,
+	})
+	require.Error(t, err)
+	require.ErrorIs(t, err, xtractr.ErrInvalidPath)
+
+	_, statErr := os.Lstat(filepath.Join(evilDir, "pwned"))
+	require.ErrorIs(t, statErr, os.ErrNotExist)
 }
 
 func createSymlinkZip(dest string) error {
