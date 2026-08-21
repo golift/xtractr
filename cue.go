@@ -72,7 +72,7 @@ func (t cueTimestamp) toSamples(sampleRate uint32) uint64 {
 }
 
 // ExtractCUE extracts individual tracks from a FLAC file referenced by a CUE sheet.
-// The xFile.FilePath should point to the .cue file.
+// The xFile.FilePath should point to the .cue file (or .cue.txt).
 func ExtractCUE(xFile *XFile) (size uint64, files, archives []string, err error) {
 	cue, timestamps, err := parseCueSheetFile(xFile.FilePath)
 	if err != nil {
@@ -330,7 +330,7 @@ func resolveCueAudioPath(cueDir, cueFile, cueFilePath string) (string, error) {
 	}
 
 	// Fallback: try audio files with the same base name as the CUE file (handles O vs Ö, encoding mismatches).
-	baseNoExt := strings.TrimSuffix(filepath.Base(cueFilePath), filepath.Ext(cueFilePath))
+	baseNoExt := cueBaseName(cueFilePath)
 
 	for _, fallbackExt := range []string{".flac", ".ape"} {
 		fallbackPath := filepath.Join(cueDir, baseNoExt+fallbackExt)
@@ -342,6 +342,21 @@ func resolveCueAudioPath(cueDir, cueFile, cueFilePath string) (string, error) {
 	}
 
 	return "", fmt.Errorf("%w: %s", ErrAudioNotFound, path)
+}
+
+// cueBaseName returns the CUE sheet filename without its sheet suffix.
+// Release groups sometimes ship the sheet as .cue.txt; filepath.Ext would only
+// strip .txt and leave a ".cue" stem that does not match album.flac.
+func cueBaseName(path string) string {
+	base := filepath.Base(path)
+	lower := strings.ToLower(base)
+
+	const cueTxtSuffix = ".cue.txt"
+	if strings.HasSuffix(lower, cueTxtSuffix) {
+		return base[:len(base)-len(cueTxtSuffix)]
+	}
+
+	return strings.TrimSuffix(base, filepath.Ext(base))
 }
 
 // splitCueLine splits a CUE line into its command and arguments.
