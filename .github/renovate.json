@@ -6,8 +6,14 @@
   ],
   "packageRules": [
     {
-      "matchDatasources": ["go", "github-releases", "github-tags"],
+      "description": "Automerge non-major Go module updates when checks pass",
+      "matchManagers": ["gomod"],
       "matchUpdateTypes": ["minor", "patch", "pin", "digest"],
+      "automerge": true
+    },
+    {
+      "description": "Automerge GitHub Actions updates, including majors, when checks pass",
+      "matchManagers": ["github-actions"],
       "automerge": true
     }
   ]

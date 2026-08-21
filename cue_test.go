@@ -167,6 +167,8 @@ func TestCueParseCueSheet(t *testing.T) {
 
 	assert.True(t, xtractr.IsArchiveFile("test.cue"), ".cue should be recognized as an archive file")
 	assert.True(t, xtractr.IsArchiveFile("TEST.CUE"), ".CUE (uppercase) should be recognized")
+	assert.True(t, xtractr.IsArchiveFile("album.cue.txt"), ".cue.txt should be recognized as an archive file")
+	assert.True(t, xtractr.IsArchiveFile("ALBUM.CUE.TXT"), ".CUE.TXT (uppercase) should be recognized")
 }
 
 func TestCueExtractCUE(t *testing.T) {
@@ -380,6 +382,86 @@ func TestCueExtractViaExtractFile(t *testing.T) {
 	assert.Len(t, files, 3, "expected 2 track files + CUE sheet")
 	assert.Len(t, archiveList, 2)
 	assert.Positive(t, size)
+}
+
+// TestCueTxtExtractViaExtractFile covers release groups that ship the sheet as .cue.txt.
+func TestCueTxtExtractViaExtractFile(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	outputDir := filepath.Join(tmpDir, "output")
+
+	totalSamples := uint64(30 * testSampleRate)
+	flacPath := filepath.Join(tmpDir, "album.flac")
+	generateTestFLAC(t, flacPath, totalSamples)
+
+	cueContent := strings.Join([]string{
+		`PERFORMER "Artist"`,
+		`TITLE "Album"`,
+		`FILE "album.flac" WAVE`,
+		`  TRACK 01 AUDIO`,
+		`    TITLE "Track One"`,
+		`    INDEX 01 00:00:00`,
+		`  TRACK 02 AUDIO`,
+		`    TITLE "Track Two"`,
+		`    INDEX 01 00:15:00`,
+	}, "\n") + "\n"
+	cuePath := filepath.Join(tmpDir, "album.cue.txt")
+	require.NoError(t, os.WriteFile(cuePath, []byte(cueContent), 0o600))
+
+	found := xtractr.FindCompressedFiles(xtractr.Filter{Path: tmpDir})
+	require.Contains(t, found.List(), cuePath)
+
+	size, files, archiveList, err := xtractr.ExtractFile(&xtractr.XFile{
+		FilePath:  cuePath,
+		OutputDir: outputDir,
+		FileMode:  0o600,
+		DirMode:   0o755,
+	})
+	require.NoError(t, err, "ExtractFile with .cue.txt")
+	assert.Len(t, files, 3, "expected 2 track files + CUE sheet")
+	assert.Len(t, archiveList, 2)
+	assert.Positive(t, size)
+	assert.Contains(t, files, filepath.Join(outputDir, "album.cue.txt"))
+}
+
+// TestCueTxtBasenameFallback ensures album.cue.txt still finds album.flac when
+// the FILE line does not match (filepath.Ext would otherwise leave a ".cue" stem).
+func TestCueTxtBasenameFallback(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	outputDir := filepath.Join(tmpDir, "output")
+
+	totalSamples := uint64(60 * testSampleRate)
+	flacPath := filepath.Join(tmpDir, "Album.flac")
+	generateTestFLAC(t, flacPath, totalSamples)
+
+	cueContent := strings.Join([]string{
+		`PERFORMER "Artist"`,
+		`TITLE "Album"`,
+		`FILE "Other Name.flac" WAVE`,
+		`  TRACK 01 AUDIO`,
+		`    TITLE "Track One"`,
+		`    INDEX 01 00:00:00`,
+		`  TRACK 02 AUDIO`,
+		`    TITLE "Track Two"`,
+		`    INDEX 01 00:30:00`,
+	}, "\n") + "\n"
+	cuePath := filepath.Join(tmpDir, "Album.cue.txt")
+	require.NoError(t, os.WriteFile(cuePath, []byte(cueContent), 0o600))
+
+	size, files, archiveList, err := xtractr.ExtractCUE(&xtractr.XFile{
+		FilePath:  cuePath,
+		OutputDir: outputDir,
+		FileMode:  0o600,
+		DirMode:   0o755,
+	})
+	require.NoError(t, err, "ExtractCUE should find Album.flac via same-basename fallback")
+	assert.Len(t, files, 3)
+	assert.Len(t, archiveList, 2)
+	assert.Positive(t, size)
+	assert.Contains(t, archiveList, flacPath)
 }
 
 func TestCueMissingFlac(t *testing.T) {
@@ -946,6 +1028,17 @@ func TestCueSupportedExtensions(t *testing.T) {
 	}
 
 	assert.True(t, found, ".cue should be in supported extensions list")
+
+	foundTxt := false
+
+	for _, ext := range extensions {
+		if strings.EqualFold(ext, ".cue.txt") {
+			foundTxt = true
+			break
+		}
+	}
+
+	assert.True(t, foundTxt, ".cue.txt should be in supported extensions list")
 }
 
 // generateStereoFLAC writes a stereo FLAC with distinct left/right channels using

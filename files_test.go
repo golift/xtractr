@@ -149,6 +149,11 @@ func TestAllExcept(t *testing.T) {
 
 	assert.Len(t, allExcept, len(xtractr.SupportedExtensions())-len(includeOnlyThese),
 		"we should have 3 fewer entries that the total supported extensions")
+
+	// Callers that keep .cue (e.g. Unpackerr SplitFlac) should also keep .cue.txt.
+	exceptCue := xtractr.AllExcept(".cue")
+	assert.NotContains(t, exceptCue, ".cue")
+	assert.NotContains(t, exceptCue, ".cue.txt")
 }
 
 func TestIsErrNameTooLong(t *testing.T) {

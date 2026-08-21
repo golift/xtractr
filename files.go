@@ -81,6 +81,7 @@ var extension2function = []archive{
 	{Type: "zstandard", Ext: ".zst", Fn: ChngInt(ExtractZstandard)},
 	{Type: "zstandard", Ext: ".zstd", Fn: ChngInt(ExtractZstandard)},
 	{Type: "zlib", Ext: ".zz", Fn: ChngInt(ExtractZlib)},
+	{Type: "flac", Ext: ".cue.txt", Fn: ExtractCUE},
 	{Type: "flac", Ext: ".cue", Fn: ExtractCUE},
 }
 
@@ -666,13 +667,23 @@ func (x *Xtractr) Rename(oldpath, newpath string) error {
 // AllExcept can be used as an input to ExcludeSuffix in a Filter.
 // Returns a list of supported extensions minus the ones provided.
 // Extensions for like-types such as .rar and .r00 need to both be provided.
-// Same for .tar.gz and .tgz variants.
+// Same for .tar.gz and .tgz variants. Passing .cue also keeps .cue.txt.
 func AllExcept(onlyThese ...string) Exclude {
+	keep := make([]string, 0, len(onlyThese)+1)
+	keep = append(keep, onlyThese...)
+
+	for _, str := range onlyThese {
+		if strings.EqualFold(str, ".cue") {
+			keep = append(keep, ".cue.txt")
+			break
+		}
+	}
+
 	// Start by excluding everything.
 	output := SupportedExtensions()
 
 	// Loop through the extensions we want to keep.
-	for _, str := range onlyThese {
+	for _, str := range keep {
 		idx := 0
 		// Remove each one from the output list.
 		for _, ext := range output {
