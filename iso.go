@@ -98,7 +98,14 @@ func (x *XFile) uniso(isoFile *iso9660.File, parent string) (uint64, []string, e
 	}
 
 	if itemName != "" {
-		err := x.mkDir(filepath.Join(x.OutputDir, itemName), isoFile.Mode(), isoFile.ModTime())
+		dirPath := x.clean(itemName)
+		if !x.pathWithinOutput(dirPath) {
+			// The directory is trying to land outside of our base path. Malicious ISO?
+			return 0, nil, fmt.Errorf("%s: %w: %s (from: %s)",
+				x.FilePath, ErrInvalidPath, dirPath, isoFile.Name())
+		}
+
+		err := x.mkDir(dirPath, isoFile.Mode(), isoFile.ModTime())
 		if err != nil {
 			return 0, nil, fmt.Errorf("making iso directory %s: %w", isoFile.Name(), err)
 		}

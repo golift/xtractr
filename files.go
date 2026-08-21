@@ -13,6 +13,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 )
@@ -93,6 +95,43 @@ func ChngInt(smallFn func(*XFile) (uint64, []string, error)) Interface {
 		size, files, err := smallFn(xFile)
 		return size, files, []string{xFile.FilePath}, err
 	}
+}
+
+// dispatchWorkers runs work for each entry using a bounded worker pool.
+// Dispatch stops when a worker reports an error, in-flight entries finish,
+// and the first error encountered is returned. Used by the random-access
+// extractors (ZIP, 7z) when XFile.FileWorkers > 1.
+func dispatchWorkers[T any](count int, entries []T, work func(T) error) error {
+	var (
+		waitGroup sync.WaitGroup
+		firstErr  atomic.Pointer[error]
+		semaphore = make(chan struct{}, count)
+	)
+
+	for idx := range entries {
+		if firstErr.Load() != nil {
+			break
+		}
+
+		semaphore <- struct{}{} // acquire worker slot
+
+		waitGroup.Go(func() {
+			defer func() { <-semaphore }() // release worker slot
+
+			err := work(entries[idx])
+			if err != nil {
+				firstErr.CompareAndSwap(nil, &err)
+			}
+		})
+	}
+
+	waitGroup.Wait()
+
+	if err := firstErr.Load(); err != nil {
+		return *err
+	}
+
+	return nil
 }
 
 // SupportedExtensions returns a slice of file extensions this library recognizes.
@@ -426,7 +465,12 @@ func ExtractFile(xFile *XFile) (size uint64, filesList, archiveList []string, er
 	}
 
 	// Fall back to file signature (magic number) detection.
-	xFile.Debugf("falling back to signature detection for %s (extension error: %v)", xFile.FilePath, err)
+	if err != nil {
+		xFile.Debugf("extension-based extraction failed for %s, falling back to signature detection: %v",
+			xFile.FilePath, err)
+	} else {
+		xFile.Debugf("no extension match for %s, falling back to signature detection", xFile.FilePath)
+	}
 
 	extractFn, archiveType, sigErr := detectBySignature(xFile.FilePath)
 	if sigErr != nil {
@@ -640,12 +684,14 @@ func (x *Xtractr) Rename(oldpath, newpath string) error {
 		return &ExtractError{Errs: []error{origErr, fmt.Errorf("os.Stat(): %w", err)}}
 	}
 
-	oldFile, err := os.Open(oldpath) // do not forget to close this!
+	oldFile, err := os.Open(oldpath)
 	if err != nil {
 		return &ExtractError{Errs: []error{origErr, fmt.Errorf("os.Open(): %w", err)}}
 	}
 
-	newFile, _, err := openFile(newpath, os.O_TRUNC|os.O_CREATE|os.O_WRONLY, oldFileStat.Mode())
+	defer oldFile.Close() // also closed explicitly before the delete below.
+
+	newFile, pathUsed, err := openFile(newpath, os.O_TRUNC|os.O_CREATE|os.O_WRONLY, oldFileStat.Mode())
 	if err != nil {
 		return &ExtractError{Errs: []error{origErr, err}}
 	}
@@ -656,7 +702,8 @@ func (x *Xtractr) Rename(oldpath, newpath string) error {
 		return &ExtractError{Errs: []error{origErr, fmt.Errorf("io.Copy(): %w", err)}}
 	}
 
-	_ = os.Chtimes(newpath, oldFileStat.ModTime(), oldFileStat.ModTime())
+	// pathUsed may differ from newpath if the name had to be truncated.
+	_ = os.Chtimes(pathUsed, oldFileStat.ModTime(), oldFileStat.ModTime())
 	// The copy was successful, so now delete the original file
 	_ = oldFile.Close() // Needs to be closed before delete.
 	_ = os.Remove(oldpath)
@@ -805,9 +852,29 @@ func openStatFile(path string) (*os.File, os.FileInfo, error) {
 	return file, stat, nil
 }
 
+// mkDir creates a folder (and parents) with safe permissions.
+// It refuses to leave the output folder through a pre-existing symlink.
 func (x *XFile) mkDir(path string, mode os.FileMode, mtime time.Time) error {
-	defer os.Chtimes(path, time.Time{}, mtime)
-	return os.MkdirAll(path, x.safeDirMode(mode)) //nolint:wrapcheck
+	// Check before MkdirAll so we do not create directories (or Chtimes them)
+	// through a symlink that already points outside OutputDir.
+	if !x.resolvedWithinOutput(path) {
+		return fmt.Errorf("%s: %w: %s resolves outside the output folder", x.FilePath, ErrInvalidPath, path)
+	}
+
+	err := os.MkdirAll(path, x.safeDirMode(mode))
+	if err != nil {
+		return err //nolint:wrapcheck
+	}
+
+	// Recheck after create: MkdirAll follows symlinks, so a race could still
+	// land the new folder outside OutputDir.
+	if !x.resolvedWithinOutput(path) {
+		return fmt.Errorf("%s: %w: %s resolves outside the output folder", x.FilePath, ErrInvalidPath, path)
+	}
+
+	_ = os.Chtimes(path, time.Time{}, mtime)
+
+	return nil
 }
 
 // write a file from an io reader, making sure all parent directories exist.
@@ -838,7 +905,12 @@ func (x *XFile) writeFile(file *file, parallel bool) (uint64, error) {
 		return 0, err
 	}
 
-	fout, pathUsed, err := openFile(file.Path, os.O_RDWR|os.O_CREATE|os.O_TRUNC, x.safeFileMode(file.FileMode))
+	flags, usedPath, err := openFlagsForExtract(file.Path)
+	if err != nil {
+		return 0, err
+	}
+
+	fout, pathUsed, err := openFile(usedPath, flags, x.safeFileMode(file.FileMode))
 	if err != nil {
 		return 0, err
 	}
@@ -860,6 +932,66 @@ func (x *XFile) writeFile(file *file, parallel bool) (uint64, error) {
 	defer os.Chtimes(file.Path, file.Atime, file.Mtime)
 
 	return uint64(size), nil
+}
+
+// openFlagsForExtract returns OpenFile flags that will not follow a symlink at
+// path, plus the path those flags apply to. A symlink already sitting at the
+// write target is followed by O_TRUNC, so it is removed and the file is created
+// with O_EXCL. O_EXCL is also used when the path does not exist, so a symlink
+// planted in the race window cannot be followed either.
+//
+// If Lstat fails with ENAMETOOLONG, the path is truncated first (via
+// TruncatePathForFS) and the symlink check runs against that shorter name.
+// Otherwise openFile would later truncate and OpenFile with O_TRUNC, following
+// a planted link at the truncated target.
+func openFlagsForExtract(path string) (int, string, error) {
+	info, statErr := os.Lstat(path)
+	if IsErrNameTooLong(statErr) {
+		shortPath, err := TruncatePathForFS(path)
+		if err != nil {
+			return 0, "", err
+		}
+
+		path = shortPath
+		info, statErr = os.Lstat(path)
+	}
+
+	switch {
+	case statErr == nil && info.Mode()&os.ModeSymlink != 0:
+		err := os.Remove(path)
+		if err != nil {
+			return 0, "", fmt.Errorf("removing symlink at archived file path '%s': %w", path, err)
+		}
+
+		return os.O_RDWR | os.O_CREATE | os.O_EXCL, path, nil
+	case errors.Is(statErr, os.ErrNotExist):
+		return os.O_RDWR | os.O_CREATE | os.O_EXCL, path, nil
+	default:
+		return os.O_RDWR | os.O_CREATE | os.O_TRUNC, path, nil
+	}
+}
+
+// writeExtractFile writes data to path without following a final-component
+// symlink. Used for non-archive output (CUE copy, embedded pictures) that
+// otherwise goes through os.WriteFile, which follows links.
+func writeExtractFile(path string, data []byte, mode os.FileMode) error {
+	flags, usedPath, err := openFlagsForExtract(path)
+	if err != nil {
+		return err
+	}
+
+	fout, _, err := openFile(usedPath, flags, mode)
+	if err != nil {
+		return err
+	}
+	defer fout.Close()
+
+	_, err = fout.Write(data)
+	if err != nil {
+		return fmt.Errorf("writing file '%s': %w", usedPath, err)
+	}
+
+	return nil
 }
 
 // maxSymlinkTarget is the maximum bytes allowed for a symlink target read from
@@ -914,19 +1046,67 @@ func (x *XFile) clean(filePath string, trim ...string) string {
 	return filepath.Clean(filepath.Join(x.OutputDir, filePath))
 }
 
-// pathWithinOutput reports whether path is OutputDir or a descendant of it.
-// Uses filepath.Rel so sibling-prefix tricks like OutputDir=/tmp/out and
-// path=/tmp/out_evil fail (unlike strings.HasPrefix).
-func (x *XFile) pathWithinOutput(path string) bool {
-	outputDir := filepath.Clean(x.OutputDir)
-	cleanPath := filepath.Clean(path)
-
-	rel, err := filepath.Rel(outputDir, cleanPath)
+// pathWithin reports whether target is base or a descendant of it.
+// Uses filepath.Rel so sibling-prefix tricks like base=/tmp/out and
+// target=/tmp/out_evil fail (unlike strings.HasPrefix).
+func pathWithin(base, target string) bool {
+	rel, err := filepath.Rel(filepath.Clean(base), filepath.Clean(target))
 	if err != nil {
 		return false
 	}
 
 	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
+}
+
+// pathWithinOutput reports whether path is OutputDir or a descendant of it,
+// comparing the cleaned paths lexically.
+func (x *XFile) pathWithinOutput(path string) bool {
+	return pathWithin(x.OutputDir, path)
+}
+
+// resolveExisting resolves symlinks in the deepest existing portion of path,
+// then re-appends the not-yet-created tail. This normalizes a path for
+// containment checks when some of its components may not exist yet, or when
+// the path itself lives behind a symlink (e.g. /var -> /private/var on macOS).
+// If symlink resolution fails, the cleaned path is returned unchanged.
+func resolveExisting(path string) string {
+	probe := filepath.Clean(path)
+	tail := []string{}
+
+	for {
+		_, err := os.Lstat(probe)
+		if err == nil {
+			break
+		}
+
+		parent := filepath.Dir(probe)
+		if parent == probe {
+			return probe // reached the filesystem root; nothing exists to resolve.
+		}
+
+		tail = append([]string{filepath.Base(probe)}, tail...)
+		probe = parent
+	}
+
+	resolved, err := filepath.EvalSymlinks(probe)
+	if err != nil {
+		resolved = probe
+	}
+
+	for _, segment := range tail {
+		resolved = filepath.Join(resolved, segment)
+	}
+
+	return resolved
+}
+
+// resolvedWithinOutput reports whether path stays inside OutputDir after
+// resolving symlinks in the existing portions of both paths. The lexical
+// check alone is not enough: a symlink already present in the output folder
+// (planted by a previous download, another app, or an attacker) is followed
+// by os.MkdirAll and os.OpenFile, writing files outside the output folder.
+func (x *XFile) resolvedWithinOutput(path string) bool {
+	return pathWithin(resolveExisting(x.OutputDir), resolveExisting(path))
 }
 
 // resolveLinkTarget returns the cleaned filesystem path a link would resolve to.
@@ -938,10 +1118,11 @@ func resolveLinkTarget(linkPath, linkName string) string {
 	return filepath.Clean(filepath.Join(filepath.Dir(linkPath), linkName))
 }
 
-// ensureLinkWithinOutput rejects symlink targets that escape OutputDir.
+// ensureLinkWithinOutput rejects symlink targets that escape OutputDir,
+// including those that only escape after following a pre-existing symlink.
 func (x *XFile) ensureLinkWithinOutput(linkPath, linkName string) error {
 	resolved := resolveLinkTarget(linkPath, linkName)
-	if !x.pathWithinOutput(resolved) {
+	if !x.pathWithinOutput(resolved) || !x.resolvedWithinOutput(resolved) {
 		return fmt.Errorf("%s: %w: %s (from: %s)", x.FilePath, ErrInvalidPath, resolved, linkName)
 	}
 
@@ -983,7 +1164,7 @@ func (x *XFile) createHardLink(path, linkName string) error {
 	}
 
 	target := x.clean(linkName)
-	if !x.pathWithinOutput(target) {
+	if !x.pathWithinOutput(target) || !x.resolvedWithinOutput(target) {
 		return fmt.Errorf("%s: %w: %s (from: %s)", x.FilePath, ErrInvalidPath, target, linkName)
 	}
 

@@ -4,7 +4,9 @@ package xtractr
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 )
 
@@ -82,8 +84,10 @@ func detectBySignature(filePath string) (Interface, string, error) {
 
 	buf := make([]byte, readSize)
 
-	n, err := file.Read(buf)
-	if err != nil {
+	// Read the full buffer: a single Read is not guaranteed to fill it, and a
+	// short read would miss signatures stored deeper in the file (e.g. ISO).
+	n, err := io.ReadFull(file, buf)
+	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) {
 		return nil, "", fmt.Errorf("reading file for signature detection: %w", err)
 	}
 

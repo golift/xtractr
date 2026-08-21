@@ -5,6 +5,7 @@ linters:
     # unused
     - nlreturn
     - exhaustruct
+    - exhaustruct_v5
     - depguard
     - nonamedreturns
     - forbidigo

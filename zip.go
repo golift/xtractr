@@ -4,7 +4,6 @@ import (
 	"archive/zip"
 	"fmt"
 	"path/filepath"
-	"sync"
 	"time"
 )
 
@@ -75,7 +74,7 @@ func (x *XFile) extractZIPParallel(
 		return x.prog.Wrote, files, err
 	}
 
-	workerErr := x.zipDispatchWorkers(fileEntries)
+	workerErr := dispatchWorkers(x.FileWorkers, fileEntries, x.extractZIPEntry)
 	if workerErr != nil {
 		return x.prog.Wrote, files, workerErr
 	}
@@ -118,39 +117,6 @@ func (x *XFile) zipPrepareEntries(
 	}
 
 	return entries, files, nil
-}
-
-// zipDispatchWorkers sends file entries to a bounded worker pool for extraction.
-func (x *XFile) zipDispatchWorkers(entries []zipFileEntry) error {
-	var (
-		waitGroup sync.WaitGroup
-		firstErr  error
-		errOnce   sync.Once
-		semaphore = make(chan struct{}, x.FileWorkers)
-	)
-
-	for idx := range entries {
-		entry := entries[idx]
-
-		if firstErr != nil {
-			break
-		}
-
-		semaphore <- struct{}{} // acquire worker slot
-
-		waitGroup.Go(func() {
-			defer func() { <-semaphore }() // release worker slot
-
-			err := x.extractZIPEntry(entry)
-			if err != nil {
-				errOnce.Do(func() { firstErr = err })
-			}
-		})
-	}
-
-	waitGroup.Wait()
-
-	return firstErr
 }
 
 // extractZIPEntry extracts a single zip file entry (used by parallel workers).
