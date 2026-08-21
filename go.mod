@@ -45,4 +45,4 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-replace github.com/nwaples/rardecode/v2 => github.com/davidnewhall/rardecode/v2 v2.0.0-20260726091936-e0ef93aa5a91
+replace github.com/nwaples/rardecode/v2 => github.com/davidnewhall/rardecode/v2 v2.0.0-20260821021724-cdfe433a79fe
