@@ -19,6 +19,8 @@ github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc h1:U9qPSI2PIWSS1
 github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/davidnewhall/rardecode/v2 v2.0.0-20260714215905-f00934568ede h1:+lhygl/AnB13xoAGVnxNDaMRB8YakFJRSzsDlarGHVE=
 github.com/davidnewhall/rardecode/v2 v2.0.0-20260714215905-f00934568ede/go.mod h1:7uz379lSxPe6j9nvzxUZ+n7mnJNgjsRNb6IbvGVHRmw=
+github.com/davidnewhall/rardecode/v2 v2.0.0-20260726091936-e0ef93aa5a91 h1:J9uiXgQWREBB2Yc09Vgv7dv+PquiRWyi6GUOOorQesQ=
+github.com/davidnewhall/rardecode/v2 v2.0.0-20260726091936-e0ef93aa5a91/go.mod h1:7uz379lSxPe6j9nvzxUZ+n7mnJNgjsRNb6IbvGVHRmw=
 github.com/dsnet/compress v0.0.1 h1:PlZu0n3Tuv04TzpfPbrnI0HW/YwodEXDS+oPKahKF0Q=
 github.com/dsnet/compress v0.0.1/go.mod h1:Aw8dCMJ7RioblQeTqt88akK31OvO8Dhf5JflhBbQEHo=
 github.com/dsnet/golib v0.0.0-20171103203638-1ea166775780/go.mod h1:Lj+Z9rebOhdfkVLjJ8T6VcRQv3SXugXy999NBtR9aFY=
