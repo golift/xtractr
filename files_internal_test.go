@@ -3,6 +3,7 @@ package xtractr
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -203,4 +204,68 @@ func TestWriteExtractFileNameTooLongDoesNotFollowTruncatedSymlink(t *testing.T) 
 	got, err := os.ReadFile(victim)
 	require.NoError(t, err)
 	assert.Equal(t, []byte("secret"), got, "must not follow symlink at truncated path")
+}
+
+func TestMoveFilesUsesProvidedDirMode(t *testing.T) {
+	t.Parallel()
+
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX directory permission bits")
+	}
+
+	fromDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(fromDir, "a.txt"), []byte("hi"), 0o600))
+
+	dest := filepath.Join(t.TempDir(), "dest")
+	_, err := moveFiles(NoLogger(), 0o700, fromDir, dest, false)
+	require.NoError(t, err)
+
+	info, err := os.Stat(dest)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o700), info.Mode().Perm(),
+		"custom DirMode must reach MkdirAll; a dummy Config would have used DefaultDirMode")
+}
+
+func TestBindMoveFilesUsesXFileDirMode(t *testing.T) {
+	t.Parallel()
+
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX directory permission bits")
+	}
+
+	fromDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(fromDir, "a.txt"), []byte("hi"), 0o600))
+
+	xFile := &XFile{
+		DirMode: 0o700,
+		log:     NoLogger(),
+	}
+	xFile.bindMoveFiles()
+
+	dest := filepath.Join(t.TempDir(), "dest")
+	_, err := xFile.moveFiles(fromDir, dest, false)
+	require.NoError(t, err)
+
+	info, err := os.Stat(dest)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o700), info.Mode().Perm())
+}
+
+func TestMoveFilesZeroDirModeUsesDefault(t *testing.T) {
+	t.Parallel()
+
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX directory permission bits")
+	}
+
+	fromDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(fromDir, "a.txt"), []byte("hi"), 0o600))
+
+	dest := filepath.Join(t.TempDir(), "dest")
+	_, err := moveFiles(NoLogger(), 0, fromDir, dest, false)
+	require.NoError(t, err)
+
+	info, err := os.Stat(dest)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(DefaultDirMode).Perm(), info.Mode().Perm())
 }
