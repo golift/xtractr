@@ -223,7 +223,7 @@ func TestMoveFilesUsesProvidedDirMode(t *testing.T) {
 	info, err := os.Stat(dest)
 	require.NoError(t, err)
 	assert.Equal(t, os.FileMode(0o700), info.Mode().Perm(),
-		"custom DirMode must reach MkdirAll; a dummy Config would have used DefaultDirMode")
+		"DirMode must reach MkdirAll when the dest does not already exist")
 }
 
 func TestBindMoveFilesUsesXFileDirMode(t *testing.T) {
@@ -268,4 +268,67 @@ func TestMoveFilesZeroDirModeUsesDefault(t *testing.T) {
 	info, err := os.Stat(dest)
 	require.NoError(t, err)
 	assert.Equal(t, os.FileMode(DefaultDirMode).Perm(), info.Mode().Perm())
+}
+
+func TestSquashRootLeavesSingleFile(t *testing.T) {
+	t.Parallel()
+
+	out := t.TempDir()
+	path := filepath.Join(out, "a.txt")
+	require.NoError(t, os.WriteFile(path, []byte("hi"), 0o600))
+
+	xFile := &XFile{
+		OutputDir:  out,
+		SquashRoot: true,
+		log:        NoLogger(),
+	}
+	xFile.bindMoveFiles()
+
+	got, err := xFile.squashRoot([]string{path})
+	require.NoError(t, err)
+	assert.Equal(t, []string{path}, got)
+
+	_, err = os.Stat(path)
+	require.NoError(t, err, "SquashRoot must not delete a lone extracted file")
+}
+
+func TestSquashRootMovesSingleDirectory(t *testing.T) {
+	t.Parallel()
+
+	out := t.TempDir()
+	nested := filepath.Join(out, "root")
+	require.NoError(t, os.Mkdir(nested, 0o700))
+	inner := filepath.Join(nested, "a.txt")
+	require.NoError(t, os.WriteFile(inner, []byte("hi"), 0o600))
+
+	xFile := &XFile{
+		OutputDir:  out,
+		SquashRoot: true,
+		DirMode:    0o755,
+		log:        NoLogger(),
+	}
+	xFile.bindMoveFiles()
+
+	got, err := xFile.squashRoot([]string{inner})
+	require.NoError(t, err)
+
+	dest := filepath.Join(out, "a.txt")
+	assert.Equal(t, []string{dest}, got)
+	require.FileExists(t, dest)
+
+	_, err = os.Stat(nested)
+	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestMoveFilesDoesNotDeleteSourceFile(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	src := filepath.Join(dir, "a.txt")
+	require.NoError(t, os.WriteFile(src, []byte("hi"), 0o600))
+
+	got, err := moveFiles(NoLogger(), 0o755, src, dir, false)
+	require.NoError(t, err)
+	assert.Equal(t, []string{src}, got)
+	require.FileExists(t, src)
 }

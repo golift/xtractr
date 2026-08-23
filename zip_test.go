@@ -35,6 +35,36 @@ func TestZip(t *testing.T) {
 	assert.Len(t, archives, zipFile.archiveCount)
 }
 
+func TestZipSquashRootSingleFileDoesNotDeleteExtract(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	src := filepath.Join(dir, "one.zip")
+
+	zipFile, err := os.Create(src)
+	require.NoError(t, err)
+
+	zipWriter := zip.NewWriter(zipFile)
+	writer, err := zipWriter.Create("a.txt")
+	require.NoError(t, err)
+	_, err = writer.Write([]byte("hi"))
+	require.NoError(t, err)
+	require.NoError(t, zipWriter.Close())
+	require.NoError(t, zipFile.Close())
+
+	out := filepath.Join(dir, "out")
+	_, files, _, err := xtractr.ExtractFile(&xtractr.XFile{
+		FilePath:   src,
+		OutputDir:  out,
+		FileMode:   0o600,
+		DirMode:    0o700,
+		SquashRoot: true,
+	})
+	require.NoError(t, err)
+	require.FileExists(t, filepath.Join(out, "a.txt"))
+	require.NotEmpty(t, files)
+}
+
 func makeZipFile(t *testing.T) testFilesInfo {
 	t.Helper()
 
