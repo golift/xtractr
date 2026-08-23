@@ -3,6 +3,7 @@ package xtractr
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -203,4 +204,131 @@ func TestWriteExtractFileNameTooLongDoesNotFollowTruncatedSymlink(t *testing.T) 
 	got, err := os.ReadFile(victim)
 	require.NoError(t, err)
 	assert.Equal(t, []byte("secret"), got, "must not follow symlink at truncated path")
+}
+
+func TestMoveFilesUsesProvidedDirMode(t *testing.T) {
+	t.Parallel()
+
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX directory permission bits")
+	}
+
+	fromDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(fromDir, "a.txt"), []byte("hi"), 0o600))
+
+	dest := filepath.Join(t.TempDir(), "dest")
+	_, err := moveFiles(NoLogger(), 0o700, fromDir, dest, false)
+	require.NoError(t, err)
+
+	info, err := os.Stat(dest)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o700), info.Mode().Perm(),
+		"DirMode must reach MkdirAll when the dest does not already exist")
+}
+
+func TestBindMoveFilesUsesXFileDirMode(t *testing.T) {
+	t.Parallel()
+
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX directory permission bits")
+	}
+
+	fromDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(fromDir, "a.txt"), []byte("hi"), 0o600))
+
+	xFile := &XFile{
+		DirMode: 0o700,
+		log:     NoLogger(),
+	}
+	xFile.bindMoveFiles()
+
+	dest := filepath.Join(t.TempDir(), "dest")
+	_, err := xFile.moveFiles(fromDir, dest, false)
+	require.NoError(t, err)
+
+	info, err := os.Stat(dest)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o700), info.Mode().Perm())
+}
+
+func TestMoveFilesZeroDirModeUsesDefault(t *testing.T) {
+	t.Parallel()
+
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX directory permission bits")
+	}
+
+	fromDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(fromDir, "a.txt"), []byte("hi"), 0o600))
+
+	dest := filepath.Join(t.TempDir(), "dest")
+	_, err := moveFiles(NoLogger(), 0, fromDir, dest, false)
+	require.NoError(t, err)
+
+	info, err := os.Stat(dest)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(DefaultDirMode).Perm(), info.Mode().Perm())
+}
+
+func TestSquashRootLeavesSingleFile(t *testing.T) {
+	t.Parallel()
+
+	out := t.TempDir()
+	path := filepath.Join(out, "a.txt")
+	require.NoError(t, os.WriteFile(path, []byte("hi"), 0o600))
+
+	xFile := &XFile{
+		OutputDir:  out,
+		SquashRoot: true,
+		log:        NoLogger(),
+	}
+	xFile.bindMoveFiles()
+
+	got, err := xFile.squashRoot([]string{path})
+	require.NoError(t, err)
+	assert.Equal(t, []string{path}, got)
+
+	_, err = os.Stat(path)
+	require.NoError(t, err, "SquashRoot must not delete a lone extracted file")
+}
+
+func TestSquashRootMovesSingleDirectory(t *testing.T) {
+	t.Parallel()
+
+	out := t.TempDir()
+	nested := filepath.Join(out, "root")
+	require.NoError(t, os.Mkdir(nested, 0o700))
+	inner := filepath.Join(nested, "a.txt")
+	require.NoError(t, os.WriteFile(inner, []byte("hi"), 0o600))
+
+	xFile := &XFile{
+		OutputDir:  out,
+		SquashRoot: true,
+		DirMode:    0o755,
+		log:        NoLogger(),
+	}
+	xFile.bindMoveFiles()
+
+	got, err := xFile.squashRoot([]string{inner})
+	require.NoError(t, err)
+
+	dest := filepath.Join(out, "a.txt")
+	assert.Equal(t, []string{dest}, got)
+	require.FileExists(t, dest)
+
+	_, err = os.Stat(nested)
+	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestMoveFilesDoesNotDeleteSourceFile(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	src := filepath.Join(dir, "a.txt")
+	require.NoError(t, os.WriteFile(src, []byte("hi"), 0o600))
+
+	got, err := moveFiles(NoLogger(), 0o755, src, dir, false)
+	require.NoError(t, err)
+	assert.Equal(t, []string{src}, got)
+	require.FileExists(t, src)
 }

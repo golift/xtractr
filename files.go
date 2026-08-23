@@ -218,6 +218,10 @@ func (x *XFile) Printf(format string, v ...any) {
 // This is non-recursive and only returns files _in_ the base paths provided.
 // This is a helper method and only exposed for convenience. You do not have to call this.
 func (x *Xtractr) GetFileList(paths ...string) ([]string, error) {
+	return listFiles(paths...)
+}
+
+func listFiles(paths ...string) ([]string, error) {
 	files := []string{}
 
 	for _, path := range paths {
@@ -446,8 +450,7 @@ func (x *XFile) Extract() (size uint64, filesList, archiveList []string, err err
 // Returns size of extracted data, list of extracted files, list of archives processed, and/or error.
 func ExtractFile(xFile *XFile) (size uint64, filesList, archiveList []string, err error) {
 	sName := strings.ToLower(xFile.FilePath)
-	// just borrowing this... Has to go into an interface to avoid a cycle.
-	xFile.moveFiles = parseConfig(&Config{Logger: xFile.log}).MoveFiles
+	xFile.bindMoveFiles()
 
 	var extensionType string // archive type from matched extension, for error reporting when extraction fails
 
@@ -499,13 +502,44 @@ func ExtractFile(xFile *XFile) (size uint64, filesList, archiveList []string, er
 // MoveFiles relocates files then removes the folder they were in.
 // Returns the new file paths.
 // This is a helper method and only exposed for convenience. You do not have to call this.
-func (x *Xtractr) MoveFiles(fromPath, toPath string, overwrite bool) ([]string, error) { //nolint:cyclop
+func (x *Xtractr) MoveFiles(fromPath, toPath string, overwrite bool) ([]string, error) {
+	return moveFiles(x.config, x.config.DirMode, fromPath, toPath, overwrite)
+}
+
+// bindMoveFiles wires ExtractFile to this job's logger and DirMode.
+// The old parseConfig(&Config{Logger: x.log}) path allocated a throwaway
+// Xtractr (and its done channel) per extract. A pre-set stub is left in
+// place so tests can inject one.
+func (x *XFile) bindMoveFiles() { //nolint:funcorder // kept next to MoveFiles
+	if x.moveFiles != nil {
+		return
+	}
+
+	x.moveFiles = func(fromPath, toPath string, overwrite bool) ([]string, error) {
+		return moveFiles(x.log, x.DirMode, fromPath, toPath, overwrite)
+	}
+}
+
+func moveFiles( //nolint:cyclop,funlen
+	log Logger,
+	dirMode os.FileMode,
+	fromPath, toPath string,
+	overwrite bool,
+) ([]string, error) {
+	if log == nil {
+		log = NoLogger()
+	}
+
+	if dirMode == 0 {
+		dirMode = DefaultDirMode
+	}
+
 	var (
 		newFiles = []string{}
 		keepErr  error
 	)
 
-	files, err := x.GetFileList(fromPath)
+	files, err := listFiles(fromPath)
 	if err != nil {
 		return nil, err
 	}
@@ -516,40 +550,48 @@ func (x *Xtractr) MoveFiles(fromPath, toPath string, overwrite bool) ([]string, 
 		toPath = strings.TrimSuffix(toPath, filepath.Ext(toPath))
 	}
 
-	x.config.Debugf("Moving files: %v (%d files) -> %v", fromPath, len(files), toPath)
+	log.Debugf("Moving files: %v (%d files) -> %v", fromPath, len(files), toPath)
 
-	err = os.MkdirAll(toPath, x.config.DirMode)
+	err = os.MkdirAll(toPath, dirMode)
 	if err != nil {
 		return nil, fmt.Errorf("making final dir: %w", err)
 	}
 
 	for _, file := range files {
-		var (
-			newFile = filepath.Join(toPath, filepath.Base(file))
-			_, err  = os.Stat(newFile)
-			exists  = !os.IsNotExist(err)
-		)
+		newFile := filepath.Join(toPath, filepath.Base(file))
+		if filepath.Clean(file) == filepath.Clean(newFile) {
+			// Already at the destination (squash of a lone top-level file).
+			newFiles = append(newFiles, newFile)
+			continue
+		}
+
+		_, err = os.Stat(newFile)
+		exists := !os.IsNotExist(err)
 
 		if exists && !overwrite {
-			x.config.Printf("Error: Renaming Temp File: %v to %v: (refusing to overwrite existing file)", file, newFile)
+			log.Printf("Error: Renaming Temp File: %v to %v: (refusing to overwrite existing file)", file, newFile)
 			// keep trying.
 			continue
 		}
 
-		switch err = x.Rename(file, newFile); {
+		switch err = renameFile(file, newFile); {
 		case err != nil:
 			keepErr = err
-			x.config.Printf("Error: Renaming Temp File: %v to %v: %v", file, newFile, err)
+			log.Printf("Error: Renaming Temp File: %v to %v: %v", file, newFile, err)
 		case exists:
 			newFiles = append(newFiles, newFile)
-			x.config.Debugf("Renamed Temp File: %v -> %v (overwrote existing file)", file, newFile)
+			log.Debugf("Renamed Temp File: %v -> %v (overwrote existing file)", file, newFile)
 		default:
 			newFiles = append(newFiles, newFile)
-			x.config.Debugf("Renamed Temp File: %v -> %v", file, newFile)
+			log.Debugf("Renamed Temp File: %v -> %v", file, newFile)
 		}
 	}
 
-	x.DeleteFiles(fromPath)
+	info, statErr := os.Stat(fromPath)
+	if statErr == nil && info.IsDir() {
+		deleteFiles(log, fromPath)
+	}
+
 	// Since this is the last step, we tried to rename all the files, bubble the
 	// os.Rename error up, so it gets flagged as failed. It may have worked, but
 	// it should get attention.
@@ -558,15 +600,23 @@ func (x *Xtractr) MoveFiles(fromPath, toPath string, overwrite bool) ([]string, 
 
 // DeleteFiles obliterates things and logs. Use with caution.
 func (x *Xtractr) DeleteFiles(files ...string) {
+	deleteFiles(x.config, files...)
+}
+
+func deleteFiles(log Logger, files ...string) {
+	if log == nil {
+		log = NoLogger()
+	}
+
 	for _, file := range files {
 		err := os.RemoveAll(file)
 		if err != nil {
-			x.config.Printf("Error: Deleting %v: %v", file, err)
+			log.Printf("Error: Deleting %v: %v", file, err)
 
 			continue
 		}
 
-		x.config.Printf("Deleted (recursively): %s", file)
+		log.Printf("Deleted (recursively): %s", file)
 	}
 }
 
@@ -670,6 +720,10 @@ type file struct {
 
 // Rename is an attempt to deal with "invalid cross link device" on weird file systems.
 func (x *Xtractr) Rename(oldpath, newpath string) error {
+	return renameFile(oldpath, newpath)
+}
+
+func renameFile(oldpath, newpath string) error {
 	origErr := os.Rename(oldpath, newpath)
 	if origErr == nil {
 		return nil
@@ -817,10 +871,25 @@ func (x *XFile) squashRoot(files []string) ([]string, error) {
 		roots[strings.SplitN(newRoot, string(filepath.Separator), 2)[0]] = struct{}{} //nolint:mnd
 	}
 
-	if len(roots) == 1 { // only 1 root folder...
-		for root := range roots { // ...move it's content up a level.
-			return x.moveFiles(filepath.Join(x.OutputDir, root), x.OutputDir, false)
+	if len(roots) != 1 {
+		return files, nil
+	}
+
+	for root := range roots {
+		from := filepath.Join(x.OutputDir, root)
+
+		info, err := os.Stat(from)
+		if err != nil {
+			return files, fmt.Errorf("stat squash root: %w", err)
 		}
+
+		if !info.IsDir() {
+			// A lone top-level file is already in OutputDir. Moving it onto
+			// itself used to skip the rename and then delete the extract.
+			return files, nil
+		}
+
+		return x.moveFiles(from, x.OutputDir, false)
 	}
 
 	return files, nil
