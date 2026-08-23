@@ -695,11 +695,20 @@ func (x *Xtractr) Rename(oldpath, newpath string) error {
 	if err != nil {
 		return &ExtractError{Errs: []error{origErr, err}}
 	}
-	defer newFile.Close()
 
 	_, err = io.Copy(newFile, oldFile)
+	closeErr := newFile.Close()
+
 	if err != nil {
+		_ = os.Remove(pathUsed)
+
 		return &ExtractError{Errs: []error{origErr, fmt.Errorf("io.Copy(): %w", err)}}
+	}
+
+	if closeErr != nil {
+		_ = os.Remove(pathUsed)
+
+		return &ExtractError{Errs: []error{origErr, fmt.Errorf("closing dest: %w", closeErr)}}
 	}
 
 	// pathUsed may differ from newpath if the name had to be truncated.
@@ -914,7 +923,6 @@ func (x *XFile) writeFile(file *file, parallel bool) (uint64, error) {
 	if err != nil {
 		return 0, err
 	}
-	defer fout.Close()
 
 	file.Path = pathUsed
 
@@ -924,12 +932,22 @@ func (x *XFile) writeFile(file *file, parallel bool) (uint64, error) {
 	}
 
 	size, err := io.Copy(progWriter, file.Data)
+	closeErr := fout.Close()
+
 	if err != nil {
+		_ = os.Remove(file.Path)
+
 		return uint64(size), fmt.Errorf("copying archived file '%s' io: %w", file.Path, err)
 	}
 
+	if closeErr != nil {
+		_ = os.Remove(file.Path)
+
+		return uint64(size), fmt.Errorf("closing archived file '%s': %w", file.Path, closeErr)
+	}
+
 	// The error is ignored because it's not critical and pops up on OSes like Windows.
-	defer os.Chtimes(file.Path, file.Atime, file.Mtime)
+	_ = os.Chtimes(file.Path, file.Atime, file.Mtime)
 
 	return uint64(size), nil
 }
@@ -984,11 +1002,20 @@ func writeExtractFile(path string, data []byte, mode os.FileMode) error {
 	if err != nil {
 		return err
 	}
-	defer fout.Close()
 
 	_, err = fout.Write(data)
+	closeErr := fout.Close()
+
 	if err != nil {
+		_ = os.Remove(usedPath)
+
 		return fmt.Errorf("writing file '%s': %w", usedPath, err)
+	}
+
+	if closeErr != nil {
+		_ = os.Remove(usedPath)
+
+		return fmt.Errorf("closing file '%s': %w", usedPath, closeErr)
 	}
 
 	return nil

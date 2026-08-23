@@ -15,6 +15,7 @@ var (
 	ErrQueueStopped       = errors.New("extractor queue stopped, cannot extract")
 	ErrNoCompressedFiles  = errors.New("no compressed files found")
 	ErrUnknownArchiveType = errors.New("unknown archive file type")
+	ErrChecksum           = errors.New("archived file checksum mismatch")
 	ErrInvalidPath        = errors.New("archived file contains invalid path")
 	ErrInvalidHead        = errors.New("archived file contains invalid header file")
 	ErrSymlinkTooLong     = errors.New("archived symlink target exceeds maximum length")

@@ -4,6 +4,7 @@ import (
 	"compress/bzip2"
 	"compress/gzip"
 	"fmt"
+	"os"
 
 	"github.com/andybalholm/brotli"
 	"github.com/klauspost/compress/s2"
@@ -30,6 +31,8 @@ func ExtractXZ(xFile *XFile) (size uint64, filesList []string, err error) {
 	if err != nil {
 		return 0, nil, fmt.Errorf("xz.NewReader: %w", err)
 	}
+
+	// xz.Reader has no Close; CRC64 is checked when Read hits EOF.
 
 	// Get the absolute path of the file being written.
 	file := &file{
@@ -58,7 +61,6 @@ func ExtractZlib(xFile *XFile) (size uint64, filesList []string, err error) {
 	if err != nil {
 		return 0, nil, fmt.Errorf("zlib.NewReader: %w", err)
 	}
-	defer zipReader.Close()
 
 	// Get the absolute path of the file being written.
 	file := &file{
@@ -69,6 +71,11 @@ func ExtractZlib(xFile *XFile) (size uint64, filesList []string, err error) {
 	}
 
 	size, err = xFile.write(file)
+	closeNamed(zipReader, &err)
+
+	if err != nil {
+		_ = os.Remove(file.Path)
+	}
 
 	return size, []string{file.Path}, err
 }
@@ -146,6 +153,7 @@ func ExtractZstandard(xFile *XFile) (size uint64, filesList []string, err error)
 	if err != nil {
 		return 0, nil, fmt.Errorf("zstd.NewReader: %w", err)
 	}
+	// Close releases the decoder pool. Frame checksums surface on Read as zstd.ErrCRCMismatch.
 	defer zipReader.Close()
 
 	// Get the absolute path of the file being written.
@@ -321,7 +329,6 @@ func ExtractGzip(xFile *XFile) (size uint64, filesList []string, err error) {
 	if err != nil {
 		return 0, nil, fmt.Errorf("gzip.NewReader: %w", err)
 	}
-	defer zipReader.Close()
 
 	// Get the absolute path of the file being written.
 	file := &file{
@@ -333,6 +340,11 @@ func ExtractGzip(xFile *XFile) (size uint64, filesList []string, err error) {
 	}
 
 	size, err = xFile.write(file)
+	closeNamed(zipReader, &err)
+
+	if err != nil {
+		_ = os.Remove(file.Path)
+	}
 
 	return size, []string{file.Path}, err
 }
