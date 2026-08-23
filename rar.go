@@ -116,13 +116,13 @@ func (x *XFile) unrar(rarReader *rardecode.ReadCloser) ([]string, error) {
 			DirMode:  x.DirMode,
 			Mtime:    header.ModificationTime,
 			Atime:    header.AccessTime,
-			Linkname: header.Linkname,
+			Linkname: header.LinkTarget,
 		}
 
 		// RAR5 stores symlink targets in a redirection record (not file payload).
-		// Ensure ModeSymlink is set when we have a unix/windows symlink redirection.
-		switch header.RedirType {
-		case rardecode.RedirUnixSymlink, rardecode.RedirWindowsSymlink, rardecode.RedirWindowsJunction:
+		// Mode() already flags unix/windows symlinks; junctions still need ModeSymlink.
+		switch header.LinkType {
+		case rardecode.LinkTypeUnixSymlink, rardecode.LinkTypeWindowsSymlink, rardecode.LinkTypeWindowsJunction:
 			file.FileMode |= os.ModeSymlink
 		}
 

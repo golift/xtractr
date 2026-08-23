@@ -17,8 +17,6 @@ github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSs
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc h1:U9qPSI2PIWSS1VwoXQT9A3Wy9MM3WgvqSxFWenqJduM=
 github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
-github.com/davidnewhall/rardecode/v2 v2.0.0-20260821021724-cdfe433a79fe h1:l6APu+BrjQxOmRzOuZatYM1UnPkyoZLprAsLvaQ4zss=
-github.com/davidnewhall/rardecode/v2 v2.0.0-20260821021724-cdfe433a79fe/go.mod h1:7uz379lSxPe6j9nvzxUZ+n7mnJNgjsRNb6IbvGVHRmw=
 github.com/dsnet/compress v0.0.1 h1:PlZu0n3Tuv04TzpfPbrnI0HW/YwodEXDS+oPKahKF0Q=
 github.com/dsnet/compress v0.0.1/go.mod h1:Aw8dCMJ7RioblQeTqt88akK31OvO8Dhf5JflhBbQEHo=
 github.com/dsnet/golib v0.0.0-20171103203638-1ea166775780/go.mod h1:Lj+Z9rebOhdfkVLjJ8T6VcRQv3SXugXy999NBtR9aFY=
@@ -45,6 +43,8 @@ github.com/mewkiz/pkg v0.0.0-20260703220044-4fb89b18cc87 h1:fpWNLIg7nX2f+D+6ZveQ
 github.com/mewkiz/pkg v0.0.0-20260703220044-4fb89b18cc87/go.mod h1:wohiqwTwXA5twjDES74xIJLGjAxo3/0pHSbTXLbSDW8=
 github.com/mewpkg/term v0.0.0-20241026122259-37a80af23985 h1:h8O1byDZ1uk6RUXMhj1QJU3VXFKXHDZxr4TXRPGeBa8=
 github.com/mewpkg/term v0.0.0-20241026122259-37a80af23985/go.mod h1:uiPmbdUbdt1NkGApKl7htQjZ8S7XaGUAVulJUJ9v6q4=
+github.com/nwaples/rardecode/v2 v2.4.1 h1:F7zNW2LdAuuBThHWXQaiFUGVD/sef299NfWSB1nHAl4=
+github.com/nwaples/rardecode/v2 v2.4.1/go.mod h1:7uz379lSxPe6j9nvzxUZ+n7mnJNgjsRNb6IbvGVHRmw=
 github.com/peterebden/ar v0.0.0-20241106141004-20dc11b778e8 h1:27L3dHkYbeWGU3/5NasAzVDgXG9QzlfKCvcl4cdNW6c=
 github.com/peterebden/ar v0.0.0-20241106141004-20dc11b778e8/go.mod h1:hpFkyhCgB5Rm8FK+ISypOE+9UyrCuL6MNcjPMB1s1ec=
 github.com/pierrec/lz4/v4 v4.1.29 h1:CDQY6qZOLI4DW0Nx6R1vRrifrCeQHnNXkMb0hZWXFjg=
