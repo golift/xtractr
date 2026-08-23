@@ -48,9 +48,11 @@ func (x *XFile) extractRPM(rpmFile io.Reader) (filesList []string, err error) { 
 		if err != nil {
 			return nil, fmt.Errorf("gzip.NewReader: %w", err)
 		}
-		defer zipReader.Close()
 
-		return x.unrpm(zipReader, pkg.PayloadFormat())
+		files, err := x.unrpm(zipReader, pkg.PayloadFormat())
+		closeNamed(zipReader, &err)
+
+		return files, err
 	case "bz2", "bzip2":
 		return x.unrpm(bzip2.NewReader(rpmFile), pkg.PayloadFormat())
 	case "zstd", "zstandard", "zst", "Zstandard":

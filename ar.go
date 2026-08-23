@@ -73,7 +73,7 @@ func (x *XFile) unAr(reader io.Reader) ([]string, error) {
 }
 
 // ar files are not compressed.
-func getUncompressedArSize(arFile io.ReadCloser) (total, compressed uint64, count int) {
+func getUncompressedArSize(arFile *os.File) (total, compressed uint64, count int) {
 	defer arFile.Close()
 
 	arReader := ar.NewReader(arFile)

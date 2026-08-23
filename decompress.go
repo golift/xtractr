@@ -4,6 +4,7 @@ import (
 	"compress/bzip2"
 	"compress/gzip"
 	"fmt"
+	"os"
 
 	"github.com/andybalholm/brotli"
 	"github.com/klauspost/compress/s2"
@@ -58,7 +59,6 @@ func ExtractZlib(xFile *XFile) (size uint64, filesList []string, err error) {
 	if err != nil {
 		return 0, nil, fmt.Errorf("zlib.NewReader: %w", err)
 	}
-	defer zipReader.Close()
 
 	// Get the absolute path of the file being written.
 	file := &file{
@@ -69,6 +69,11 @@ func ExtractZlib(xFile *XFile) (size uint64, filesList []string, err error) {
 	}
 
 	size, err = xFile.write(file)
+	closeNamed(zipReader, &err)
+
+	if err != nil {
+		_ = os.Remove(file.Path)
+	}
 
 	return size, []string{file.Path}, err
 }
@@ -321,7 +326,6 @@ func ExtractGzip(xFile *XFile) (size uint64, filesList []string, err error) {
 	if err != nil {
 		return 0, nil, fmt.Errorf("gzip.NewReader: %w", err)
 	}
-	defer zipReader.Close()
 
 	// Get the absolute path of the file being written.
 	file := &file{
@@ -333,6 +337,11 @@ func ExtractGzip(xFile *XFile) (size uint64, filesList []string, err error) {
 	}
 
 	size, err = xFile.write(file)
+	closeNamed(zipReader, &err)
+
+	if err != nil {
+		_ = os.Remove(file.Path)
+	}
 
 	return size, []string{file.Path}, err
 }

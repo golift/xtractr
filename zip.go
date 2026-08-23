@@ -3,6 +3,7 @@ package xtractr
 import (
 	"archive/zip"
 	"fmt"
+	"os"
 	"path/filepath"
 	"time"
 )
@@ -120,12 +121,11 @@ func (x *XFile) zipPrepareEntries(
 }
 
 // extractZIPEntry extracts a single zip file entry (used by parallel workers).
-func (x *XFile) extractZIPEntry(entry zipFileEntry) error {
+func (x *XFile) extractZIPEntry(entry zipFileEntry) (err error) {
 	zFile, err := entry.zipFile.Open()
 	if err != nil {
 		return fmt.Errorf("%s: zipFile.Open: %w", x.FilePath, err)
 	}
-	defer zFile.Close()
 
 	fileInfo := &file{
 		Path:     x.clean(entry.decodedName),
@@ -137,7 +137,11 @@ func (x *XFile) extractZIPEntry(entry zipFileEntry) error {
 	}
 
 	_, err = x.writeParallel(fileInfo)
+	closeNamed(zFile, &err)
+
 	if err != nil {
+		_ = os.Remove(fileInfo.Path)
+
 		return fmt.Errorf("%s: %w: %s (from: %s)",
 			entry.zipFile.FileInfo().Name(), err, fileInfo.Path, entry.decodedName)
 	}
@@ -145,12 +149,11 @@ func (x *XFile) extractZIPEntry(entry zipFileEntry) error {
 	return nil
 }
 
-func (x *XFile) unzipWithName(zipFile *zip.File, name string) (uint64, string, error) {
+func (x *XFile) unzipWithName(zipFile *zip.File, name string) (size uint64, path string, err error) {
 	zFile, err := zipFile.Open()
 	if err != nil {
 		return 0, name, fmt.Errorf("zipFile.Open: %w", err)
 	}
-	defer zFile.Close()
 
 	file := &file{
 		Path:     x.clean(name),
@@ -162,15 +165,19 @@ func (x *XFile) unzipWithName(zipFile *zip.File, name string) (uint64, string, e
 	}
 
 	if !x.pathWithinOutput(file.Path) {
+		closeNamed(zFile, &err)
 		// The file being written is trying to write outside of our base path. Malicious archive?
-		err := fmt.Errorf("%s: %w: %s (from: %s)", zipFile.FileInfo().Name(), ErrInvalidPath, file.Path, name)
+		err = fmt.Errorf("%s: %w: %s (from: %s)", zipFile.FileInfo().Name(), ErrInvalidPath, file.Path, name)
+
 		return 0, file.Path, err
 	}
 
 	if zipFile.FileInfo().IsDir() {
 		x.Debugf("Writing archived directory: %s", file.Path)
 
-		err := x.mkDir(file.Path, zipFile.Mode(), zipFile.Modified)
+		err = x.mkDir(file.Path, zipFile.Mode(), zipFile.Modified)
+		closeNamed(zFile, &err)
+
 		if err != nil {
 			return 0, file.Path, fmt.Errorf("making zipFile dir: %w", err)
 		}
@@ -181,10 +188,14 @@ func (x *XFile) unzipWithName(zipFile *zip.File, name string) (uint64, string, e
 	x.Debugf("Writing archived file: %s (packed: %d, unpacked: %d)", file.Path,
 		zipFile.CompressedSize64, zipFile.UncompressedSize64)
 
-	s, err := x.write(file)
+	size, err = x.write(file)
+	closeNamed(zFile, &err)
+
 	if err != nil {
-		return s, file.Path, fmt.Errorf("%s: %w: %s (from: %s)", zipFile.FileInfo().Name(), err, file.Path, name)
+		_ = os.Remove(file.Path)
+
+		return size, file.Path, fmt.Errorf("%s: %w: %s (from: %s)", zipFile.FileInfo().Name(), err, file.Path, name)
 	}
 
-	return s, file.Path, nil
+	return size, file.Path, nil
 }

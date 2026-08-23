@@ -24,9 +24,9 @@ func ExtractCPIOGzip(xFile *XFile) (size uint64, filesList []string, err error) 
 	if err != nil {
 		return 0, nil, fmt.Errorf("gzip.NewReader: %w", err)
 	}
-	defer zipStream.Close()
 
 	files, err := xFile.uncpio(zipStream)
+	closeNamed(zipStream, &err)
 
 	return xFile.prog.Wrote, files, err
 }
