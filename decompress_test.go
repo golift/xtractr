@@ -6,8 +6,10 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/klauspost/compress/zstd"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	xzlib "github.com/ulikunitz/xz"
 	"golift.io/xtractr"
 )
 
@@ -82,4 +84,85 @@ func TestExtractGzip(t *testing.T) {
 	got, err := os.ReadFile(files[0])
 	require.NoError(t, err)
 	assert.Equal(t, payload, got)
+}
+
+func TestExtractZstandardCorruptChecksum(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	src := filepath.Join(dir, "payload.txt.zst")
+	payload := []byte("hello checksum")
+
+	zstdFile, err := os.Create(src)
+	require.NoError(t, err)
+
+	writer, err := zstd.NewWriter(zstdFile)
+	require.NoError(t, err)
+	_, err = writer.Write(payload)
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+	require.NoError(t, zstdFile.Close())
+
+	raw, err := os.ReadFile(src)
+	require.NoError(t, err)
+	require.Greater(t, len(raw), 4)
+	raw[len(raw)-1] ^= 0xff
+
+	bad := filepath.Join(t.TempDir(), "payload.txt.zst")
+	require.NoError(t, os.WriteFile(bad, raw, 0o600)) //nolint:gosec
+
+	out := filepath.Join(dir, "out")
+	require.NoError(t, os.MkdirAll(out, 0o700))
+
+	_, _, err = xtractr.ExtractZstandard(&xtractr.XFile{
+		FilePath:  bad,
+		OutputDir: out,
+		FileMode:  0o600,
+		DirMode:   0o700,
+	})
+	require.Error(t, err)
+	require.ErrorIs(t, err, zstd.ErrCRCMismatch)
+
+	_, statErr := os.Stat(filepath.Join(out, "payload.txt"))
+	require.ErrorIs(t, statErr, os.ErrNotExist)
+}
+
+func TestExtractXZCorruptChecksum(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	src := filepath.Join(dir, "payload.txt.xz")
+	payload := []byte("hello checksum")
+
+	xzFile, err := os.Create(src)
+	require.NoError(t, err)
+
+	writer, err := xzlib.NewWriter(xzFile)
+	require.NoError(t, err)
+	_, err = writer.Write(payload)
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+	require.NoError(t, xzFile.Close())
+
+	raw, err := os.ReadFile(src)
+	require.NoError(t, err)
+	require.Greater(t, len(raw), 16)
+	raw[len(raw)/2] ^= 0xff
+
+	bad := filepath.Join(t.TempDir(), "payload.txt.xz")
+	require.NoError(t, os.WriteFile(bad, raw, 0o600)) //nolint:gosec
+
+	out := filepath.Join(dir, "out")
+	require.NoError(t, os.MkdirAll(out, 0o700))
+
+	_, _, err = xtractr.ExtractXZ(&xtractr.XFile{
+		FilePath:  bad,
+		OutputDir: out,
+		FileMode:  0o600,
+		DirMode:   0o700,
+	})
+	require.Error(t, err)
+
+	_, statErr := os.Stat(filepath.Join(out, "payload.txt"))
+	require.ErrorIs(t, statErr, os.ErrNotExist)
 }

@@ -700,10 +700,14 @@ func (x *Xtractr) Rename(oldpath, newpath string) error {
 	closeErr := newFile.Close()
 
 	if err != nil {
+		_ = os.Remove(pathUsed)
+
 		return &ExtractError{Errs: []error{origErr, fmt.Errorf("io.Copy(): %w", err)}}
 	}
 
 	if closeErr != nil {
+		_ = os.Remove(pathUsed)
+
 		return &ExtractError{Errs: []error{origErr, fmt.Errorf("closing dest: %w", closeErr)}}
 	}
 

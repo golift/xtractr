@@ -165,11 +165,9 @@ func (x *XFile) unzipWithName(zipFile *zip.File, name string) (size uint64, path
 	}
 
 	if !x.pathWithinOutput(file.Path) {
-		closeNamed(zFile, &err)
+		_ = zFile.Close()
 		// The file being written is trying to write outside of our base path. Malicious archive?
-		err = fmt.Errorf("%s: %w: %s (from: %s)", zipFile.FileInfo().Name(), ErrInvalidPath, file.Path, name)
-
-		return 0, file.Path, err
+		return 0, file.Path, fmt.Errorf("%s: %w: %s (from: %s)", zipFile.FileInfo().Name(), ErrInvalidPath, file.Path, name)
 	}
 
 	if zipFile.FileInfo().IsDir() {

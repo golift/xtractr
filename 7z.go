@@ -186,11 +186,9 @@ func (x *XFile) un7zip(zipFile *sevenzip.File) (size uint64, path string, err er
 	}
 
 	if !x.pathWithinOutput(file.Path) {
-		closeNamed(zFile, &err)
+		_ = zFile.Close()
 		// The file being written is trying to write outside of our base path. Malicious archive?
-		err = fmt.Errorf("%s: %w: %s (from: %s)", zipFile.FileInfo().Name(), ErrInvalidPath, file.Path, zipFile.Name)
-
-		return 0, file.Path, err
+		return 0, file.Path, fmt.Errorf("%s: %w: %s (from: %s)", zipFile.FileInfo().Name(), ErrInvalidPath, file.Path, zipFile.Name)
 	}
 
 	if zipFile.FileInfo().IsDir() {
