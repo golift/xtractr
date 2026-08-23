@@ -3,6 +3,7 @@ package xtractr
 /* Code to find, write, move and delete files. */
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -175,6 +176,10 @@ type XFile struct {
 	// this true will cause the extracted content to be moved into the
 	// output folder, and the root folder in the archive to be removed.
 	SquashRoot bool
+	// ReplaceExisting reports whether a destination path already occupied by
+	// another file should be replaced by the freshly extracted copy.
+	// Nil, the default, always keeps the existing file. See Config.ReplaceExisting.
+	ReplaceExisting func(check *ReplaceCheck) bool
 	// SkipOnRecursion, if set by an extractor, lists paths that were copied into
 	// the output (e.g. a CUE sheet) and must not be re-extracted when recursing.
 	SkipOnRecursion []string
@@ -503,7 +508,7 @@ func ExtractFile(xFile *XFile) (size uint64, filesList, archiveList []string, er
 // Returns the new file paths.
 // This is a helper method and only exposed for convenience. You do not have to call this.
 func (x *Xtractr) MoveFiles(fromPath, toPath string, overwrite bool) ([]string, error) {
-	return moveFiles(x.config, x.config.DirMode, fromPath, toPath, overwrite)
+	return moveFiles(x.config, x.config.DirMode, x.config.ReplaceExisting, fromPath, toPath, overwrite)
 }
 
 // bindMoveFiles wires ExtractFile to this job's logger and DirMode.
@@ -516,13 +521,14 @@ func (x *XFile) bindMoveFiles() { //nolint:funcorder // kept next to MoveFiles
 	}
 
 	x.moveFiles = func(fromPath, toPath string, overwrite bool) ([]string, error) {
-		return moveFiles(x.log, x.DirMode, fromPath, toPath, overwrite)
+		return moveFiles(x.log, x.DirMode, x.ReplaceExisting, fromPath, toPath, overwrite)
 	}
 }
 
 func moveFiles( //nolint:cyclop,funlen
 	log Logger,
 	dirMode os.FileMode,
+	replace func(*ReplaceCheck) bool,
 	fromPath, toPath string,
 	overwrite bool,
 ) ([]string, error) {
@@ -568,8 +574,7 @@ func moveFiles( //nolint:cyclop,funlen
 		_, err = os.Stat(newFile)
 		exists := !os.IsNotExist(err)
 
-		if exists && !overwrite {
-			log.Printf("Error: Renaming Temp File: %v to %v: (refusing to overwrite existing file)", file, newFile)
+		if exists && !overwrite && keepExistingFile(log, replace, file, newFile) {
 			// keep trying.
 			continue
 		}
@@ -596,6 +601,154 @@ func moveFiles( //nolint:cyclop,funlen
 	// os.Rename error up, so it gets flagged as failed. It may have worked, but
 	// it should get attention.
 	return newFiles, keepErr
+}
+
+// ReplaceCheck describes a destination path that is occupied by a file other
+// than the one just extracted. It is passed to Config.ReplaceExisting.
+type ReplaceCheck struct {
+	// Src is the extracted copy, waiting in the temporary folder.
+	Src string
+	// Dest is the destination path, already occupied.
+	Dest string
+	// SrcInfo is the lstat of Src. Always a regular file.
+	SrcInfo os.FileInfo
+	// DestInfo is the lstat of Dest. Always a regular file.
+	DestInfo os.FileInfo
+}
+
+// prefixChunk is the read size used when comparing a destination against the
+// leading bytes of the extracted copy.
+const prefixChunk = 64 * 1024
+
+// ReplaceTruncated is a Config.ReplaceExisting policy that replaces a
+// destination only when it is a truncated copy of the extracted file: shorter,
+// and byte for byte identical to the leading bytes of it.
+//
+// That is exactly what an interrupted extraction leaves behind, since output is
+// written in order. Because the partial file then occupies the destination
+// name, every later extraction of the same archive refuses in the same way, so
+// the damage becomes permanent and silent.
+//
+// Anything that is not a prefix is kept, so a file that arrived with the
+// download rather than from an archive is never replaced by a different file of
+// the same name, and no file is ever shortened. Reads stop at the first byte
+// that differs, and never exceed the length of the destination, so an unrelated
+// file costs a single chunk. Nothing is read at all unless the destination is
+// shorter than the extracted copy.
+//
+// A read error is treated as "do not replace".
+func ReplaceTruncated(check *ReplaceCheck) bool {
+	if check.DestInfo.Size() >= check.SrcInfo.Size() {
+		return false
+	}
+
+	prefix, err := samePrefix(check.Dest, check.Src, check.DestInfo.Size())
+
+	return err == nil && prefix
+}
+
+// samePrefix reports whether the first size bytes of shortPath and longPath are
+// identical. It returns on the first chunk that differs.
+func samePrefix(shortPath, longPath string, size int64) (bool, error) {
+	shortFile, err := os.Open(shortPath)
+	if err != nil {
+		return false, fmt.Errorf("os.Open(): %w", err)
+	}
+
+	defer shortFile.Close()
+
+	longFile, err := os.Open(longPath)
+	if err != nil {
+		return false, fmt.Errorf("os.Open(): %w", err)
+	}
+
+	defer longFile.Close()
+
+	shortBuf := make([]byte, prefixChunk)
+	longBuf := make([]byte, prefixChunk)
+
+	for remain := size; remain > 0; {
+		read := min(int64(prefixChunk), remain)
+
+		_, err = io.ReadFull(shortFile, shortBuf[:read])
+		if err != nil {
+			return false, fmt.Errorf("io.ReadFull(): %w", err)
+		}
+
+		_, err = io.ReadFull(longFile, longBuf[:read])
+		if err != nil {
+			return false, fmt.Errorf("io.ReadFull(): %w", err)
+		}
+
+		if !bytes.Equal(shortBuf[:read], longBuf[:read]) {
+			return false, nil
+		}
+
+		remain -= read
+	}
+
+	return true, nil
+}
+
+// keepExistingFile reports whether a file already occupying a destination path
+// should be left alone rather than replaced by the freshly extracted copy.
+//
+// The default, and the behavior when Config.ReplaceExisting is nil, is to
+// always keep it. The occupying file may have arrived with the download instead
+// of from an archive, and replacing it would invalidate the download.
+// Deciding otherwise needs context this library does not have, so the decision
+// is delegated. ReplaceTruncated covers the common case.
+//
+// Only regular files are eligible either way. A directory or a symlink at
+// either path is always kept, so an archive cannot use a link to redirect a
+// write outside the extraction path.
+func keepExistingFile(log Logger, replace func(*ReplaceCheck) bool, src, dest string) bool {
+	if replace == nil {
+		log.Printf("Error: Renaming Temp File: %v to %v: (refusing to overwrite existing file)", src, dest)
+		return true
+	}
+
+	check, err := newReplaceCheck(src, dest)
+
+	switch {
+	case err != nil:
+		log.Printf("Error: Comparing Temp File: %v to %v: %v (refusing to overwrite existing file)",
+			src, dest, err)
+
+		return true
+	case check == nil:
+		log.Printf("Error: Renaming Temp File: %v to %v: (refusing to overwrite existing non-regular file)",
+			src, dest)
+
+		return true
+	case !replace(check):
+		log.Debugf("Skipped Temp File: %v -> %v (existing file kept)", src, dest)
+		return true
+	default:
+		log.Printf("Replacing existing file with archive content: %v", dest)
+		return false
+	}
+}
+
+// newReplaceCheck lstats both paths. It returns a nil check and a nil error
+// when either path is not a regular file, meaning the destination is not
+// eligible for replacement.
+func newReplaceCheck(src, dest string) (*ReplaceCheck, error) {
+	srcInfo, err := os.Lstat(src)
+	if err != nil {
+		return nil, fmt.Errorf("os.Lstat(): %w", err)
+	}
+
+	destInfo, err := os.Lstat(dest)
+	if err != nil {
+		return nil, fmt.Errorf("os.Lstat(): %w", err)
+	}
+
+	if !srcInfo.Mode().IsRegular() || !destInfo.Mode().IsRegular() {
+		return nil, nil //nolint:nilnil // Not an error; the destination is simply not eligible.
+	}
+
+	return &ReplaceCheck{Src: src, Dest: dest, SrcInfo: srcInfo, DestInfo: destInfo}, nil
 }
 
 // DeleteFiles obliterates things and logs. Use with caution.

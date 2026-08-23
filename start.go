@@ -40,6 +40,14 @@ type Config struct {
 	TryNames bool
 	// The suffix used for temporary folders.
 	Suffix string
+	// ReplaceExisting reports whether a destination path already occupied by
+	// another file should be replaced by the freshly extracted copy.
+	// Nil, the default, always keeps the existing file, which is the historical
+	// behavior: an occupying file may have arrived with the download rather than
+	// from an archive, and replacing it would invalidate the download.
+	// Only regular files are ever offered; directories and symlinks are always
+	// kept regardless of what this returns. See ReplaceTruncated.
+	ReplaceExisting func(check *ReplaceCheck) bool
 }
 
 // Logger allows this library to write logs.
