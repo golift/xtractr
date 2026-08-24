@@ -88,7 +88,7 @@ func main() {
 	response := make(chan *xtractr.Response)
 	// This sends an item into the extraction queue (buffered channel).
 	q.Extract(&xtractr.Xtract{
-		Name:       "my archive",    // name is not import to this library.
+		Name:       "my archive",    // name is not important to this library.
 		SearchPath: "/tmp/archives", // can also be a direct file.
 		CBChannel:  response,        // queue responses are sent here.
 	})
