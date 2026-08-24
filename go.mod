@@ -18,7 +18,7 @@ require (
 	github.com/pierrec/lz4/v4 v4.1.29
 	github.com/saintfish/chardet v0.0.0-20230101081208-5e3ef4b5456d
 	github.com/sshaman1101/dcompress v0.0.0-20200109162717-50436a6332de
-	github.com/stretchr/testify v1.11.1
+	github.com/stretchr/testify v1.12.0
 	github.com/therootcompany/xz v1.0.1
 	github.com/ulikunitz/xz v0.5.16
 	golang.org/x/text v0.41.0
