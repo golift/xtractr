@@ -65,7 +65,7 @@ func (l *Logger) Debugf(msg string, v ...interface{}) {
 	l.debug.Printf(msg, v...)
 }
 
-// Infof printf an info line.
+// Infof prints an info line.
 func (l *Logger) Infof(msg string, v ...interface{}) {
 	l.info.Printf(msg, v...)
 }
