@@ -3,6 +3,7 @@ package xtractr
 import (
 	"fmt"
 	"io"
+	"os"
 	"sync"
 )
 
@@ -37,7 +38,8 @@ type Progress struct {
 type progressTracker struct {
 	Progress
 
-	mu sync.Mutex
+	mu        sync.Mutex
+	headerErr error // optional fast-fail from claimed archive headers
 }
 
 // Percent returns the percent of bytes read or written.
@@ -108,6 +110,7 @@ func (x *XFile) newProgress(total, compressed uint64, count int) *progressTracke
 	tracker.Compressed = compressed
 	tracker.Count = count
 	tracker.XFile = x
+	tracker.headerErr = x.checkClaimedLimits(total, count, compressed)
 	tracker.send = func() {}
 	x.prog = tracker
 
@@ -124,6 +127,12 @@ func (x *XFile) newProgress(total, compressed uint64, count int) *progressTracke
 	}
 
 	return tracker
+}
+
+// newArchiveProgress is newProgress with Compressed set to the archive file size
+// so MaxRatio can be enforced even when member headers omit packed sizes.
+func (x *XFile) newArchiveProgress(total, _ uint64, count int) *progressTracker {
+	return x.newProgress(total, archiveFileSize(x.FilePath), count)
 }
 
 // snapshot returns a copy of the Progress data, safe to send to callbacks/channels.
@@ -155,11 +164,25 @@ type progressWrapper struct {
 }
 
 func (p *progressWrapper) Write(data []byte) (n int, err error) {
-	size, err := p.Writer.Write(data)
+	want := uint64(len(data))
 
 	p.mu.Lock()
-	p.Wrote += uint64(size)
+
+	err = p.checkWriteLocked(want)
+	if err != nil {
+		p.mu.Unlock()
+		return 0, err
+	}
+
+	p.Wrote += want
 	p.mu.Unlock()
+
+	size, err := p.Writer.Write(data)
+	if uint64(size) != want {
+		p.mu.Lock()
+		p.Wrote -= want - uint64(size)
+		p.mu.Unlock()
+	}
 
 	if p.parallel {
 		p.safeSend()
@@ -168,6 +191,15 @@ func (p *progressWrapper) Write(data []byte) (n int, err error) {
 	}
 
 	return size, err //nolint:wrapcheck
+}
+
+func (p *progressWrapper) Close() error {
+	closer, ok := p.Writer.(io.Closer)
+	if !ok {
+		return nil
+	}
+
+	return closer.Close() //nolint:wrapcheck
 }
 
 func (p *progressWrapper) Read(data []byte) (n int, err error) {
@@ -202,20 +234,116 @@ func (p *progressWrapper) ReadAt(data []byte, off int64) (n int, err error) {
 	return size, err //nolint:wrapcheck
 }
 
-func (p *progressTracker) writer(writer io.Writer) io.Writer {
+func (p *progressTracker) wrapWriter(writer io.Writer, parallel bool) (io.Writer, error) {
 	p.mu.Lock()
-	p.Files++
-	p.mu.Unlock()
+	defer p.mu.Unlock()
 
-	return &progressWrapper{Writer: writer, progressTracker: p}
+	err := p.addFileLocked()
+	if err != nil {
+		return nil, err
+	}
+
+	return &progressWrapper{Writer: writer, progressTracker: p, parallel: parallel}, nil
 }
 
-func (p *progressTracker) parallelWriter(writer io.Writer) io.Writer {
-	p.mu.Lock()
-	p.Files++
-	p.mu.Unlock()
+func (p *progressTracker) addFileLocked() error {
+	if p.headerErr != nil {
+		return p.headerErr
+	}
 
-	return &progressWrapper{Writer: writer, progressTracker: p, parallel: true}
+	xFile := p.XFile
+	if xFile != nil && xFile.MaxFiles > 0 && p.Files >= xFile.MaxFiles {
+		return ErrMaxFiles
+	}
+
+	p.Files++
+
+	return nil
+}
+
+func (p *progressTracker) checkWriteLocked(add uint64) error {
+	if p.headerErr != nil {
+		return p.headerErr
+	}
+
+	xFile := p.XFile
+	if xFile == nil {
+		return nil
+	}
+
+	if xFile.MaxBytes > 0 && p.Wrote+add > xFile.MaxBytes {
+		return ErrMaxBytes
+	}
+
+	if exceedsRatio(p.Wrote+add, p.Compressed, xFile.MaxRatio) {
+		return ErrMaxRatio
+	}
+
+	return nil
+}
+
+// archiveFileSize returns the size of path on disk, or 0 if it cannot be stat'd.
+func archiveFileSize(path string) uint64 {
+	if path == "" {
+		return 0
+	}
+
+	info, err := os.Stat(path)
+	if err != nil || info.Size() <= 0 {
+		return 0
+	}
+
+	return uint64(info.Size())
+}
+
+// checkClaimedLimits fails closed when archive headers claim more than the
+// configured caps. Headers can understate, so this never replaces runtime
+// checks in Write / addFileLocked.
+func (x *XFile) checkClaimedLimits(claimedBytes uint64, claimedFiles int, compressed uint64) error {
+	if x.MaxBytes > 0 && claimedBytes > x.MaxBytes {
+		return ErrMaxBytes
+	}
+
+	if x.MaxFiles > 0 && claimedFiles > x.MaxFiles {
+		return ErrMaxFiles
+	}
+
+	if claimedBytes > 0 && exceedsRatio(claimedBytes, compressed, x.MaxRatio) {
+		return ErrMaxRatio
+	}
+
+	return nil
+}
+
+func exceedsRatio(wrote, compressed uint64, ratio float64) bool {
+	if ratio <= 0 || compressed == 0 {
+		return false
+	}
+
+	return float64(wrote) > float64(compressed)*ratio
+}
+
+func (x *XFile) extractWriter(writer io.Writer) (io.Writer, error) {
+	return x.wrapExtractWriter(writer, false)
+}
+
+func (x *XFile) wrapExtractWriter(writer io.Writer, parallel bool) (io.Writer, error) {
+	if x.prog == nil {
+		return writer, nil
+	}
+
+	return x.prog.wrapWriter(writer, parallel)
+}
+
+func (x *XFile) countExtracted() error {
+	if x.prog == nil {
+		return nil
+	}
+
+	x.prog.mu.Lock()
+	defer x.prog.mu.Unlock()
+
+	return x.prog.addFileLocked()
 }
 
 func (p *progressTracker) reader(reader io.Reader) io.Reader {

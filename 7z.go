@@ -47,7 +47,7 @@ func extract7z(xFile *XFile) (uint64, []string, []string, error) {
 		return 0, nil, nil, fmt.Errorf("%s: os.Open: %w", xFile.FilePath, err)
 	}
 
-	defer xFile.newProgress(getUncompressed7zSize(sevenZip)).done() // this closes sevenZip
+	defer xFile.newArchiveProgress(getUncompressed7zSize(sevenZip)).done() // this closes sevenZip
 
 	sevenZip, err = sevenzip.OpenReaderWithPassword(xFile.FilePath, xFile.Password)
 	if err != nil {

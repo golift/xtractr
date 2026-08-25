@@ -33,7 +33,7 @@ func ExtractISO(xFile *XFile) (size uint64, filesList []string, err error) {
 		return 0, nil, fmt.Errorf("failed to open iso image: %s: %w", xFile.FilePath, isoErr)
 	}
 
-	defer xFile.newProgress(getUncompressedIsoSize(image)).done()
+	defer xFile.newArchiveProgress(getUncompressedIsoSize(image)).done()
 
 	iso, err := iso9660.OpenImage(xFile.prog.readAter(openISO))
 	if err != nil {

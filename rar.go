@@ -58,7 +58,7 @@ func extractRAR(xFile *XFile) (uint64, []string, []string, error) {
 		return 0, nil, nil, fmt.Errorf("rardecode.OpenReader: %w", err)
 	}
 
-	defer xFile.newProgress(getUncompressedRarSize(rarReader)).done() // this closes rarReader
+	defer xFile.newArchiveProgress(getUncompressedRarSize(rarReader)).done() // this closes rarReader
 
 	rarReader, err = rardecode.OpenReader(xFile.FilePath, rardecode.Password(xFile.Password)) // open it again.
 	if err != nil {

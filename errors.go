@@ -29,6 +29,13 @@ var (
 	errExtractNotRegular = errors.New("refusing to extract onto a non-regular file")
 	errExtractConflict   = errors.New("too many concurrent changes at the extract path")
 
+	// ErrMaxBytes is returned when uncompressed bytes written exceed MaxBytes (0 is unlimited).
+	ErrMaxBytes = errors.New("extracted size exceeds maximum bytes")
+	// ErrMaxFiles is returned when files, directories, and symlinks created exceed MaxFiles (0 is unlimited).
+	ErrMaxFiles = errors.New("extracted file count exceeds maximum")
+	// ErrMaxRatio is returned when bytesWritten / archiveFileSize exceeds MaxRatio (0 is unlimited).
+	ErrMaxRatio = errors.New("extracted size exceeds maximum compression ratio")
+
 	// CUE sheet.
 
 	ErrNoCueFile        = errors.New("cue sheet does not reference a FILE")

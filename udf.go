@@ -15,7 +15,7 @@ func extractUDF(xFile *XFile, ra io.ReaderAt) (uint64, []string, error) {
 		return 0, nil, fmt.Errorf("failed to open UDF image: %s: %w", xFile.FilePath, err)
 	}
 
-	defer xFile.newProgress(getUncompressedUDFSize(udfImage)).done()
+	defer xFile.newArchiveProgress(getUncompressedUDFSize(udfImage)).done()
 
 	size, files, err := xFile.unUDF(udfImage, nil, "")
 	if err != nil {

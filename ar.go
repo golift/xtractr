@@ -16,7 +16,7 @@ func ExtractAr(xFile *XFile) (size uint64, filesList []string, err error) {
 		return 0, nil, fmt.Errorf("rardecode.OpenReader: %w", err)
 	}
 
-	defer xFile.newProgress(getUncompressedArSize(arFile)).done() // this closes arFile
+	defer xFile.newArchiveProgress(getUncompressedArSize(arFile)).done() // this closes arFile
 
 	arFile, err = os.Open(xFile.FilePath)
 	if err != nil {

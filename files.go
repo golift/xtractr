@@ -164,6 +164,14 @@ type XFile struct {
 	// Streaming formats ignore this. 0 or 1 = sequential (current behavior).
 	// Total concurrent I/O when using the queue = Config.Parallel * FileWorkers.
 	FileWorkers int
+	// MaxBytes is the maximum uncompressed bytes written for this archive.
+	// 0 means unlimited.
+	MaxBytes uint64
+	// MaxFiles is the maximum files, directories, and symlinks created for this
+	// archive. 0 means unlimited.
+	MaxFiles int
+	// MaxRatio is the maximum bytesWritten / archiveFileSize. 0 means unlimited.
+	MaxRatio float64
 	// Progress is called periodically during file extraction.
 	// Contains info about the progress of the extraction.
 	// This is not called if an Updates channel is also provided.
@@ -939,6 +947,9 @@ func (x *XFile) mkDir(path string, mode os.FileMode, mtime time.Time) error {
 		return fmt.Errorf("%s: %w: %s resolves outside the output folder", x.FilePath, ErrInvalidPath, path)
 	}
 
+	_, statErr := os.Lstat(path)
+	existed := statErr == nil
+
 	err := os.MkdirAll(path, x.safeDirMode(mode))
 	if err != nil {
 		return err //nolint:wrapcheck
@@ -948,6 +959,13 @@ func (x *XFile) mkDir(path string, mode os.FileMode, mtime time.Time) error {
 	// land the new folder outside OutputDir.
 	if !x.resolvedWithinOutput(path) {
 		return fmt.Errorf("%s: %w: %s resolves outside the output folder", x.FilePath, ErrInvalidPath, path)
+	}
+
+	if !existed && filepath.Clean(path) != filepath.Clean(x.OutputDir) {
+		err = x.countExtracted()
+		if err != nil {
+			return err
+		}
 	}
 
 	_ = os.Chtimes(path, time.Time{}, mtime)
@@ -990,9 +1008,12 @@ func (x *XFile) writeFile(file *file, parallel bool) (uint64, error) {
 
 	file.Path = pathUsed
 
-	progWriter := x.prog.writer(fout)
-	if parallel {
-		progWriter = x.prog.parallelWriter(fout)
+	progWriter, err := x.wrapExtractWriter(fout, parallel)
+	if err != nil {
+		_ = fout.Close()
+		_ = os.Remove(file.Path)
+
+		return 0, err
 	}
 
 	size, err := io.Copy(progWriter, file.Data)
@@ -1349,7 +1370,7 @@ func (x *XFile) createSymlink(path, linkName string) error {
 		return fmt.Errorf("%s: creating symlink: %w: %s -> %s", x.FilePath, err, path, linkName)
 	}
 
-	return nil
+	return x.countExtracted()
 }
 
 func (x *XFile) createHardLink(path, linkName string) error {
@@ -1373,7 +1394,7 @@ func (x *XFile) createHardLink(path, linkName string) error {
 
 	err := os.Link(target, path)
 	if err == nil {
-		return nil
+		return x.countExtracted()
 	}
 
 	linkErr := err
