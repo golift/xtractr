@@ -27,7 +27,7 @@ var (
 	// reparse point opened with FILE_FLAG_OPEN_REPARSE_POINT.
 	errExtractSymlink    = errors.New("refusing to write through a symbolic link")
 	errExtractNotRegular = errors.New("refusing to extract onto a non-regular file")
-	errExtractConflict   = errors.New("too many races replacing a symbolic link at the extract path")
+	errExtractConflict   = errors.New("too many concurrent changes at the extract path")
 
 	// CUE sheet.
 
