@@ -983,12 +983,7 @@ func (x *XFile) writeFile(file *file, parallel bool) (uint64, error) {
 		return 0, err
 	}
 
-	flags, usedPath, err := openFlagsForExtract(file.Path)
-	if err != nil {
-		return 0, err
-	}
-
-	fout, pathUsed, err := openFile(usedPath, flags, x.safeFileMode(file.FileMode))
+	fout, pathUsed, err := openExtractFile(file.Path, x.safeFileMode(file.FileMode))
 	if err != nil {
 		return 0, err
 	}
@@ -1021,53 +1016,163 @@ func (x *XFile) writeFile(file *file, parallel bool) (uint64, error) {
 	return uint64(size), nil
 }
 
-// openFlagsForExtract returns OpenFile flags that will not follow a symlink at
-// path, plus the path those flags apply to. A symlink already sitting at the
-// write target is followed by O_TRUNC, so it is removed and the file is created
-// with O_EXCL. O_EXCL is also used when the path does not exist, so a symlink
-// planted in the race window cannot be followed either.
+// extractOpenAttempts bounds the create/replace loop so a tight symlink-plant
+// race cannot spin forever. Each pass either returns a regular file or fails closed.
+const extractOpenAttempts = 8
+
+// noFollowOpen opens a path for extract writes without following a final-component
+// symlink. Production uses openFileNoFollow; tests inject a fake to exercise races.
+type noFollowOpen func(path string, flags int, mode os.FileMode) (*os.File, error)
+
+// openExtractFile opens path for writing extracted data without following a
+// final-component symlink. The returned path is the one that was actually
+// opened (it may be truncated for NAME_MAX).
 //
-// If Lstat fails with ENAMETOOLONG, the path is truncated first (via
-// TruncatePathForFS) and the symlink check runs against that shorter name.
-// Otherwise openFile would later truncate and OpenFile with O_TRUNC, following
-// a planted link at the truncated target.
-func openFlagsForExtract(path string) (int, string, error) {
-	info, statErr := os.Lstat(path)
-	if IsErrNameTooLong(statErr) {
-		shortPath, err := TruncatePathForFS(path)
-		if err != nil {
-			return 0, "", err
+// There is no Lstat-then-open decision. Each attempt exclusively-creates with
+// O_NOFOLLOW (Unix) or CREATE_NEW + FILE_FLAG_OPEN_REPARSE_POINT (Windows). If
+// the name exists, the existing object is opened the same no-follow way and
+// truncated only after the fd is confirmed to be a regular disk file. A symlink
+// or directory junction (ELOOP / reparse point) is unlinked and the exclusive
+// create is retried.
+// Missing-file races retry the exclusive create. Nothing is written through a
+// link, device, pipe, or directory.
+//
+// A hard link to a file outside the output directory is indistinguishable from
+// a regular file after open and is still truncated; that matches os.OpenFile.
+func openExtractFile(path string, mode os.FileMode) (*os.File, string, error) {
+	return openExtractFileWith(openFileNoFollow, path, mode)
+}
+
+func openExtractFileWith(open noFollowOpen, path string, mode os.FileMode) (*os.File, string, error) {
+	usedPath := path
+
+	var lastErr error
+
+	for range extractOpenAttempts {
+		file, openedPath, err := tryOpenExtractFile(open, usedPath, mode)
+		if openedPath != "" {
+			usedPath = openedPath
 		}
 
-		path = shortPath
-		info, statErr = os.Lstat(path)
-	}
-
-	switch {
-	case statErr == nil && info.Mode()&os.ModeSymlink != 0:
-		err := os.Remove(path)
-		if err != nil {
-			return 0, "", fmt.Errorf("removing symlink at archived file path '%s': %w", path, err)
+		if err == nil {
+			return file, usedPath, nil
 		}
 
-		return os.O_RDWR | os.O_CREATE | os.O_EXCL, path, nil
-	case errors.Is(statErr, os.ErrNotExist):
-		return os.O_RDWR | os.O_CREATE | os.O_EXCL, path, nil
-	default:
-		return os.O_RDWR | os.O_CREATE | os.O_TRUNC, path, nil
+		lastErr = err
+
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+
+		if !errors.Is(err, errExtractSymlink) {
+			return nil, usedPath, err
+		}
+
+		err = os.Remove(usedPath)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return nil, usedPath, fmt.Errorf("removing symlink at archived file path '%s': %w", usedPath, err)
+		}
 	}
+
+	if errors.Is(lastErr, os.ErrNotExist) {
+		return nil, usedPath, lastErr
+	}
+
+	return nil, usedPath, fmt.Errorf("%w: %w", errExtractConflict, lastErr)
+}
+
+func tryOpenExtractFile(open noFollowOpen, path string, mode os.FileMode) (*os.File, string, error) {
+	file, used, err := openFileNoFollowTrunc(open, path, os.O_RDWR|os.O_CREATE|os.O_EXCL, mode)
+	if err == nil {
+		return finishExtractOpen(file, used, false)
+	}
+
+	if errors.Is(err, errExtractSymlink) {
+		return nil, used, err
+	}
+
+	if !errors.Is(err, os.ErrExist) && !isDeniedExclusiveCreate(err) {
+		return nil, used, err
+	}
+
+	file, used, err = openFileNoFollowTrunc(open, used, os.O_RDWR, mode)
+	if err != nil {
+		return nil, used, err
+	}
+
+	return finishExtractOpen(file, used, true)
+}
+
+func finishExtractOpen(file *os.File, used string, truncate bool) (*os.File, string, error) {
+	err := requireRegularFile(file)
+	if err != nil {
+		_ = file.Close()
+
+		return nil, used, err
+	}
+
+	if !truncate {
+		return file, used, nil
+	}
+
+	err = file.Truncate(0)
+	if err != nil {
+		_ = file.Close()
+
+		return nil, used, fmt.Errorf("truncating extract file '%s': %w", used, err)
+	}
+
+	return file, used, nil
+}
+
+func requireRegularFile(file *os.File) error {
+	err := requireDiskFile(file)
+	if err != nil {
+		return err
+	}
+
+	info, err := file.Stat()
+	if err != nil {
+		return fmt.Errorf("stat extract file: %w", err)
+	}
+
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("%w: %s", errExtractNotRegular, file.Name())
+	}
+
+	return nil
+}
+
+// openFileNoFollowTrunc opens path without following a final-component symlink.
+// If the path exceeds NAME_MAX, it is truncated and retried, same as openFile.
+func openFileNoFollowTrunc(open noFollowOpen, path string, flags int, mode os.FileMode) (*os.File, string, error) {
+	file, err := open(path, flags, mode)
+	if err == nil {
+		return file, path, nil
+	}
+
+	if !IsErrNameTooLong(err) {
+		return nil, path, err
+	}
+
+	shortPath, truncErr := TruncatePathForFS(path)
+	if truncErr != nil {
+		return nil, "", truncErr
+	}
+
+	file, err = open(shortPath, flags, mode)
+	if err != nil {
+		return nil, shortPath, err
+	}
+
+	return file, shortPath, nil
 }
 
 // writeExtractFile writes data to path without following a final-component
 // symlink. Used for non-archive output (CUE copy, embedded pictures) that
 // otherwise goes through os.WriteFile, which follows links.
 func writeExtractFile(path string, data []byte, mode os.FileMode) error {
-	flags, usedPath, err := openFlagsForExtract(path)
-	if err != nil {
-		return err
-	}
-
-	fout, _, err := openFile(usedPath, flags, mode)
+	fout, usedPath, err := openExtractFile(path, mode)
 	if err != nil {
 		return err
 	}
