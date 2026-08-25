@@ -1035,6 +1035,9 @@ type noFollowOpen func(path string, flags int, mode os.FileMode) (*os.File, erro
 // (ELOOP / reparse point) is unlinked and the exclusive create is retried.
 // Missing-file races retry the exclusive create. Nothing is written through a
 // link, device, pipe, or directory.
+//
+// A hard link to a file outside the output directory is indistinguishable from
+// a regular file after open and is still truncated; that matches os.OpenFile.
 func openExtractFile(path string, mode os.FileMode) (*os.File, string, error) {
 	return openExtractFileWith(openFileNoFollow, path, mode)
 }
@@ -1068,6 +1071,10 @@ func openExtractFileWith(open noFollowOpen, path string, mode os.FileMode) (*os.
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			return nil, usedPath, fmt.Errorf("removing symlink at archived file path '%s': %w", usedPath, err)
 		}
+	}
+
+	if errors.Is(lastErr, os.ErrNotExist) {
+		return nil, usedPath, lastErr
 	}
 
 	return nil, usedPath, fmt.Errorf("%w: %w", errExtractConflict, lastErr)

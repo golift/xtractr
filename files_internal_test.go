@@ -356,6 +356,62 @@ func TestOpenExtractFileRetriesWhenOpenSeesSymlink(t *testing.T) {
 	assert.Equal(t, os.FileMode(0), info.Mode()&os.ModeSymlink)
 }
 
+func TestOpenExtractFileRetriesWhenFileVanishes(t *testing.T) {
+	t.Parallel()
+
+	dest := filepath.Join(t.TempDir(), "track.flac")
+	calls := 0
+	opener := func(path string, flags int, mode os.FileMode) (*os.File, error) {
+		calls++
+
+		if flags&os.O_EXCL != 0 && calls == 1 {
+			return nil, os.ErrExist
+		}
+
+		if flags&os.O_EXCL == 0 && calls == 2 {
+			return nil, os.ErrNotExist
+		}
+
+		return openFileNoFollow(path, flags, mode)
+	}
+
+	fout, usedPath, err := openExtractFileWith(opener, dest, 0o600)
+	require.NoError(t, err)
+	assert.Equal(t, dest, usedPath)
+	assert.GreaterOrEqual(t, calls, 3)
+	require.NoError(t, fout.Close())
+
+	info, err := os.Lstat(dest)
+	require.NoError(t, err)
+	assert.True(t, info.Mode().IsRegular())
+}
+
+func TestOpenExtractFileConflictExhaustion(t *testing.T) {
+	t.Parallel()
+
+	dest := filepath.Join(t.TempDir(), "track.flac")
+	opener := func(string, int, os.FileMode) (*os.File, error) {
+		return nil, errExtractSymlink
+	}
+
+	_, _, err := openExtractFileWith(opener, dest, 0o600)
+	require.ErrorIs(t, err, errExtractConflict)
+	require.ErrorIs(t, err, errExtractSymlink)
+}
+
+func TestOpenExtractFileNotExistExhaustion(t *testing.T) {
+	t.Parallel()
+
+	dest := filepath.Join(t.TempDir(), "track.flac")
+	opener := func(string, int, os.FileMode) (*os.File, error) {
+		return nil, os.ErrNotExist
+	}
+
+	_, _, err := openExtractFileWith(opener, dest, 0o600)
+	require.ErrorIs(t, err, os.ErrNotExist)
+	require.NotErrorIs(t, err, errExtractConflict)
+}
+
 func TestMoveFilesUsesProvidedDirMode(t *testing.T) {
 	t.Parallel()
 

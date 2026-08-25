@@ -24,17 +24,17 @@ func openFileNoFollow(path string, flags int, mode os.FileMode) (*os.File, error
 		return nil, err
 	}
 
-	if !createdNew {
-		err = refuseReparsePoint(handle)
-		if err != nil {
-			_ = syscall.CloseHandle(handle)
+	err = inspectExtractHandle(handle, createdNew)
+	if err != nil {
+		_ = syscall.CloseHandle(handle)
 
-			return nil, &os.PathError{Op: "open", Path: path, Err: err}
-		}
+		return nil, &os.PathError{Op: "open", Path: path, Err: err}
 	}
 
 	file := os.NewFile(uintptr(handle), path)
-	_ = file.Chmod(mode)
+	if createdNew {
+		_ = file.Chmod(mode)
+	}
 
 	return file, nil
 }
@@ -63,6 +63,35 @@ func createNoFollowHandle(path string, flags int) (syscall.Handle, bool, error) 
 	return handle, createdNew, nil
 }
 
+// inspectExtractHandle rejects devices/pipes before querying reparse attributes.
+// GetFileInformationByHandle is unsupported for NUL/CON/pipes and would hide
+// errExtractNotRegular behind a generic stat error.
+func inspectExtractHandle(handle syscall.Handle, createdNew bool) error {
+	err := refuseNonDiskHandle(handle)
+	if err != nil {
+		return err
+	}
+
+	if createdNew {
+		return nil
+	}
+
+	return refuseReparsePoint(handle)
+}
+
+func refuseNonDiskHandle(handle syscall.Handle) error {
+	kind, err := syscall.GetFileType(handle)
+	if err != nil {
+		return fmt.Errorf("file type: %w", err)
+	}
+
+	if kind != syscall.FILE_TYPE_DISK {
+		return errExtractNotRegular
+	}
+
+	return nil
+}
+
 func refuseReparsePoint(handle syscall.Handle) error {
 	var info syscall.ByHandleFileInformation
 
@@ -81,14 +110,5 @@ func refuseReparsePoint(handle syscall.Handle) error {
 // requireDiskFile rejects Windows devices and pipes (NUL, CON, COM1, named pipes).
 // os.File.Stat on those handles can look like a regular file.
 func requireDiskFile(file *os.File) error {
-	kind, err := syscall.GetFileType(syscall.Handle(file.Fd()))
-	if err != nil {
-		return fmt.Errorf("file type: %w", err)
-	}
-
-	if kind != syscall.FILE_TYPE_DISK {
-		return fmt.Errorf("%w: %s", errExtractNotRegular, file.Name())
-	}
-
-	return nil
+	return refuseNonDiskHandle(syscall.Handle(file.Fd()))
 }

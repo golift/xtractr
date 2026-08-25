@@ -7,12 +7,12 @@ import (
 	"os"
 )
 
-// openFileNoFollow falls back to os.OpenFile on platforms without a no-follow open.
-// A pre-existing final-component symlink is refused; a symlink planted after this
-// Lstat can still be followed on these platforms.
+// openFileNoFollow cannot implement a true no-follow open on this platform.
+// Exclusive-create (O_EXCL) does not follow a final-component symlink.
+// Any other open is refused so the caller unlinks the name and retries with
+// O_EXCL, instead of os.OpenFile-following a symlink planted after Lstat.
 func openFileNoFollow(path string, flags int, mode os.FileMode) (*os.File, error) {
-	info, err := os.Lstat(path)
-	if err == nil && info.Mode()&os.ModeSymlink != 0 {
+	if flags&os.O_EXCL == 0 {
 		return nil, errExtractSymlink
 	}
 
