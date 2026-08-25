@@ -23,6 +23,10 @@ var (
 	ErrNoConfig           = errors.New("call NewQueue() to initialize a queue")
 	ErrNoLogger           = errors.New("xtractr.Config.Logger must be non-nil")
 
+	// Extract open. Unix surfaces this as ELOOP (O_NOFOLLOW); Windows as a
+	// reparse point opened with FILE_FLAG_OPEN_REPARSE_POINT.
+	errExtractSymlink = errors.New("refusing to write through a symbolic link")
+
 	// CUE sheet.
 
 	ErrNoCueFile        = errors.New("cue sheet does not reference a FILE")

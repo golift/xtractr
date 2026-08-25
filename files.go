@@ -1018,9 +1018,11 @@ func (x *XFile) writeFile(file *file, parallel bool) (uint64, error) {
 
 // openFlagsForExtract returns OpenFile flags that will not follow a symlink at
 // path, plus the path those flags apply to. A symlink already sitting at the
-// write target is followed by O_TRUNC, so it is removed and the file is created
-// with O_EXCL. O_EXCL is also used when the path does not exist, so a symlink
-// planted in the race window cannot be followed either.
+// write target is removed and the file is created with O_EXCL. O_EXCL is also
+// used when the path does not exist, so a symlink planted in the race window
+// cannot be followed either. The remaining O_TRUNC case (existing regular file)
+// is opened with O_NOFOLLOW / FILE_FLAG_OPEN_REPARSE_POINT in openExtractFile
+// so a symlink swapped in after Lstat is not followed.
 //
 // If Lstat fails with ENAMETOOLONG, the path is truncated first (via
 // TruncatePathForFS) and the symlink check runs against that shorter name.
@@ -1053,16 +1055,63 @@ func openFlagsForExtract(path string) (int, string, error) {
 	}
 }
 
+func isSymlinkOpenErr(err error) bool {
+	return errors.Is(err, errExtractSymlink)
+}
+
 // openExtractFile opens path for writing extracted data without following a
 // final-component symlink. The returned path is the one that was actually
 // opened (it may be truncated for NAME_MAX).
+//
+// Opening uses O_NOFOLLOW (Unix) or FILE_FLAG_OPEN_REPARSE_POINT (Windows) so a
+// symlink planted after lstat cannot be followed by O_TRUNC. If the open still
+// sees a symlink, it is removed and the file is created with O_EXCL.
 func openExtractFile(path string, mode os.FileMode) (*os.File, string, error) {
 	flags, usedPath, err := openFlagsForExtract(path)
 	if err != nil {
 		return nil, "", err
 	}
 
-	return openFile(usedPath, flags, mode)
+	fout, pathUsed, err := openFileNoFollowTrunc(usedPath, flags, mode)
+	if err == nil {
+		return fout, pathUsed, nil
+	}
+
+	if !isSymlinkOpenErr(err) {
+		return nil, "", err
+	}
+
+	err = os.Remove(pathUsed)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, "", fmt.Errorf("removing symlink at archived file path '%s': %w", pathUsed, err)
+	}
+
+	return openFileNoFollowTrunc(pathUsed, os.O_RDWR|os.O_CREATE|os.O_EXCL, mode)
+}
+
+// openFileNoFollowTrunc opens path without following a final-component symlink.
+// If the path exceeds NAME_MAX, it is truncated and retried, same as openFile.
+func openFileNoFollowTrunc(path string, flags int, mode os.FileMode) (*os.File, string, error) {
+	file, err := openFileNoFollow(path, flags, mode)
+	if err == nil {
+		return file, path, nil
+	}
+
+	if !IsErrNameTooLong(err) {
+		return nil, path, err
+	}
+
+	shortPath, truncErr := TruncatePathForFS(path)
+	if truncErr != nil {
+		return nil, "", truncErr
+	}
+
+	file, err = openFileNoFollow(shortPath, flags, mode)
+	if err != nil {
+		return nil, shortPath, err
+	}
+
+	return file, shortPath, nil
 }
 
 // writeExtractFile writes data to path without following a final-component

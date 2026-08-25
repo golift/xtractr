@@ -243,6 +243,54 @@ func TestOpenExtractFileReplacesSymlink(t *testing.T) {
 	assert.Equal(t, os.FileMode(0), info.Mode()&os.ModeSymlink)
 }
 
+func TestOpenFileNoFollowDoesNotFollowSymlink(t *testing.T) {
+	t.Parallel()
+
+	tmp := t.TempDir()
+
+	err := os.Symlink("target", filepath.Join(tmp, "symlink-probe"))
+	if err != nil {
+		t.Skipf("symlinks unavailable on this platform: %v", err)
+	}
+
+	victim := filepath.Join(tmp, "victim")
+	require.NoError(t, os.WriteFile(victim, []byte("secret"), 0o600))
+
+	dest := filepath.Join(tmp, "track.flac")
+	require.NoError(t, os.Symlink(victim, dest))
+
+	_, err = openFileNoFollow(dest, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o600)
+	require.Error(t, err)
+	require.ErrorIs(t, err, errExtractSymlink)
+
+	got, err := os.ReadFile(victim)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("secret"), got, "O_TRUNC must not follow a final-component symlink")
+
+	info, err := os.Lstat(dest)
+	require.NoError(t, err)
+	assert.NotEqual(t, os.FileMode(0), info.Mode()&os.ModeSymlink, "symlink should still be present")
+}
+
+func TestOpenExtractFileTruncatesRegularFile(t *testing.T) {
+	t.Parallel()
+
+	dest := filepath.Join(t.TempDir(), "track.flac")
+	require.NoError(t, os.WriteFile(dest, []byte("old payload"), 0o600))
+
+	fout, usedPath, err := openExtractFile(dest, 0o600)
+	require.NoError(t, err)
+	assert.Equal(t, dest, usedPath)
+
+	_, err = fout.WriteString("new")
+	require.NoError(t, err)
+	require.NoError(t, fout.Close())
+
+	got, err := os.ReadFile(dest)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("new"), got)
+}
+
 func TestMoveFilesUsesProvidedDirMode(t *testing.T) {
 	t.Parallel()
 
