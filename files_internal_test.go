@@ -248,6 +248,60 @@ func TestOpenExtractFileReplacesSymlink(t *testing.T) {
 	assert.Equal(t, os.FileMode(0), info.Mode()&os.ModeSymlink)
 }
 
+func TestOpenExtractFileReplacesDirectorySymlink(t *testing.T) {
+	t.Parallel()
+
+	tmp := t.TempDir()
+
+	err := os.Symlink("target", filepath.Join(tmp, "symlink-probe"))
+	if err != nil {
+		t.Skipf("symlinks unavailable on this platform: %v", err)
+	}
+
+	dir := filepath.Join(tmp, "dir")
+	require.NoError(t, os.Mkdir(dir, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "inside"), []byte("keep"), 0o600))
+
+	dest := filepath.Join(tmp, "member")
+	require.NoError(t, os.Symlink(dir, dest))
+
+	fout, usedPath, err := openExtractFile(dest, 0o600)
+	require.NoError(t, err)
+	assert.Equal(t, dest, usedPath)
+
+	_, err = fout.WriteString("payload")
+	require.NoError(t, err)
+	require.NoError(t, fout.Close())
+
+	got, err := os.ReadFile(filepath.Join(dir, "inside"))
+	require.NoError(t, err)
+	assert.Equal(t, []byte("keep"), got, "must not follow a directory symlink/junction")
+
+	written, err := os.ReadFile(dest)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("payload"), written)
+
+	info, err := os.Lstat(dest)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0), info.Mode()&os.ModeSymlink)
+	assert.True(t, info.Mode().IsRegular())
+}
+
+func TestOpenExtractFileRefusesDirectory(t *testing.T) {
+	t.Parallel()
+
+	dest := t.TempDir()
+	marker := filepath.Join(dest, "keep")
+	require.NoError(t, os.WriteFile(marker, []byte("keep"), 0o600))
+
+	_, _, err := openExtractFile(dest, 0o600)
+	require.Error(t, err)
+
+	got, err := os.ReadFile(marker)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("keep"), got)
+}
+
 func TestOpenFileNoFollowDoesNotFollowSymlink(t *testing.T) {
 	t.Parallel()
 

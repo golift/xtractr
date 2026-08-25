@@ -3,6 +3,7 @@
 package xtractr
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"syscall"
@@ -18,6 +19,10 @@ const fileFlagOpenReparsePoint = 0x00200000
 // CREATE_NEW (O_EXCL) or OPEN_EXISTING (everything else). There is no
 // CREATE_ALWAYS / OPEN_ALWAYS fallback: those can follow or smash a reparse
 // point before we inspect it. A missing-file race is retried by openExtractFile.
+//
+// FILE_FLAG_BACKUP_SEMANTICS is required to open a directory or directory
+// junction; without it OPEN_EXISTING fails before we can classify a planted
+// reparse point and replace it.
 func openFileNoFollow(path string, flags int, mode os.FileMode) (*os.File, error) {
 	handle, createdNew, err := createNoFollowHandle(path, flags)
 	if err != nil {
@@ -45,17 +50,21 @@ func createNoFollowHandle(path string, flags int) (syscall.Handle, bool, error) 
 		return syscall.InvalidHandle, false, fmt.Errorf("path: %w", err)
 	}
 
-	access := uint32(syscall.GENERIC_READ | syscall.GENERIC_WRITE)
 	share := uint32(syscall.FILE_SHARE_READ | syscall.FILE_SHARE_WRITE | syscall.FILE_SHARE_DELETE)
-	attrs := uint32(syscall.FILE_ATTRIBUTE_NORMAL) | fileFlagOpenReparsePoint
+	attrs := uint32(syscall.FILE_ATTRIBUTE_NORMAL) | fileFlagOpenReparsePoint | syscall.FILE_FLAG_BACKUP_SEMANTICS
 	createdNew := flags&os.O_EXCL != 0
 	createmode := uint32(syscall.OPEN_EXISTING)
+	access := uint32(syscall.GENERIC_READ | syscall.GENERIC_WRITE)
 
 	if createdNew {
 		createmode = syscall.CREATE_NEW
 	}
 
 	handle, err := syscall.CreateFile(pathp, access, share, nil, createmode, attrs, 0)
+	if err != nil && !createdNew && errors.Is(err, syscall.ERROR_ACCESS_DENIED) {
+		handle, err = syscall.CreateFile(pathp, syscall.GENERIC_READ, share, nil, createmode, attrs, 0)
+	}
+
 	if err != nil {
 		return syscall.InvalidHandle, false, &os.PathError{Op: "open", Path: path, Err: err}
 	}
@@ -105,6 +114,10 @@ func refuseReparsePoint(handle syscall.Handle) error {
 	}
 
 	return nil
+}
+
+func isDeniedExclusiveCreate(err error) bool {
+	return errors.Is(err, syscall.ERROR_ACCESS_DENIED)
 }
 
 // requireDiskFile rejects Windows devices and pipes (NUL, CON, COM1, named pipes).

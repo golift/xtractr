@@ -24,6 +24,10 @@ func openFileNoFollow(path string, flags int, mode os.FileMode) (*os.File, error
 	return file, nil
 }
 
+func isDeniedExclusiveCreate(error) bool {
+	return false
+}
+
 func requireDiskFile(*os.File) error {
 	return nil
 }

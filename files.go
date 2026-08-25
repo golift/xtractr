@@ -1032,7 +1032,8 @@ type noFollowOpen func(path string, flags int, mode os.FileMode) (*os.File, erro
 // O_NOFOLLOW (Unix) or CREATE_NEW + FILE_FLAG_OPEN_REPARSE_POINT (Windows). If
 // the name exists, the existing object is opened the same no-follow way and
 // truncated only after the fd is confirmed to be a regular disk file. A symlink
-// (ELOOP / reparse point) is unlinked and the exclusive create is retried.
+// or directory junction (ELOOP / reparse point) is unlinked and the exclusive
+// create is retried.
 // Missing-file races retry the exclusive create. Nothing is written through a
 // link, device, pipe, or directory.
 //
@@ -1086,7 +1087,11 @@ func tryOpenExtractFile(open noFollowOpen, path string, mode os.FileMode) (*os.F
 		return finishExtractOpen(file, used, false)
 	}
 
-	if errors.Is(err, errExtractSymlink) || !errors.Is(err, os.ErrExist) {
+	if errors.Is(err, errExtractSymlink) {
+		return nil, used, err
+	}
+
+	if !errors.Is(err, os.ErrExist) && !isDeniedExclusiveCreate(err) {
 		return nil, used, err
 	}
 
