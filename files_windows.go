@@ -3,7 +3,6 @@
 package xtractr
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"syscall"
@@ -14,10 +13,11 @@ const fileFlagOpenReparsePoint = 0x00200000
 
 // openFileNoFollow opens path for extract writes without following a final-component
 // symlink. A reparse point is reported as errExtractSymlink so the caller can
-// replace it with O_EXCL rather than writing through it.
+// unlink it and retry with CREATE_NEW rather than writing through it.
 //
-// OPEN_EXISTING is used instead of CREATE_ALWAYS so a planted reparse point is
-// inspected rather than replaced-or-followed before we can refuse it.
+// CREATE_NEW (O_EXCL) or OPEN_EXISTING (everything else). There is no
+// CREATE_ALWAYS / OPEN_ALWAYS fallback: those can follow or smash a reparse
+// point before we inspect it. A missing-file race is retried by openExtractFile.
 func openFileNoFollow(path string, flags int, mode os.FileMode) (*os.File, error) {
 	handle, createdNew, err := createNoFollowHandle(path, flags)
 	if err != nil {
@@ -30,15 +30,6 @@ func openFileNoFollow(path string, flags int, mode os.FileMode) (*os.File, error
 			_ = syscall.CloseHandle(handle)
 
 			return nil, &os.PathError{Op: "open", Path: path, Err: err}
-		}
-	}
-
-	if flags&os.O_TRUNC != 0 {
-		err = syscall.SetEndOfFile(handle)
-		if err != nil {
-			_ = syscall.CloseHandle(handle)
-
-			return nil, &os.PathError{Op: "truncate", Path: path, Err: err}
 		}
 	}
 
@@ -65,11 +56,6 @@ func createNoFollowHandle(path string, flags int) (syscall.Handle, bool, error) 
 	}
 
 	handle, err := syscall.CreateFile(pathp, access, share, nil, createmode, attrs, 0)
-	if err != nil && !createdNew && flags&os.O_CREATE != 0 && errors.Is(err, syscall.ERROR_FILE_NOT_FOUND) {
-		handle, err = syscall.CreateFile(pathp, access, share, nil, syscall.CREATE_NEW, attrs, 0)
-		createdNew = true
-	}
-
 	if err != nil {
 		return syscall.InvalidHandle, false, &os.PathError{Op: "open", Path: path, Err: err}
 	}
@@ -87,6 +73,21 @@ func refuseReparsePoint(handle syscall.Handle) error {
 
 	if info.FileAttributes&syscall.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
 		return errExtractSymlink
+	}
+
+	return nil
+}
+
+// requireDiskFile rejects Windows devices and pipes (NUL, CON, COM1, named pipes).
+// os.File.Stat on those handles can look like a regular file.
+func requireDiskFile(file *os.File) error {
+	kind, err := syscall.GetFileType(syscall.Handle(file.Fd()))
+	if err != nil {
+		return fmt.Errorf("file type: %w", err)
+	}
+
+	if kind != syscall.FILE_TYPE_DISK {
+		return fmt.Errorf("%w: %s", errExtractNotRegular, file.Name())
 	}
 
 	return nil

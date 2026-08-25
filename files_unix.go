@@ -23,3 +23,8 @@ func openFileNoFollow(path string, flags int, mode os.FileMode) (*os.File, error
 
 	return nil, fmt.Errorf("os.OpenFile(): %w", err)
 }
+
+// requireDiskFile is a no-op on Unix; requireRegularFile uses fstat mode bits.
+func requireDiskFile(*os.File) error {
+	return nil
+}
