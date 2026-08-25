@@ -266,6 +266,55 @@ func TestCueExtractCUE(t *testing.T) {
 	}
 }
 
+func TestCueExtractCUE_ReplacesTrackSymlink(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+
+	err := os.Symlink("target", filepath.Join(tmpDir, "symlink-probe"))
+	if err != nil {
+		t.Skipf("symlinks unavailable on this platform: %v", err)
+	}
+
+	outputDir := filepath.Join(tmpDir, "output")
+	require.NoError(t, os.MkdirAll(outputDir, 0o750))
+
+	victim := filepath.Join(tmpDir, "victim")
+	require.NoError(t, os.WriteFile(victim, []byte("secret"), 0o600))
+
+	trackPath := filepath.Join(outputDir, "01 - First Song.flac")
+	require.NoError(t, os.Symlink(victim, trackPath))
+
+	flacPath := filepath.Join(tmpDir, "album.flac")
+	generateTestFLAC(t, flacPath, uint64(testBlockSize)*2)
+
+	cuePath := filepath.Join(tmpDir, "album.cue")
+	cueContent := strings.Join([]string{
+		`FILE "album.flac" WAVE`,
+		`  TRACK 01 AUDIO`,
+		`    TITLE "First Song"`,
+		`    INDEX 01 00:00:00`,
+	}, "\n") + "\n"
+	require.NoError(t, os.WriteFile(cuePath, []byte(cueContent), 0o600))
+
+	_, files, _, err := xtractr.ExtractCUE(&xtractr.XFile{
+		FilePath:  cuePath,
+		OutputDir: outputDir,
+		FileMode:  0o600,
+		DirMode:   0o755,
+	})
+	require.NoError(t, err)
+	require.Contains(t, files, trackPath)
+
+	got, err := os.ReadFile(victim)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("secret"), got, "must not follow planted track symlink")
+
+	info, err := os.Lstat(trackPath)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0), info.Mode()&os.ModeSymlink)
+}
+
 func TestCueExtractCUE_SplitFLAC_EmbeddedCover(t *testing.T) {
 	t.Parallel()
 

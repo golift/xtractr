@@ -632,6 +632,43 @@ func TestSplitAPESingleTrack(t *testing.T) {
 	assert.Equal(t, uint32(3), info.Header.TotalFrames, "single track should contain every frame")
 }
 
+func TestSplitAPETrackReplacesSymlink(t *testing.T) {
+	t.Parallel()
+
+	tmp := t.TempDir()
+
+	err := os.Symlink("target", filepath.Join(tmp, "symlink-probe"))
+	if err != nil {
+		t.Skipf("symlinks unavailable on this platform: %v", err)
+	}
+
+	outDir := filepath.Join(tmp, "out")
+	require.NoError(t, os.MkdirAll(outDir, 0o750))
+
+	victim := filepath.Join(tmp, "victim")
+	require.NoError(t, os.WriteFile(victim, []byte("secret"), 0o600))
+
+	trackPath := filepath.Join(outDir, "01 - Only.ape")
+	require.NoError(t, os.Symlink(victim, trackPath))
+
+	frames := equalFrames(3)
+	srcPath := defaultSyntheticAPE(frames).writeTo(t)
+	xFile := &XFile{OutputDir: outDir, FileMode: 0o600, DirMode: 0o700}
+	cue := &CueSheet{Tracks: []CueTrack{{Number: 1, Title: "Only"}}}
+
+	_, files, err := splitAPE(xFile, srcPath, cue, []cueTimestamp{{}})
+	require.NoError(t, err)
+	require.Equal(t, []string{trackPath}, files)
+
+	got, err := os.ReadFile(victim)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("secret"), got, "must not follow planted track symlink")
+
+	info, err := os.Lstat(trackPath)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0), info.Mode()&os.ModeSymlink)
+}
+
 // writeTwoTrackAPECue writes a 4-frame synthetic .ape (named apeName) and an album.cue that
 // references fileLine into dir, then returns the .cue path. With the test fixture's sample
 // rate (100) the second track's INDEX 00:02:00 (200 samples) lands on frame 2.

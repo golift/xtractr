@@ -158,6 +158,7 @@ func readAPESeekTable(file *os.File, info *apeInfo, junk int64) error {
 	if info.Header.TotalFrames > uint32(maxInt) {
 		return fmt.Errorf("%w: %d frames exceeds platform limits", ErrAPESeekTable, info.Header.TotalFrames)
 	}
+
 	numEntries := int(info.Header.TotalFrames)
 
 	declaredEntries := int64(info.Descriptor.SeekTableBytes) / bytesPerUint32
@@ -280,7 +281,7 @@ func id3v2TagSize(hdr []byte) int64 {
 func apeSkipNullPadding(file *os.File, junk int64) int64 {
 	var b [1]byte
 
-	for scanned := 0; scanned < apeMaxMagicScan; scanned++ {
+	for range apeMaxMagicScan {
 		n, err := file.Read(b[:])
 		if err != nil || n == 0 || b[0] != 0 {
 			return junk
@@ -500,15 +501,15 @@ func splitAPE(
 		outputName := formatTrackFilename(track, ".ape")
 		outputPath := filepath.Join(xFile.OutputDir, outputName)
 
-		size, writeErr := writeTrackAPE(outputPath, info, srcFile, fr.start, fr.end, xFile.FileMode)
+		size, usedPath, writeErr := writeTrackAPE(outputPath, info, srcFile, fr.start, fr.end, xFile.FileMode)
 		if writeErr != nil {
 			return totalSize, files, fmt.Errorf("writing ape track %d: %w", track.Number, writeErr)
 		}
 
 		totalSize += size
 
-		files = append(files, outputPath)
-		xFile.Debugf("Wrote APE track %d: %s (%d bytes)", track.Number, outputPath, size)
+		files = append(files, usedPath)
+		xFile.Debugf("Wrote APE track %d: %s (%d bytes)", track.Number, usedPath, size)
 	}
 
 	return totalSize, files, nil
@@ -523,10 +524,10 @@ func writeTrackAPE(
 	srcFile *os.File,
 	startFrame, endFrame int,
 	fileMode os.FileMode,
-) (uint64, error) {
-	outFile, err := os.OpenFile(outputPath, os.O_RDWR|os.O_CREATE|os.O_TRUNC, fileMode)
+) (uint64, string, error) {
+	outFile, usedPath, err := openExtractFile(outputPath, fileMode)
 	if err != nil {
-		return 0, fmt.Errorf("creating output ape file: %w", err)
+		return 0, "", fmt.Errorf("creating output ape file: %w", err)
 	}
 
 	size, err := writeTrackAPEContents(outFile, info, srcFile, startFrame, endFrame)
@@ -537,11 +538,11 @@ func writeTrackAPE(
 	}
 
 	if err != nil {
-		_ = os.Remove(outputPath)
-		return 0, err
+		_ = os.Remove(usedPath)
+		return 0, usedPath, err
 	}
 
-	return size, nil
+	return size, usedPath, nil
 }
 
 // apeTrackContainer holds the serialized, ready-to-write container pieces for one split

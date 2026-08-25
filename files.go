@@ -983,12 +983,7 @@ func (x *XFile) writeFile(file *file, parallel bool) (uint64, error) {
 		return 0, err
 	}
 
-	flags, usedPath, err := openFlagsForExtract(file.Path)
-	if err != nil {
-		return 0, err
-	}
-
-	fout, pathUsed, err := openFile(usedPath, flags, x.safeFileMode(file.FileMode))
+	fout, pathUsed, err := openExtractFile(file.Path, x.safeFileMode(file.FileMode))
 	if err != nil {
 		return 0, err
 	}
@@ -1058,16 +1053,23 @@ func openFlagsForExtract(path string) (int, string, error) {
 	}
 }
 
+// openExtractFile opens path for writing extracted data without following a
+// final-component symlink. The returned path is the one that was actually
+// opened (it may be truncated for NAME_MAX).
+func openExtractFile(path string, mode os.FileMode) (*os.File, string, error) {
+	flags, usedPath, err := openFlagsForExtract(path)
+	if err != nil {
+		return nil, "", err
+	}
+
+	return openFile(usedPath, flags, mode)
+}
+
 // writeExtractFile writes data to path without following a final-component
 // symlink. Used for non-archive output (CUE copy, embedded pictures) that
 // otherwise goes through os.WriteFile, which follows links.
 func writeExtractFile(path string, data []byte, mode os.FileMode) error {
-	flags, usedPath, err := openFlagsForExtract(path)
-	if err != nil {
-		return err
-	}
-
-	fout, _, err := openFile(usedPath, flags, mode)
+	fout, usedPath, err := openExtractFile(path, mode)
 	if err != nil {
 		return err
 	}

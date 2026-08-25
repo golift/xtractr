@@ -685,7 +685,7 @@ func (s *trackSplitter) openEncoder(idx int) (*trackEncoder, error) {
 		NSamples:      s.trackEnds[idx] - s.trackStarts[idx],
 	}
 
-	outFile, err := os.OpenFile(outputPath, os.O_RDWR|os.O_CREATE|os.O_TRUNC, s.xFile.FileMode)
+	outFile, usedPath, err := openExtractFile(outputPath, s.xFile.FileMode)
 	if err != nil {
 		return nil, fmt.Errorf("creating output file for track %d: %w", track.Number, err)
 	}
@@ -693,12 +693,14 @@ func (s *trackSplitter) openEncoder(idx int) (*trackEncoder, error) {
 	enc, err := flac.NewEncoder(outFile, trackInfo, blocks...)
 	if err != nil {
 		_ = outFile.Close()
+		_ = os.Remove(usedPath)
+
 		return nil, fmt.Errorf("creating encoder for track %d: %w", track.Number, err)
 	}
 
 	return &trackEncoder{
 		enc:        enc,
-		outputPath: outputPath,
+		outputPath: usedPath,
 		number:     track.Number,
 		start:      s.trackStarts[idx],
 		end:        s.trackEnds[idx],

@@ -206,6 +206,43 @@ func TestWriteExtractFileNameTooLongDoesNotFollowTruncatedSymlink(t *testing.T) 
 	assert.Equal(t, []byte("secret"), got, "must not follow symlink at truncated path")
 }
 
+func TestOpenExtractFileReplacesSymlink(t *testing.T) {
+	t.Parallel()
+
+	tmp := t.TempDir()
+
+	err := os.Symlink("target", filepath.Join(tmp, "symlink-probe"))
+	if err != nil {
+		t.Skipf("symlinks unavailable on this platform: %v", err)
+	}
+
+	victim := filepath.Join(tmp, "victim")
+	require.NoError(t, os.WriteFile(victim, []byte("secret"), 0o600))
+
+	dest := filepath.Join(tmp, "track.flac")
+	require.NoError(t, os.Symlink(victim, dest))
+
+	fout, usedPath, err := openExtractFile(dest, 0o600)
+	require.NoError(t, err)
+	assert.Equal(t, dest, usedPath)
+
+	_, err = fout.WriteString("track")
+	require.NoError(t, err)
+	require.NoError(t, fout.Close())
+
+	got, err := os.ReadFile(victim)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("secret"), got, "must not follow destPath symlink")
+
+	written, err := os.ReadFile(dest)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("track"), written)
+
+	info, err := os.Lstat(dest)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0), info.Mode()&os.ModeSymlink)
+}
+
 func TestMoveFilesUsesProvidedDirMode(t *testing.T) {
 	t.Parallel()
 
