@@ -182,6 +182,9 @@ type XFile struct {
 	log       Logger
 	moveFiles func(fromPath, toPath string, overwrite bool) ([]string, error)
 	prog      *progressTracker
+	// refused collects files not moved into place during Extract; it is
+	// copied into Response.Refused by processArchive.
+	refused []RefusedFile
 }
 
 // Filter is the input to find compressed files.
@@ -503,7 +506,9 @@ func ExtractFile(xFile *XFile) (size uint64, filesList, archiveList []string, er
 // Returns the new file paths.
 // This is a helper method and only exposed for convenience. You do not have to call this.
 func (x *Xtractr) MoveFiles(fromPath, toPath string, overwrite bool) ([]string, error) {
-	return moveFiles(x.config, x.config.DirMode, fromPath, toPath, overwrite)
+	newFiles, _, err := moveFiles(x.config, x.config.DirMode, fromPath, toPath, overwrite)
+
+	return newFiles, err
 }
 
 // bindMoveFiles wires ExtractFile to this job's logger and DirMode.
@@ -516,7 +521,10 @@ func (x *XFile) bindMoveFiles() { //nolint:funcorder // kept next to MoveFiles
 	}
 
 	x.moveFiles = func(fromPath, toPath string, overwrite bool) ([]string, error) {
-		return moveFiles(x.log, x.DirMode, fromPath, toPath, overwrite)
+		newFiles, refused, err := moveFiles(x.log, x.DirMode, fromPath, toPath, overwrite)
+		x.refused = append(x.refused, refused...)
+
+		return newFiles, err
 	}
 }
 
@@ -525,7 +533,7 @@ func moveFiles( //nolint:cyclop,funlen
 	dirMode os.FileMode,
 	fromPath, toPath string,
 	overwrite bool,
-) ([]string, error) {
+) ([]string, []RefusedFile, error) {
 	if log == nil {
 		log = NoLogger()
 	}
@@ -536,12 +544,13 @@ func moveFiles( //nolint:cyclop,funlen
 
 	var (
 		newFiles = []string{}
+		refused  []RefusedFile
 		keepErr  error
 	)
 
 	files, err := listFiles(fromPath)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	// If the "to path" is an existing archive file, remove the suffix to make a directory.
@@ -554,7 +563,7 @@ func moveFiles( //nolint:cyclop,funlen
 
 	err = os.MkdirAll(toPath, dirMode)
 	if err != nil {
-		return nil, fmt.Errorf("making final dir: %w", err)
+		return nil, nil, fmt.Errorf("making final dir: %w", err)
 	}
 
 	for _, file := range files {
@@ -570,6 +579,7 @@ func moveFiles( //nolint:cyclop,funlen
 
 		if exists && !overwrite {
 			log.Printf("Error: Renaming Temp File: %v to %v: (refusing to overwrite existing file)", file, newFile)
+			refused = append(refused, RefusedFile{Src: file, Dest: newFile})
 			// keep trying.
 			continue
 		}
@@ -595,7 +605,18 @@ func moveFiles( //nolint:cyclop,funlen
 	// Since this is the last step, we tried to rename all the files, bubble the
 	// os.Rename error up, so it gets flagged as failed. It may have worked, but
 	// it should get attention.
-	return newFiles, keepErr
+	return newFiles, refused, keepErr
+}
+
+// RefusedFile describes an extracted file that was not moved into place
+// because the destination path was already occupied and overwrite was false.
+// The occupying file was left untouched; the extracted copy was deleted
+// with the temporary folder.
+type RefusedFile struct {
+	// Src is the extracted copy's path in the temporary folder.
+	Src string
+	// Dest is the occupied destination path that was kept.
+	Dest string
 }
 
 // DeleteFiles obliterates things and logs. Use with caution.

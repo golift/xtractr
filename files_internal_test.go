@@ -477,7 +477,7 @@ func TestMoveFilesUsesProvidedDirMode(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(fromDir, "a.txt"), []byte("hi"), 0o600))
 
 	dest := filepath.Join(t.TempDir(), "dest")
-	_, err := moveFiles(NoLogger(), 0o700, fromDir, dest, false)
+	_, _, err := moveFiles(NoLogger(), 0o700, fromDir, dest, false)
 	require.NoError(t, err)
 
 	info, err := os.Stat(dest)
@@ -522,7 +522,7 @@ func TestMoveFilesZeroDirModeUsesDefault(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(fromDir, "a.txt"), []byte("hi"), 0o600))
 
 	dest := filepath.Join(t.TempDir(), "dest")
-	_, err := moveFiles(NoLogger(), 0, fromDir, dest, false)
+	_, _, err := moveFiles(NoLogger(), 0, fromDir, dest, false)
 	require.NoError(t, err)
 
 	info, err := os.Stat(dest)
@@ -587,7 +587,7 @@ func TestMoveFilesDoesNotDeleteSourceFile(t *testing.T) {
 	src := filepath.Join(dir, "a.txt")
 	require.NoError(t, os.WriteFile(src, []byte("hi"), 0o600))
 
-	got, err := moveFiles(NoLogger(), 0o755, src, dir, false)
+	got, _, err := moveFiles(NoLogger(), 0o755, src, dir, false)
 	require.NoError(t, err)
 	assert.Equal(t, []string{src}, got)
 	require.FileExists(t, src)

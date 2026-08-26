@@ -77,6 +77,10 @@ type Response struct {
 	Archives ArchiveList
 	// Files written to final path.
 	NewFiles []string
+	// Refused lists files that were extracted but not moved into the final
+	// path because the destination was already occupied. The occupying file
+	// may have arrived with the download; it was kept. No error is set.
+	Refused []RefusedFile
 	// SkipOnRecursion lists paths that extractors copied into output (e.g. CUE sheet)
 	// and must not be re-extracted when recursing. Other files (e.g. CUE from a RAR) are still extracted.
 	SkipOnRecursion []string
@@ -196,6 +200,7 @@ func (x *Xtractr) decompressFolders(resp *Response) error {
 
 		err := x.decompressFiles(subResp)
 		resp.NewFiles = append(resp.NewFiles, subResp.NewFiles...)
+		resp.Refused = append(resp.Refused, subResp.Refused...)
 		resp.Size += subResp.Size
 
 		if err != nil {
@@ -330,6 +335,7 @@ func (x *Xtractr) decompressFiles(resp *Response) error {
 	// Combine the new Response with the existing response.
 	resp.Extras = nre.Archives
 	resp.Size += nre.Size
+	resp.Refused = append(resp.Refused, nre.Refused...)
 
 	if nre.NewFiles != nil {
 		resp.NewFiles = append(resp.NewFiles, nre.NewFiles...)
@@ -404,6 +410,8 @@ func (x *Xtractr) processArchive(filename string, resp *Response) (uint64, []str
 		resp.SkipOnRecursion = append(resp.SkipOnRecursion, xFile.SkipOnRecursion...)
 	}
 
+	resp.Refused = append(resp.Refused, xFile.refused...)
+
 	return bytes, files, archives, nil
 }
 
@@ -422,7 +430,10 @@ func (x *Xtractr) cleanupProcessedArchives(resp *Response) error {
 	if !resp.X.TempFolder {
 		time.Sleep(fsSyncDelay) // Wait for file system to catch up/sync.
 		// If TempFolder is false then move the files back to the original location.
-		resp.NewFiles, err = x.MoveFiles(resp.Output, resp.X.Path, false)
+		var refused []RefusedFile
+
+		resp.NewFiles, refused, err = moveFiles(x.config, x.config.DirMode, resp.Output, resp.X.Path, false)
+		resp.Refused = append(resp.Refused, refused...)
 	}
 
 	if err != nil {
@@ -515,7 +526,9 @@ func (x *Xtractr) cleanTempFolder(resp *Response) {
 		return
 	}
 
-	newFiles, err := x.MoveFiles(resp.Output, newName, false)
+	newFiles, refused, err := moveFiles(x.config, x.config.DirMode, resp.Output, newName, false)
+	resp.Refused = append(resp.Refused, refused...)
+
 	if err != nil {
 		x.config.Printf("Error: Renaming Temporary Folder: %v", err)
 	} else {
