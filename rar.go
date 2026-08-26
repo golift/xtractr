@@ -32,16 +32,19 @@ func ExtractRAR(xFile *XFile) (size uint64, filesList, archiveList []string, err
 		attempt.Password = password
 
 		size, files, archives, err := extractRAR(&attempt)
-		if err == nil {
+		xFile.prog = attempt.prog
+
+		switch {
+		case err == nil:
 			return size, files, archives, nil
-		}
-
-		// https://github.com/nwaples/rardecode/issues/28
-		if strings.Contains(err.Error(), "incorrect password") {
+		case isLimitError(err):
+			return size, files, archives, err
+		case strings.Contains(err.Error(), "incorrect password"):
+			// https://github.com/nwaples/rardecode/issues/28
 			continue
+		default:
+			return size, files, archives, fmt.Errorf("used password %d of %d: %w", idx+1, len(passwords), err)
 		}
-
-		return size, files, archives, fmt.Errorf("used password %d of %d: %w", idx+1, len(passwords), err)
 	}
 
 	// No password worked, try without a password.
@@ -58,7 +61,12 @@ func extractRAR(xFile *XFile) (uint64, []string, []string, error) {
 		return 0, nil, nil, fmt.Errorf("rardecode.OpenReader: %w", err)
 	}
 
-	defer xFile.newArchiveProgress(getUncompressedRarSize(rarReader, xFile.FilePath)).done() // this closes rarReader
+	tracker, headerErr := xFile.archiveProgress(getUncompressedRarSize(rarReader, xFile.FilePath))
+	defer tracker.done() // getUncompressedRarSize closed rarReader
+
+	if headerErr != nil {
+		return 0, nil, nil, headerErr
+	}
 
 	rarReader, err = rardecode.OpenReader(xFile.FilePath, rardecode.Password(xFile.Password)) // open it again.
 	if err != nil {

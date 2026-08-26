@@ -30,6 +30,8 @@ func Extract7z(xFile *XFile) (size uint64, filesList, archiveList []string, err 
 		attempt.Password = password
 
 		size, files, archives, err := extract7z(&attempt)
+		xFile.prog = attempt.prog
+
 		switch {
 		case err == nil:
 			return size, files, archives, nil
@@ -50,7 +52,12 @@ func extract7z(xFile *XFile) (uint64, []string, []string, error) {
 		return 0, nil, nil, fmt.Errorf("%s: os.Open: %w", xFile.FilePath, err)
 	}
 
-	defer xFile.newArchiveProgress(getUncompressed7zSize(sevenZip, xFile.FilePath)).done() // this closes sevenZip
+	tracker, headerErr := xFile.archiveProgress(getUncompressed7zSize(sevenZip, xFile.FilePath))
+	defer tracker.done() // getUncompressed7zSize closed sevenZip
+
+	if headerErr != nil {
+		return 0, nil, nil, headerErr
+	}
 
 	sevenZip, err = sevenzip.OpenReaderWithPassword(xFile.FilePath, xFile.Password)
 	if err != nil {

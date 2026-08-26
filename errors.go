@@ -28,6 +28,7 @@ var (
 	errExtractSymlink    = errors.New("refusing to write through a symbolic link")
 	errExtractNotRegular = errors.New("refusing to extract onto a non-regular file")
 	errExtractConflict   = errors.New("too many concurrent changes at the extract path")
+	errNotDirectory      = errors.New("path exists and is not a directory")
 
 	// ErrMaxBytes is returned when uncompressed bytes written exceed MaxBytes (0 is unlimited).
 	ErrMaxBytes = errors.New("extracted size exceeds maximum bytes")

@@ -70,3 +70,26 @@ func TestContinueArchiveProgressKeepsCounts(t *testing.T) {
 	require.Equal(t, uint64(40), second.Wrote)
 	require.Equal(t, 3, second.Files)
 }
+
+func TestArchiveProgressReturnsClaimedMaxFiles(t *testing.T) {
+	t.Parallel()
+
+	xFile := &XFile{MaxFiles: 1}
+	_, err := xFile.archiveProgress(0, 10, 5)
+	require.ErrorIs(t, err, ErrMaxFiles)
+}
+
+func TestArchiveProgressKeepsCountsAcrossCalls(t *testing.T) {
+	t.Parallel()
+
+	xFile := &XFile{MaxFiles: 100}
+	first, err := xFile.archiveProgress(0, 10, 1)
+	require.NoError(t, err)
+
+	first.Files = 7
+
+	attempt := *xFile
+	_, err = attempt.archiveProgress(0, 10, 1)
+	require.NoError(t, err)
+	require.Equal(t, 7, attempt.prog.Files)
+}

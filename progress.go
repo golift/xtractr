@@ -145,6 +145,15 @@ func (x *XFile) newArchiveProgress(total, compressed uint64, count int) *progres
 	return tracker
 }
 
+// archiveProgress is continueArchiveProgress that returns a claimed-limit error
+// immediately so extractors can abort before walking members. Password retries
+// and the ISO UDF→ISO9660 fallback keep Wrote/Files through continue.
+func (x *XFile) archiveProgress(total, compressed uint64, count int) (*progressTracker, error) {
+	tracker := x.continueArchiveProgress(total, compressed, count)
+
+	return tracker, tracker.headerErr
+}
+
 // continueArchiveProgress is newArchiveProgress that keeps Wrote/Files from the
 // current tracker. Used when ISO9660 follows a partial UDF attempt so the same
 // MaxBytes/MaxFiles budget is not reset.
@@ -477,6 +486,19 @@ func (x *XFile) countExtracted() error {
 	defer x.prog.mu.Unlock()
 
 	return x.prog.addFileLocked()
+}
+
+func (x *XFile) uncountExtracted() {
+	if x == nil || x.prog == nil {
+		return
+	}
+
+	x.prog.mu.Lock()
+	defer x.prog.mu.Unlock()
+
+	if x.prog.Files > 0 {
+		x.prog.Files--
+	}
 }
 
 func (p *progressTracker) reader(reader io.Reader) io.Reader {

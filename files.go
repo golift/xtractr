@@ -977,28 +977,60 @@ func (x *XFile) mkdirAllCounted(path string, mode os.FileMode) error {
 	}
 
 	for _, dir := range dirComponentsUnder(base, path) {
-		err := os.Mkdir(dir, perm)
-		switch {
-		case err == nil:
-			if !x.resolvedWithinOutput(dir) {
-				_ = os.Remove(dir)
-
-				return fmt.Errorf("%s: %w: %s resolves outside the output folder", x.FilePath, ErrInvalidPath, dir)
-			}
-
-			countErr := x.countExtracted()
-			if countErr != nil {
-				_ = os.Remove(dir)
-
-				return countErr
-			}
-		case errors.Is(err, os.ErrExist):
-			if !x.resolvedWithinOutput(dir) {
-				return fmt.Errorf("%s: %w: %s resolves outside the output folder", x.FilePath, ErrInvalidPath, dir)
-			}
-		default:
-			return fmt.Errorf("creating directory %s: %w", dir, err)
+		err := x.mkdirComponent(dir, perm)
+		if err != nil {
+			return err
 		}
+	}
+
+	return nil
+}
+
+// mkdirComponent reserves a MaxFiles slot, then creates dir. Reservation is
+// rolled back on EEXIST (another worker or a pre-existing path) so parallel
+// ZIP/7z extracts cannot leave an over-limit directory that can no longer be
+// removed. A non-directory occupying the path is an error.
+func (x *XFile) mkdirComponent(dir string, perm os.FileMode) error {
+	err := x.countExtracted()
+	if err != nil {
+		return err
+	}
+
+	err = os.Mkdir(dir, perm)
+	switch {
+	case err == nil:
+		if !x.resolvedWithinOutput(dir) {
+			_ = os.Remove(dir)
+
+			x.uncountExtracted()
+
+			return fmt.Errorf("%s: %w: %s resolves outside the output folder", x.FilePath, ErrInvalidPath, dir)
+		}
+
+		return nil
+	case errors.Is(err, os.ErrExist):
+		x.uncountExtracted()
+
+		return x.existingDirOK(dir)
+	default:
+		x.uncountExtracted()
+
+		return fmt.Errorf("creating directory %s: %w", dir, err)
+	}
+}
+
+func (x *XFile) existingDirOK(dir string) error {
+	info, err := os.Stat(dir)
+	if err != nil {
+		return fmt.Errorf("stat existing path %s: %w", dir, err)
+	}
+
+	if !info.IsDir() {
+		return fmt.Errorf("%s: %w: %s", x.FilePath, errNotDirectory, dir)
+	}
+
+	if !x.resolvedWithinOutput(dir) {
+		return fmt.Errorf("%s: %w: %s resolves outside the output folder", x.FilePath, ErrInvalidPath, dir)
 	}
 
 	return nil

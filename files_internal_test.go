@@ -608,6 +608,26 @@ func TestMkDirCountsEachMissingComponent(t *testing.T) {
 	require.NoDirExists(t, filepath.Join(out, "a", "b", "c"))
 }
 
+func TestMkDirExistingFileIsNotDirectory(t *testing.T) {
+	t.Parallel()
+
+	out := t.TempDir()
+	filePath := filepath.Join(out, "notdir")
+	require.NoError(t, os.WriteFile(filePath, []byte("x"), 0o600))
+
+	oldTime := time.Date(2001, 2, 3, 4, 5, 6, 0, time.UTC)
+	require.NoError(t, os.Chtimes(filePath, oldTime, oldTime))
+
+	xFile := &XFile{FilePath: "a.zip", OutputDir: out, DirMode: 0o755}
+	err := xFile.mkDir(filePath, 0o755, time.Now())
+	require.ErrorIs(t, err, errNotDirectory)
+
+	info, err := os.Stat(filePath)
+	require.NoError(t, err)
+	assert.Equal(t, oldTime.Unix(), info.ModTime().Unix(), "rejected file must not be Chtimes'd")
+	assert.False(t, info.IsDir())
+}
+
 func TestCreateSymlinkRemovesWhenMaxFilesExceeded(t *testing.T) {
 	t.Parallel()
 

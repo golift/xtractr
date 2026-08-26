@@ -68,6 +68,24 @@ func TestExtractZipMaxFiles(t *testing.T) {
 	require.ErrorIs(t, err, xtractr.ErrMaxFiles)
 }
 
+func TestExtractZipHeaderMaxFilesExistingDirs(t *testing.T) {
+	t.Parallel()
+
+	src, out := makeEmptyDirsZip(t, limitZipFiles)
+	for idx := range limitZipFiles {
+		require.NoError(t, os.MkdirAll(filepath.Join(out, fmt.Sprintf("dir_%d", idx)), 0o700))
+	}
+
+	_, _, err := xtractr.ExtractZIP(&xtractr.XFile{
+		FilePath:  src,
+		OutputDir: out,
+		FileMode:  0o600,
+		DirMode:   0o700,
+		MaxFiles:  limitZipFiles - 1,
+	})
+	require.ErrorIs(t, err, xtractr.ErrMaxFiles)
+}
+
 func TestExtractTarMaxFilesRuntime(t *testing.T) {
 	t.Parallel()
 
@@ -250,6 +268,32 @@ func makeEmptyFilesZip(t *testing.T, count int) (src, out string) {
 	for idx := range count {
 		_, err = zipWriter.CreateHeader(&zip.FileHeader{
 			Name:   fmt.Sprintf("file_%d.txt", idx),
+			Method: zip.Store,
+		})
+		require.NoError(t, err)
+	}
+
+	require.NoError(t, zipWriter.Close())
+	require.NoError(t, zipFile.Close())
+
+	return src, out
+}
+
+func makeEmptyDirsZip(t *testing.T, count int) (src, out string) {
+	t.Helper()
+
+	dir := t.TempDir()
+	src = filepath.Join(dir, "dirs.zip")
+	out = filepath.Join(dir, "out")
+	require.NoError(t, os.MkdirAll(out, 0o700))
+
+	zipFile, err := os.Create(src)
+	require.NoError(t, err)
+
+	zipWriter := zip.NewWriter(zipFile)
+	for idx := range count {
+		_, err = zipWriter.CreateHeader(&zip.FileHeader{
+			Name:   fmt.Sprintf("dir_%d/", idx),
 			Method: zip.Store,
 		})
 		require.NoError(t, err)
