@@ -554,11 +554,20 @@ func splitFLAC(xFile *XFile, audioPath string, cue *CueSheet, timestamps []cueTi
 // trackEncoder holds an open encoder for a single output track during streaming.
 type trackEncoder struct {
 	enc        *flac.Encoder
+	held       *frame.Frame // last built frame, not yet written (see writeClip)
 	outputPath string
 	number     int
 	start      uint64
 	end        uint64
 }
+
+// minFLACBlockSize is the smallest block size (in samples) the FLAC format allows
+// for any frame except the final frame of a stream (RFC 9639, section 9.1).
+// maxFLACBlockSize is the largest block size a FLAC frame can hold.
+const (
+	minFLACBlockSize = 16
+	maxFLACBlockSize = 65535
+)
 
 // trackSplitter streams source FLAC frames into per-track encoders. It opens a track
 // encoder only when the stream reaches that track and closes it as soon as the stream
@@ -753,10 +762,90 @@ func (s *trackSplitter) writeFrame(parsed *frame.Frame, frameStart, frameEnd uin
 			continue
 		}
 
-		err := encoder.enc.WriteFrame(buildOutputFrame(parsed, offsetInFrame, samplesToTake))
+		err := encoder.writeClip(parsed, offsetInFrame, samplesToTake)
 		if err != nil {
 			return fmt.Errorf("writing frame to track %d (%s): %w", encoder.number, encoder.outputPath, err)
 		}
+	}
+
+	return nil
+}
+
+// writeClip builds an output frame from a clip of the source frame and writes it to
+// the track. One frame is held back so a clip smaller than the FLAC minimum block
+// size fuses with its neighbor instead of becoming a spec-invalid tiny frame: a CUE
+// boundary that falls near a source frame's edge otherwise produces a track whose
+// first or last clip is under 16 samples, and the encoder records the smallest
+// written frame as STREAMINFO's minimum block size, which strict parsers reject.
+func (e *trackEncoder) writeClip(src *frame.Frame, offset, count int) error {
+	newFrame := buildOutputFrame(src, offset, count)
+
+	if e.held == nil {
+		e.held = newFrame
+		return nil
+	}
+
+	if fused, ok := fuseFrames(e.held, newFrame); ok {
+		e.held = fused
+		return nil
+	}
+
+	err := e.enc.WriteFrame(e.held)
+	if err != nil {
+		return fmt.Errorf("encoding flac frame: %w", err)
+	}
+
+	e.held = newFrame
+
+	return nil
+}
+
+// fuseFrames concatenates two adjacent output frames when at least one is smaller
+// than the minimum block size the FLAC format allows for a non-final frame, and the
+// combined frame still fits in a FLAC frame. It reports whether fusion happened.
+func fuseFrames(held, next *frame.Frame) (*frame.Frame, bool) {
+	heldSamples := held.Subframes[0].NSamples
+	nextSamples := next.Subframes[0].NSamples
+
+	if heldSamples >= minFLACBlockSize && nextSamples >= minFLACBlockSize {
+		return nil, false
+	}
+
+	combined := heldSamples + nextSamples
+	if combined > maxFLACBlockSize {
+		return nil, false
+	}
+
+	merged := &frame.Frame{Header: held.Header}
+	merged.BlockSize = uint16(combined)
+	merged.Subframes = make([]*frame.Subframe, len(held.Subframes))
+
+	for channel := range held.Subframes {
+		samples := make([]int32, 0, combined)
+		samples = append(samples, held.Subframes[channel].Samples...)
+		samples = append(samples, next.Subframes[channel].Samples...)
+
+		merged.Subframes[channel] = &frame.Subframe{
+			SubHeader: held.Subframes[channel].SubHeader,
+			Samples:   samples,
+			NSamples:  combined,
+		}
+	}
+
+	return merged, true
+}
+
+// flushHeld writes the buffered frame, if any. Called when a track ends.
+func (e *trackEncoder) flushHeld() error {
+	if e.held == nil {
+		return nil
+	}
+
+	err := e.enc.WriteFrame(e.held)
+	e.held = nil
+
+	if err != nil {
+		return fmt.Errorf("encoding flac frame: %w", err)
 	}
 
 	return nil
@@ -803,7 +892,12 @@ func (s *trackSplitter) finishAll() error {
 
 // finalize closes a track encoder (flushing the FLAC stream) and records its size.
 func (s *trackSplitter) finalize(encoder *trackEncoder) error {
-	err := encoder.enc.Close()
+	err := encoder.flushHeld()
+	if err != nil {
+		return fmt.Errorf("writing final frame to track %d (%s): %w", encoder.number, encoder.outputPath, err)
+	}
+
+	err = encoder.enc.Close()
 	if err != nil {
 		return fmt.Errorf("closing track %d encoder (%s): %w", encoder.number, encoder.outputPath, err)
 	}

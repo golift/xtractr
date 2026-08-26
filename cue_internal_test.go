@@ -1,10 +1,15 @@
 package xtractr
 
 import (
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/mewkiz/flac"
+	"github.com/mewkiz/flac/frame"
+	"github.com/mewkiz/flac/meta"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -84,4 +89,96 @@ func TestCopyCueToOutputReplacesSymlink(t *testing.T) {
 	info, err := os.Lstat(dest)
 	require.NoError(t, err)
 	assert.Equal(t, os.FileMode(0), info.Mode()&os.ModeSymlink)
+}
+
+// TestStreamTracksFLACTinyBoundaryClips splits a fixed-blocksize FLAC at sample
+// positions that land 8 samples into and 8 samples before the end of a source
+// frame. Those boundary clips are smaller than the minimum block size the FLAC
+// format allows for a non-final frame (16 samples), so they must fuse with the
+// neighboring frame; written as-is, the encoder records a STREAMINFO minimum
+// block size of 8 and strict parsers (including go-flac itself) reject the track.
+func TestStreamTracksFLACTinyBoundaryClips(t *testing.T) {
+	t.Parallel()
+
+	const (
+		blockSize    = 4096
+		totalSamples = 5 * blockSize
+	)
+
+	tmpDir := t.TempDir()
+	flacPath := filepath.Join(tmpDir, "album.flac")
+	info := &meta.StreamInfo{
+		BlockSizeMin:  blockSize,
+		BlockSizeMax:  blockSize,
+		SampleRate:    44100,
+		NChannels:     2,
+		BitsPerSample: 16,
+		NSamples:      totalSamples,
+	}
+
+	outFile, err := os.Create(flacPath)
+	require.NoError(t, err)
+
+	enc, err := flac.NewEncoder(outFile, info)
+	require.NoError(t, err)
+
+	for written := 0; written < totalSamples; written += blockSize {
+		subframes := make([]*frame.Subframe, 2)
+		for ch := range subframes {
+			subframes[ch] = &frame.Subframe{
+				SubHeader: frame.SubHeader{Pred: frame.PredVerbatim},
+				Samples:   make([]int32, blockSize),
+				NSamples:  blockSize,
+			}
+		}
+
+		require.NoError(t, enc.WriteFrame(&frame.Frame{
+			Header: frame.Header{
+				HasFixedBlockSize: true,
+				BlockSize:         blockSize,
+				SampleRate:        44100,
+				Channels:          frame.ChannelsLR,
+				BitsPerSample:     16,
+			},
+			Subframes: subframes,
+		}))
+	}
+
+	require.NoError(t, enc.Close())
+
+	// Track 1 ends 8 samples into a source frame; track 3 starts 8 samples
+	// before a source frame ends. Both edges produce an 8-sample clip.
+	trackStarts := []uint64{0, 4104, 12280}
+	trackEnds := []uint64{4104, 12280, totalSamples}
+	cue := &CueSheet{Tracks: []CueTrack{{Number: 1}, {Number: 2}, {Number: 3}}}
+	xFile := &XFile{OutputDir: tmpDir, FileMode: 0o600}
+
+	_, files, err := streamTracksFLAC(xFile, flacPath, cue, trackStarts, trackEnds, info, &flacMetadata{Info: info})
+	require.NoError(t, err)
+	require.Len(t, files, 3)
+
+	expected := []uint64{4104, 12280 - 4104, totalSamples - 12280}
+
+	for idx, path := range files {
+		trackFile, err := os.Open(path)
+		require.NoError(t, err)
+
+		stream, err := flac.New(trackFile)
+		require.NoError(t, err, "track %d STREAMINFO must parse", idx+1)
+		assert.Equal(t, expected[idx], stream.Info.NSamples, "track %d sample count", idx+1)
+
+		for frameIdx := 0; ; frameIdx++ {
+			frm, err := stream.ParseNext()
+			if errors.Is(err, io.EOF) {
+				break
+			}
+
+			require.NoError(t, err)
+			assert.False(t, frm.HasFixedBlockSize, "track %d frame %d", idx+1, frameIdx)
+			assert.GreaterOrEqual(t, frm.Subframes[0].NSamples, minFLACBlockSize,
+				"track %d frame %d below minimum block size", idx+1, frameIdx)
+		}
+
+		require.NoError(t, trackFile.Close())
+	}
 }
