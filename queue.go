@@ -430,10 +430,11 @@ func (x *Xtractr) cleanupProcessedArchives(resp *Response) error {
 	if !resp.X.TempFolder {
 		time.Sleep(fsSyncDelay) // Wait for file system to catch up/sync.
 		// If TempFolder is false then move the files back to the original location.
-		var refused []RefusedFile
+		var renamed Renamed
 
-		resp.NewFiles, refused, err = moveFiles(x.config, x.config.DirMode, resp.Output, resp.X.Path, false)
-		resp.Refused = append(resp.Refused, refused...)
+		renamed, err = x.RenameFiles(resp.Output, resp.X.Path, false)
+		resp.NewFiles = renamed.NewFiles
+		resp.Refused = append(resp.Refused, renamed.Refused...)
 	}
 
 	if err != nil {
@@ -526,15 +527,15 @@ func (x *Xtractr) cleanTempFolder(resp *Response) {
 		return
 	}
 
-	newFiles, refused, err := moveFiles(x.config, x.config.DirMode, resp.Output, newName, false)
-	resp.Refused = append(resp.Refused, refused...)
+	renamed, err := x.RenameFiles(resp.Output, newName, false)
+	resp.Refused = append(resp.Refused, renamed.Refused...)
 
 	if err != nil {
 		x.config.Printf("Error: Renaming Temporary Folder: %v", err)
 	} else {
 		x.config.Debugf("Renamed Temp Folder: %v -> %v", resp.Output, newName)
 		resp.Output = newName
-		resp.NewFiles = newFiles
+		resp.NewFiles = renamed.NewFiles
 	}
 
 	files, err := x.GetFileList(resp.X.Path)
