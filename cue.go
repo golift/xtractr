@@ -773,7 +773,7 @@ func (s *trackSplitter) writeFrame(parsed *frame.Frame, frameStart, frameEnd uin
 
 // writeClip builds an output frame from a clip of the source frame and writes it to
 // the track. One frame is held back so a clip smaller than the FLAC minimum block
-// size fuses with its neighbor instead of becoming a spec-invalid tiny frame: a CUE
+// size merges with its neighbor instead of becoming a spec-invalid tiny frame: a CUE
 // boundary that falls near a source frame's edge otherwise produces a track whose
 // first or last clip is under 16 samples, and the encoder records the smallest
 // written frame as STREAMINFO's minimum block size, which strict parsers reject.
@@ -785,37 +785,56 @@ func (e *trackEncoder) writeClip(src *frame.Frame, offset, count int) error {
 		return nil
 	}
 
-	if fused, ok := fuseFrames(e.held, newFrame); ok {
-		e.held = fused
-		return nil
+	write, hold := balanceFrames(e.held, newFrame)
+	e.held = hold
+
+	if write == nil {
+		return nil // the clips were concatenated into the held frame
 	}
 
-	err := e.enc.WriteFrame(e.held)
+	err := e.enc.WriteFrame(write)
 	if err != nil {
 		return fmt.Errorf("encoding flac frame: %w", err)
 	}
 
-	e.held = newFrame
-
 	return nil
 }
 
-// fuseFrames concatenates two adjacent output frames when at least one is smaller
-// than the minimum block size the FLAC format allows for a non-final frame, and the
-// combined frame still fits in a FLAC frame. It reports whether fusion happened.
-func fuseFrames(held, next *frame.Frame) (*frame.Frame, bool) {
+// balanceFrames returns the frame to write now and the frame to hold for the next
+// clip, sized so neither is smaller than the FLAC minimum block size. When the two
+// fit in one frame it concatenates them (write is nil); otherwise it moves the
+// smallest possible tail of the larger frame onto the smaller one. Total samples
+// and their order are always preserved.
+func balanceFrames(held, next *frame.Frame) (write, hold *frame.Frame) {
 	heldSamples := held.Subframes[0].NSamples
 	nextSamples := next.Subframes[0].NSamples
-
-	if heldSamples >= minFLACBlockSize && nextSamples >= minFLACBlockSize {
-		return nil, false
-	}
-
 	combined := heldSamples + nextSamples
-	if combined > maxFLACBlockSize {
-		return nil, false
-	}
 
+	switch {
+	case heldSamples >= minFLACBlockSize && nextSamples >= minFLACBlockSize:
+		// Both already valid; write the earlier frame and hold the later one.
+		return held, next
+	case combined <= maxFLACBlockSize:
+		// Fits in one frame; write nothing and hold the concatenation.
+		return nil, concatFrames(held, next)
+	default:
+		// Too large to concatenate. Move the tail of the larger frame onto the
+		// smaller one so both meet the minimum block size.
+		move := minFLACBlockSize - min(heldSamples, nextSamples)
+
+		if heldSamples >= nextSamples {
+			// held is larger: shrink held by its tail, prepend that tail to next.
+			return clipFrame(held, 0, heldSamples-move, nil), clipFrame(next, 0, nextSamples, tailFrame(held, move))
+		}
+
+		// next is larger: shrink next by its tail, append held before next's head.
+		return concatFrames(held, clipFrame(next, 0, move, nil)), clipFrame(next, move, nextSamples-move, nil)
+	}
+}
+
+// concatFrames returns one frame holding held's samples followed by next's.
+func concatFrames(held, next *frame.Frame) *frame.Frame {
+	combined := held.Subframes[0].NSamples + next.Subframes[0].NSamples
 	merged := &frame.Frame{Header: held.Header}
 	merged.BlockSize = uint16(combined)
 	merged.Subframes = make([]*frame.Subframe, len(held.Subframes))
@@ -832,7 +851,43 @@ func fuseFrames(held, next *frame.Frame) (*frame.Frame, bool) {
 		}
 	}
 
-	return merged, true
+	return merged
+}
+
+// tailFrame returns a frame holding the last count samples of src.
+func tailFrame(src *frame.Frame, count int) *frame.Frame {
+	return clipFrame(src, src.Subframes[0].NSamples-count, count, nil)
+}
+
+// clipFrame returns a frame of count samples starting at offset. When prefix is
+// non-nil, that many samples from the end of prefix are prepended first (used to
+// move an earlier frame's tail onto the start of the next frame).
+func clipFrame(src *frame.Frame, offset, count int, prefix *frame.Frame) *frame.Frame {
+	total := count
+	if prefix != nil {
+		total += prefix.Subframes[0].NSamples
+	}
+
+	out := &frame.Frame{Header: src.Header}
+	out.BlockSize = uint16(total)
+	out.Subframes = make([]*frame.Subframe, len(src.Subframes))
+
+	for channel := range src.Subframes {
+		var samples []int32
+		if prefix != nil {
+			samples = append(samples, prefix.Subframes[channel].Samples...)
+		}
+
+		samples = append(samples, src.Subframes[channel].Samples[offset:offset+count]...)
+
+		out.Subframes[channel] = &frame.Subframe{
+			SubHeader: src.Subframes[channel].SubHeader,
+			Samples:   samples,
+			NSamples:  total,
+		}
+	}
+
+	return out
 }
 
 // flushHeld writes the buffered frame, if any. Called when a track ends.
@@ -894,6 +949,9 @@ func (s *trackSplitter) finishAll() error {
 func (s *trackSplitter) finalize(encoder *trackEncoder) error {
 	err := encoder.flushHeld()
 	if err != nil {
+		// The encoder is removed from s.open by the caller, so closeOpen cannot
+		// reach it; close it here to avoid leaking the output descriptor.
+		_ = encoder.enc.Close()
 		return fmt.Errorf("writing final frame to track %d (%s): %w", encoder.number, encoder.outputPath, err)
 	}
 

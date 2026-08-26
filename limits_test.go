@@ -160,6 +160,27 @@ func TestExtractGzipUnlimited(t *testing.T) {
 	require.Len(t, files, 1)
 }
 
+// TestExtractFileLimitErrorSkipsSignatureFallback ensures a resource cap reached by
+// the extension-matched extractor aborts the archive instead of falling through to
+// signature detection, which would re-extract with fresh counters (and for a .tar.gz
+// could even report success leaving an unextracted .tar).
+func TestExtractFileLimitErrorSkipsSignatureFallback(t *testing.T) {
+	t.Parallel()
+
+	src, out := makeGzipOfZeros(t)
+
+	xFile := &xtractr.XFile{
+		FilePath:  src,
+		OutputDir: out,
+		FileMode:  0o600,
+		DirMode:   0o700,
+		MaxBytes:  100,
+	}
+
+	_, _, _, err := xtractr.ExtractFile(xFile) //nolint:dogsled // only the error matters here.
+	require.ErrorIs(t, err, xtractr.ErrMaxBytes)
+}
+
 func TestQueueInheritsConfigMaxBytes(t *testing.T) {
 	t.Parallel()
 

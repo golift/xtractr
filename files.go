@@ -463,16 +463,24 @@ func ExtractFile(xFile *XFile) (size uint64, filesList, archiveList []string, er
 	var extensionType string // archive type from matched extension, for error reporting when extraction fails
 
 	for _, ext := range extension2function {
-		if strings.HasSuffix(sName, ext.Ext) {
-			size, filesList, archiveList, err = ext.Fn(xFile)
-			if err == nil {
-				return size, filesList, archiveList, nil
-			}
-
-			extensionType = ext.Type // preserve for error reporting before fallback
-			// Extension matched but extraction failed; try signature detection as fallback.
-			break
+		if !strings.HasSuffix(sName, ext.Ext) {
+			continue
 		}
+
+		size, filesList, archiveList, err = ext.Fn(xFile)
+		if err == nil {
+			return size, filesList, archiveList, nil
+		}
+
+		// A resource cap aborts the extraction; do not re-extract via signature
+		// detection, which would reset the counters and could even report success.
+		if isLimitError(err) {
+			return size, filesList, archiveList, err
+		}
+
+		extensionType = ext.Type // preserve for error reporting before fallback
+		// Extension matched but extraction failed; try signature detection as fallback.
+		break
 	}
 
 	// Fall back to file signature (magic number) detection.

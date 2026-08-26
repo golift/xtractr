@@ -124,10 +124,15 @@ func TestStreamTracksFLACTinyBoundaryClips(t *testing.T) {
 
 	for written := 0; written < totalSamples; written += blockSize {
 		subframes := make([]*frame.Subframe, 2)
-		for ch := range subframes {
-			subframes[ch] = &frame.Subframe{
+		for channel := range subframes {
+			samples := make([]int32, blockSize)
+			for i := range samples {
+				samples[i] = int32(written + i)
+			}
+
+			subframes[channel] = &frame.Subframe{
 				SubHeader: frame.SubHeader{Pred: frame.PredVerbatim},
-				Samples:   make([]int32, blockSize),
+				Samples:   samples,
 				NSamples:  blockSize,
 			}
 		}
@@ -148,8 +153,8 @@ func TestStreamTracksFLACTinyBoundaryClips(t *testing.T) {
 
 	// Track 1 ends 8 samples into a source frame; track 3 starts 8 samples
 	// before a source frame ends. Both edges produce an 8-sample clip.
-	trackStarts := []uint64{0, 4104, 12280}
-	trackEnds := []uint64{4104, 12280, totalSamples}
+	trackStarts := []uint64{0, blockSize + 8, 3*blockSize - 8}
+	trackEnds := []uint64{blockSize + 8, 3*blockSize - 8, totalSamples}
 	cue := &CueSheet{Tracks: []CueTrack{{Number: 1}, {Number: 2}, {Number: 3}}}
 	xFile := &XFile{OutputDir: tmpDir, FileMode: 0o600}
 
@@ -157,7 +162,7 @@ func TestStreamTracksFLACTinyBoundaryClips(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, files, 3)
 
-	expected := []uint64{4104, 12280 - 4104, totalSamples - 12280}
+	expected := []uint64{blockSize + 8, 2*blockSize - 16, 2*blockSize + 8}
 
 	for idx, path := range files {
 		trackFile, err := os.Open(path)
@@ -166,6 +171,11 @@ func TestStreamTracksFLACTinyBoundaryClips(t *testing.T) {
 		stream, err := flac.New(trackFile)
 		require.NoError(t, err, "track %d STREAMINFO must parse", idx+1)
 		assert.Equal(t, expected[idx], stream.Info.NSamples, "track %d sample count", idx+1)
+
+		// The source sample value equals its absolute position, so each track must
+		// decode to a contiguous run starting at its track start sample. This catches
+		// a fusion/redistribution that drops, duplicates, or reorders samples.
+		position := trackStarts[idx]
 
 		for frameIdx := 0; ; frameIdx++ {
 			frm, err := stream.ParseNext()
@@ -177,8 +187,75 @@ func TestStreamTracksFLACTinyBoundaryClips(t *testing.T) {
 			assert.False(t, frm.HasFixedBlockSize, "track %d frame %d", idx+1, frameIdx)
 			assert.GreaterOrEqual(t, frm.Subframes[0].NSamples, minFLACBlockSize,
 				"track %d frame %d below minimum block size", idx+1, frameIdx)
+
+			for _, sample := range frm.Subframes[0].Samples {
+				require.Equal(t, int32(position), sample,
+					"track %d frame %d sample out of sequence", idx+1, frameIdx)
+				position++
+			}
 		}
 
+		assert.Equal(t, trackEnds[idx], position, "track %d decoded sample count", idx+1)
 		require.NoError(t, trackFile.Close())
 	}
+}
+
+// TestBalanceFrames covers the frame-pair sizing rules: both-valid pairs pass
+// through, small pairs concatenate, and a tiny clip next to a maximum-size frame
+// redistributes samples so neither output frame is below the minimum block size.
+func TestBalanceFrames(t *testing.T) {
+	t.Parallel()
+
+	mkFrame := func(samples int) *frame.Frame {
+		subs := make([]*frame.Subframe, 2)
+		for channel := range subs {
+			subs[channel] = &frame.Subframe{
+				SubHeader: frame.SubHeader{Pred: frame.PredVerbatim},
+				Samples:   make([]int32, samples),
+				NSamples:  samples,
+			}
+		}
+
+		header := frame.Header{
+			BlockSize:     uint16(samples),
+			SampleRate:    44100,
+			Channels:      frame.ChannelsLR,
+			BitsPerSample: 16,
+		}
+
+		return &frame.Frame{Header: header, Subframes: subs}
+	}
+
+	// Both frames already valid: write held, hold next, unchanged.
+	write, hold := balanceFrames(mkFrame(4096), mkFrame(4096))
+	require.NotNil(t, write)
+	require.NotNil(t, hold)
+	assert.Equal(t, 4096, write.Subframes[0].NSamples)
+	assert.Equal(t, 4096, hold.Subframes[0].NSamples)
+
+	// Small pair: concatenate into the held frame, nothing to write yet.
+	write, hold = balanceFrames(mkFrame(8), mkFrame(4096))
+	assert.Nil(t, write)
+	require.NotNil(t, hold)
+	assert.Equal(t, 8+4096, hold.Subframes[0].NSamples)
+
+	// Tiny clip before a maximum-size frame: too large to concatenate, so move
+	// samples from the tiny clip onto the next frame; both meet the minimum.
+	write, hold = balanceFrames(mkFrame(8), mkFrame(maxFLACBlockSize))
+	require.NotNil(t, write)
+	require.NotNil(t, hold)
+	assert.Equal(t, minFLACBlockSize, write.Subframes[0].NSamples)
+	assert.Equal(t, maxFLACBlockSize-8, hold.Subframes[0].NSamples)
+	assert.Equal(t, 8+maxFLACBlockSize, write.Subframes[0].NSamples+hold.Subframes[0].NSamples,
+		"total samples must be preserved")
+
+	// Tiny clip after a maximum-size frame: move the tail of the large frame
+	// forward so both meet the minimum.
+	write, hold = balanceFrames(mkFrame(maxFLACBlockSize), mkFrame(8))
+	require.NotNil(t, write)
+	require.NotNil(t, hold)
+	assert.Equal(t, maxFLACBlockSize-8, write.Subframes[0].NSamples)
+	assert.Equal(t, minFLACBlockSize, hold.Subframes[0].NSamples)
+	assert.Equal(t, maxFLACBlockSize+8, write.Subframes[0].NSamples+hold.Subframes[0].NSamples,
+		"total samples must be preserved")
 }
