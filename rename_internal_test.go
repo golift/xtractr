@@ -241,7 +241,7 @@ func TestCopySiblingExt(t *testing.T) {
 	assert.Equal(t, ".xtractr_link", copySiblingExt(DefaultSuffix, linkTail))
 }
 
-func TestUnusedSiblingSkipsTakenName(t *testing.T) {
+func TestCreateSiblingSkipsTakenName(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
@@ -249,27 +249,76 @@ func TestUnusedSiblingSkipsTakenName(t *testing.T) {
 	taken := dest + copySiblingExt(DefaultSuffix, partialTail)
 	require.NoError(t, os.WriteFile(taken, []byte("taken"), 0o600))
 
-	got, err := unusedSibling(dest, DefaultSuffix, partialTail)
+	// The taken name must not be opened/truncated; the next candidate is used.
+	f, got, err := createSibling(dest, DefaultSuffix, 0o600)
 	require.NoError(t, err)
+	require.NoError(t, f.Close())
 	assert.Equal(t, dest+".xtractr_partial.1", got)
+
+	// The pre-existing file is untouched.
+	content, err := os.ReadFile(taken)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("taken"), content)
 }
 
-func TestUnusedSiblingKnownSuffix(t *testing.T) {
+func TestCreateSiblingKnownSuffix(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
 	dest := filepath.Join(dir, "movie.mkv")
 
-	got, err := unusedSibling(dest, DefaultSuffix, partialTail)
+	f, got, err := createSibling(dest, DefaultSuffix, 0o600)
 	require.NoError(t, err)
+	require.NoError(t, f.Close())
 	assert.Equal(t, dest+".xtractr_partial", got)
+}
+
+// A planted symlink at the sibling name must not be followed or destroyed;
+// the allocator skips to the next numbered candidate.
+func TestCreateSiblingDoesNotFollowSymlink(t *testing.T) {
+	t.Parallel()
+	skipWithoutSymlinks(t)
+
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "payload.bin")
+	victim := filepath.Join(dir, "victim.bin")
+	require.NoError(t, os.WriteFile(victim, []byte("secret"), 0o600))
+	require.NoError(t, os.Symlink(victim, dest+copySiblingExt(DefaultSuffix, partialTail)))
+
+	f, got, err := createSibling(dest, DefaultSuffix, 0o600)
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+	assert.Equal(t, dest+".xtractr_partial.1", got)
+
+	content, err := os.ReadFile(victim)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("secret"), content, "must not write through symlink")
+}
+
+// Long basenames near NAME_MAX are truncated in both the sibling allocator
+// and the scavenger, so leftovers are actually cleaned up.
+func TestScavengePartialsLongName(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	longBase := strings.Repeat("a", nameMax)
+	dest := filepath.Join(dir, longBase)
+
+	// Create the leftover with the exact truncated name createSibling would use.
+	_, stem, fullTail := siblingStem(dest, DefaultSuffix, partialTail)
+	stale := filepath.Join(dir, stem+fullTail)
+	require.NoError(t, os.WriteFile(stale, []byte("stale"), 0o600))
+
+	scavengePartials(dest, DefaultSuffix)
+	require.NoFileExists(t, stale, "truncated-stem partial must be scavenged")
 }
 
 func assertNoPartials(t *testing.T, dest, suffix string) {
 	t.Helper()
 
-	prefix := filepath.Base(dest) + copySiblingExt(suffix, partialTail)
-	entries, err := os.ReadDir(filepath.Dir(dest))
+	dir, stem, fullTail := siblingStem(dest, suffix, partialTail)
+	prefix := stem + fullTail
+	entries, err := os.ReadDir(dir)
 	require.NoError(t, err)
 
 	for _, entry := range entries {

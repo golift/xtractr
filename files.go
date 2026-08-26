@@ -812,11 +812,6 @@ func copyMove(oldpath, newpath, suffix string) error {
 func copyMoveFile(oldpath, newpath, suffix string, oldInfo os.FileInfo) error {
 	scavengePartials(newpath, suffix)
 
-	partial, err := unusedSibling(newpath, suffix, partialTail)
-	if err != nil {
-		return err
-	}
-
 	oldFile, err := os.Open(oldpath)
 	if err != nil {
 		return fmt.Errorf("os.Open(): %w", err)
@@ -824,7 +819,9 @@ func copyMoveFile(oldpath, newpath, suffix string, oldInfo os.FileInfo) error {
 
 	defer oldFile.Close() // also closed explicitly before the delete below.
 
-	newFile, pathUsed, err := openExtractFile(partial, oldInfo.Mode())
+	// createSibling exclusively creates the partial (no-follow), so a name
+	// raced in by another process is never truncated.
+	newFile, pathUsed, err := createSibling(newpath, suffix, oldInfo.Mode())
 	if err != nil {
 		return err
 	}
@@ -865,14 +862,10 @@ func moveSymlink(oldpath, newpath, suffix string) error {
 		return fmt.Errorf("os.Readlink(): %w", err)
 	}
 
-	tmp, err := unusedSibling(newpath, suffix, linkTail)
+	// Reserve an exclusive sibling name, then point the new link at it.
+	tmp, err := createSymlinkSibling(newpath, suffix, linkTail, target)
 	if err != nil {
 		return err
-	}
-
-	err = os.Symlink(target, tmp)
-	if err != nil {
-		return fmt.Errorf("os.Symlink(): %w", err)
 	}
 
 	// rename-over replaces newpath atomically; if it was a symlink, the link is
@@ -889,11 +882,86 @@ func moveSymlink(oldpath, newpath, suffix string) error {
 	return nil
 }
 
+// siblingStem is the shared basename for a copy sibling: the dest basename
+// truncated so the full sibling name fits NAME_MAX. scavengePartials and the
+// sibling allocators must agree on this prefix or leftovers are never cleaned.
+func siblingStem(dest, suffix, tail string) (dir, stem, fullTail string) {
+	fullTail = copySiblingExt(suffix, tail)
+	dir = filepath.Dir(dest)
+	base := filepath.Base(dest)
+	stem = truncateToBytes(base, max(nameMax-len(fullTail), 1))
+
+	return dir, stem, fullTail
+}
+
+// siblingCandidate returns the sibling path for a given attempt (0 = bare).
+func siblingCandidate(dir, stem, fullTail string, attempt int) string {
+	if attempt == 0 {
+		return filepath.Join(dir, stem+fullTail)
+	}
+
+	postfix := "." + strconv.Itoa(attempt)
+	newStem := truncateToBytes(stem, max(nameMax-len(fullTail)-len(postfix), 1))
+
+	return filepath.Join(dir, newStem+fullTail+postfix)
+}
+
+// createSibling exclusively creates the <dest>.<brand>_partial copy sibling
+// and returns the open, no-follow file and its path. On EEXIST it tries the
+// next numbered candidate, so a name raced in by another process is never
+// opened/truncated.
+func createSibling(dest, suffix string, mode os.FileMode) (*os.File, string, error) {
+	dir, stem, fullTail := siblingStem(dest, suffix, partialTail)
+
+	for attempt := range 1001 {
+		tryPath := siblingCandidate(dir, stem, fullTail, attempt)
+
+		file, err := openFileNoFollow(tryPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
+		if err == nil {
+			return file, tryPath, nil
+		}
+
+		// Name taken (or a symlink sits there); try the next candidate.
+		if errors.Is(err, os.ErrExist) || errors.Is(err, errExtractSymlink) {
+			continue
+		}
+
+		return nil, "", err
+	}
+
+	return nil, "", ErrNameTooLong
+}
+
+// createSymlinkSibling creates a symlink named as a sibling of dest, pointing
+// at target, using the same collision-free numbered naming as createSibling.
+// os.Symlink is itself exclusive (fails if the name exists), so no Lstat race.
+func createSymlinkSibling(dest, suffix, tail, target string) (string, error) {
+	dir, stem, fullTail := siblingStem(dest, suffix, tail)
+
+	for attempt := range 1001 {
+		tryPath := siblingCandidate(dir, stem, fullTail, attempt)
+
+		err := os.Symlink(target, tryPath)
+		if err == nil {
+			return tryPath, nil
+		}
+
+		if errors.Is(err, os.ErrExist) {
+			continue
+		}
+
+		return "", fmt.Errorf("os.Symlink(): %w", err)
+	}
+
+	return "", ErrNameTooLong
+}
+
 // scavengePartials removes leftover copy siblings named
-// <dest>.<brand>_partial and <dest>.<brand>_partial.<n>.
+// <stem><tail> and <stem><tail>.<n>, using the same truncated-stem naming as
+// createSibling so near-NAME_MAX names are matched too.
 func scavengePartials(dest, suffix string) {
-	prefix := filepath.Base(dest) + copySiblingExt(suffix, partialTail)
-	dir := filepath.Dir(dest)
+	dir, stem, fullTail := siblingStem(dest, suffix, partialTail)
+	prefix := stem + fullTail
 
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -908,38 +976,6 @@ func scavengePartials(dest, suffix string) {
 
 		_ = os.Remove(filepath.Join(dir, name))
 	}
-}
-
-// unusedSibling returns dest+.<brand>+tail, or dest+.<brand>+tail.N if that
-// name is taken. The dest basename is truncated to fit NAME_MAX.
-//
-//nolint:nilerr
-func unusedSibling(dest, suffix, tail string) (string, error) {
-	var (
-		fullTail = copySiblingExt(suffix, tail)
-		dir      = filepath.Dir(dest)
-		base     = filepath.Base(dest)
-		stem     = truncateToBytes(base, max(nameMax-len(fullTail), 1))
-		tryPath  = filepath.Join(dir, stem+fullTail)
-	)
-
-	_, err := os.Lstat(tryPath)
-	if err != nil {
-		return tryPath, nil
-	}
-
-	for attempt := range 1000 {
-		postfix := "." + strconv.Itoa(attempt+1)
-		newStem := truncateToBytes(stem, max(nameMax-len(fullTail)-len(postfix), 1))
-		tryPath = filepath.Join(dir, newStem+fullTail+postfix)
-
-		_, err = os.Lstat(tryPath)
-		if err != nil {
-			return tryPath, nil
-		}
-	}
-
-	return "", ErrNameTooLong
 }
 
 // AllExcept can be used as an input to ExcludeSuffix in a Filter.
