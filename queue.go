@@ -401,16 +401,18 @@ func (x *Xtractr) processArchive(filename string, resp *Response) (uint64, []str
 	}
 
 	bytes, files, archives, err := ExtractFile(xFile)
-	if err != nil {
-		x.DeleteFiles(resp.Output) // clean up the mess after an error and bail.
-		return bytes, files, archives, WrapExtractError(err, xFile, bytes, "")
-	}
 
 	if len(xFile.SkipOnRecursion) > 0 {
 		resp.SkipOnRecursion = append(resp.SkipOnRecursion, xFile.SkipOnRecursion...)
 	}
 
+	// Collect refusals before the error check so a failed extract still reports them.
 	resp.Refused = append(resp.Refused, xFile.refused...)
+
+	if err != nil {
+		x.DeleteFiles(resp.Output) // clean up the mess after an error and bail.
+		return bytes, files, archives, WrapExtractError(err, xFile, bytes, "")
+	}
 
 	return bytes, files, archives, nil
 }

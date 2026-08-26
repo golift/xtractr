@@ -603,7 +603,15 @@ func moveFiles( //nolint:cyclop,funlen
 		}
 
 		_, err = os.Lstat(newFile)
-		exists := !os.IsNotExist(err)
+		exists := err == nil
+
+		if err != nil && !os.IsNotExist(err) {
+			// Permission or I/O error is not an occupied destination.
+			keepErr = err
+			log.Printf("Error: Checking Temp File Destination: %v to %v: %v", file, newFile, err)
+
+			continue
+		}
 
 		if exists && !overwrite {
 			log.Printf("Error: Renaming Temp File: %v to %v: (refusing to overwrite existing file)", file, newFile)
@@ -716,34 +724,6 @@ func truncateToBytes(str string, maxBytes int) string {
 	return string(raw)
 }
 
-// openFile opens path with the given flags and mode. If the path exceeds
-// filesystem name limits, the path is truncated via TruncatePathForFS and
-// retried. It returns the opened file and the path that was actually used
-// (the original or the truncated path), so the caller can update file.Path
-// for later use (e.g. os.Chtimes).
-func openFile(path string, flags int, mode os.FileMode) (*os.File, string, error) {
-	openFile, err := os.OpenFile(path, flags, mode)
-	if err == nil {
-		return openFile, path, nil
-	}
-
-	if !IsErrNameTooLong(err) {
-		return nil, "", fmt.Errorf("os.OpenFile(): %w", err)
-	}
-
-	shortPath, truncErr := TruncatePathForFS(path)
-	if truncErr != nil {
-		return nil, "", truncErr
-	}
-
-	openFile, err = os.OpenFile(shortPath, flags, mode)
-	if err != nil {
-		return nil, "", fmt.Errorf("os.OpenFile(): %w", err)
-	}
-
-	return openFile, shortPath, nil
-}
-
 type file struct {
 	Path     string
 	Data     io.Reader
@@ -771,16 +751,8 @@ func renameFile(oldpath, newpath string) error {
 
 	/* Rename failed, try copy. */
 
-	// O_TRUNC follows a dest symlink and would write through it. Replace the
-	// name instead, matching os.Rename on the same device.
-	destInfo, destErr := os.Lstat(newpath)
-	if destErr == nil && destInfo.Mode()&os.ModeSymlink != 0 {
-		destErr = os.Remove(newpath) // Delete the symlink.
-		if destErr != nil {
-			return &ExtractError{Errs: []error{origErr, fmt.Errorf("removing dest symlink: %w", destErr)}}
-		}
-	}
-
+	// Open the source first so a missing/unreadable source returns an error
+	// without touching the destination.
 	oldFileStat, err := os.Stat(oldpath)
 	if err != nil {
 		return &ExtractError{Errs: []error{origErr, fmt.Errorf("os.Stat(): %w", err)}}
@@ -793,7 +765,10 @@ func renameFile(oldpath, newpath string) error {
 
 	defer oldFile.Close() // also closed explicitly before the delete below.
 
-	newFile, pathUsed, err := openFile(newpath, os.O_TRUNC|os.O_CREATE|os.O_WRONLY, oldFileStat.Mode())
+	// os.OpenFile(O_TRUNC) follows a dest symlink and would write through it.
+	// openExtractFile opens the dest without following a final-component symlink,
+	// unlinking and retrying like the extract writers do.
+	newFile, pathUsed, err := openExtractFile(newpath, oldFileStat.Mode())
 	if err != nil {
 		return &ExtractError{Errs: []error{origErr, err}}
 	}
