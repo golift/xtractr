@@ -284,3 +284,50 @@ func TestMoveFilesOverwriteDoesNotFollowDirSymlink(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []byte("extracted"), gotDest)
 }
+
+// Copilot: a move failure must not delete the temp source. Before this fix,
+// the unconditional deleteFiles(fromPath) ran even when keepErr was set,
+// destroying the extracted data along with the partial destination result.
+func TestMoveFilesMoveErrorPreservesSource(t *testing.T) {
+	t.Parallel()
+
+	fromDir := t.TempDir()
+	toDir := t.TempDir()
+
+	src := filepath.Join(fromDir, "payload.bin")
+	require.NoError(t, os.WriteFile(src, []byte("extracted"), 0o600))
+
+	// Dest is a non-empty directory. os.Rename(file, nonemptydir) fails, so
+	// keepErr is set in the loop while fromPath still holds the source.
+	dest := filepath.Join(toDir, "payload.bin")
+	require.NoError(t, os.Mkdir(dest, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(dest, "keep.txt"), []byte("keep"), 0o600))
+
+	_, err := moveFiles(NoLogger(), 0o755, fromDir, toDir, true)
+	require.Error(t, err)
+
+	// The temp source must survive so the data is recoverable.
+	require.FileExists(t, src)
+	require.DirExists(t, fromDir)
+}
+
+// A refusal is not an error: the destination is complete (occupied), so the
+// temp source is still cleaned up. Only genuine move failures preserve it.
+func TestMoveFilesRefusalStillCleansSource(t *testing.T) {
+	t.Parallel()
+
+	fromDir := t.TempDir()
+	toDir := t.TempDir()
+	src := filepath.Join(fromDir, "payload.bin")
+	dest := filepath.Join(toDir, "payload.bin")
+
+	require.NoError(t, os.WriteFile(src, []byte("extracted"), 0o600))
+	require.NoError(t, os.WriteFile(dest, []byte("existing"), 0o600))
+
+	got, err := moveFiles(NoLogger(), 0o755, fromDir, toDir, false)
+	require.NoError(t, err)
+	require.Len(t, got.Refused, 1)
+
+	// The moved (refused) file's temp copy is gone; fromPath itself is removed.
+	require.NoDirExists(t, fromDir)
+}
