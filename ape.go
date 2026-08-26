@@ -481,8 +481,6 @@ func splitAPE(
 		return 0, nil, fmt.Errorf("creating output directory: %w", err)
 	}
 
-	defer xFile.newProgress(0, archiveFileSize(audioPath), len(cue.Tracks)).done()
-
 	srcFile, err := os.Open(audioPath)
 	if err != nil {
 		return 0, nil, fmt.Errorf("opening ape file for splitting: %w", err)
@@ -652,17 +650,17 @@ func writeTrackAPEContents(
 		return 0, err
 	}
 
-	err = binary.Write(outFile, binary.LittleEndian, &con.descriptor)
+	err = binary.Write(counted, binary.LittleEndian, &con.descriptor)
 	if err != nil {
 		return 0, fmt.Errorf("writing ape descriptor: %w", err)
 	}
 
-	_, err = outFile.Write(con.headerBytes)
+	_, err = counted.Write(con.headerBytes)
 	if err != nil {
 		return 0, fmt.Errorf("writing ape header: %w", err)
 	}
 
-	_, err = outFile.Write(con.seekTableBytes)
+	_, err = counted.Write(con.seekTableBytes)
 	if err != nil {
 		return 0, fmt.Errorf("writing ape seek table: %w", err)
 	}

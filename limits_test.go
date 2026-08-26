@@ -82,6 +82,49 @@ func TestExtractTarMaxFilesRuntime(t *testing.T) {
 	require.ErrorIs(t, err, xtractr.ErrMaxFiles)
 }
 
+func TestExtractTarEmptyMaxBytes(t *testing.T) {
+	t.Parallel()
+
+	src, out := makeEmptyFilesTar(t, 0)
+
+	size, files, err := xtractr.ExtractTar(&xtractr.XFile{
+		FilePath:  src,
+		OutputDir: out,
+		FileMode:  0o600,
+		DirMode:   0o700,
+		MaxBytes:  1,
+	})
+	require.NoError(t, err)
+	require.Equal(t, uint64(0), size)
+	require.Empty(t, files)
+}
+
+func TestExtractTarNestedDirsMaxFiles(t *testing.T) {
+	t.Parallel()
+
+	src, out := makeNestedFileTar(t, "a/b/c.txt")
+
+	_, _, err := xtractr.ExtractTar(&xtractr.XFile{
+		FilePath:  src,
+		OutputDir: out,
+		FileMode:  0o600,
+		DirMode:   0o700,
+		MaxFiles:  2,
+	})
+	require.ErrorIs(t, err, xtractr.ErrMaxFiles)
+
+	size, files, err := xtractr.ExtractTar(&xtractr.XFile{
+		FilePath:  src,
+		OutputDir: filepath.Join(out, "ok"),
+		FileMode:  0o600,
+		DirMode:   0o700,
+		MaxFiles:  3,
+	})
+	require.NoError(t, err)
+	require.Equal(t, uint64(0), size)
+	require.Len(t, files, 1)
+}
+
 func TestExtractGzipUnlimited(t *testing.T) {
 	t.Parallel()
 
@@ -165,6 +208,29 @@ func makeEmptyFilesTar(t *testing.T, count int) (src, out string) {
 		require.NoError(t, err)
 	}
 
+	require.NoError(t, tarWriter.Close())
+	require.NoError(t, tarFile.Close())
+
+	return src, out
+}
+
+func makeNestedFileTar(t *testing.T, name string) (src, out string) {
+	t.Helper()
+
+	dir := t.TempDir()
+	src = filepath.Join(dir, "nested.tar")
+	out = filepath.Join(dir, "out")
+	require.NoError(t, os.MkdirAll(out, 0o700))
+
+	tarFile, err := os.Create(src)
+	require.NoError(t, err)
+
+	tarWriter := tar.NewWriter(tarFile)
+	require.NoError(t, tarWriter.WriteHeader(&tar.Header{
+		Name: name,
+		Mode: 0o600,
+		Size: 0,
+	}))
 	require.NoError(t, tarWriter.Close())
 	require.NoError(t, tarFile.Close())
 

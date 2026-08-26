@@ -25,6 +25,10 @@ func ExtractISO(xFile *XFile) (size uint64, filesList []string, err error) {
 		return size, filesList, nil
 	}
 
+	if isLimitError(udfErr) {
+		return size, filesList, udfErr
+	}
+
 	xFile.Debugf("UDF extraction failed for %s, falling back to ISO9660: %v", xFile.FilePath, udfErr)
 
 	// Fall back to ISO9660 (now with Joliet support for full filenames).
@@ -63,16 +67,20 @@ func getUncompressedIsoSize(image *iso9660.Image) (total, _ uint64, count int) {
 	var loop func(isoFile *iso9660.File)
 
 	loop = func(isoFile *iso9660.File) {
-		count++
-
 		children, err := isoFile.GetChildren()
 		if err != nil {
 			return
 		}
 
 		for _, child := range children {
+			count++
+
+			if child.IsDir() {
+				loop(child)
+				continue
+			}
+
 			total += uint64(child.Size())
-			loop(child)
 		}
 	}
 

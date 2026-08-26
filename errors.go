@@ -49,6 +49,10 @@ var (
 	ErrUnsupportedRPMArchiveFmt  = errors.New("unsupported rpm archive format")
 )
 
+func isLimitError(err error) bool {
+	return errors.Is(err, ErrMaxBytes) || errors.Is(err, ErrMaxFiles) || errors.Is(err, ErrMaxRatio)
+}
+
 // ExtractError is a rich error type that can carry multiple errors and warnings
 // from an extraction attempt. Consumers can use errors.As to retrieve it.
 type ExtractError struct {

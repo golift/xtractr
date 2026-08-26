@@ -110,7 +110,6 @@ func (x *XFile) newProgress(total, compressed uint64, count int) *progressTracke
 	tracker.Compressed = compressed
 	tracker.Count = count
 	tracker.XFile = x
-	tracker.headerErr = x.checkClaimedLimits(total, count, compressed)
 	tracker.send = func() {}
 	x.prog = tracker
 
@@ -129,10 +128,21 @@ func (x *XFile) newProgress(total, compressed uint64, count int) *progressTracke
 	return tracker
 }
 
-// newArchiveProgress is newProgress with Compressed set to the archive file size
+// newArchiveProgress is newProgress with Compressed set to the archive file
+// size (or the provided compressed size when non-zero, e.g. summed volumes)
 // so MaxRatio can be enforced even when member headers omit packed sizes.
-func (x *XFile) newArchiveProgress(total, _ uint64, count int) *progressTracker {
-	return x.newProgress(total, archiveFileSize(x.FilePath), count)
+// Claimed uncompressed size and entry counts from headers are checked here;
+// callers that pass the container size as Total for progress (tar, cpio) must
+// use newProgress instead so MaxBytes is not compared to the on-disk archive.
+func (x *XFile) newArchiveProgress(total, compressed uint64, count int) *progressTracker {
+	if compressed == 0 {
+		compressed = archiveFileSize(x.FilePath)
+	}
+
+	tracker := x.newProgress(total, compressed, count)
+	tracker.headerErr = x.checkClaimedLimits(total, count, compressed)
+
+	return tracker
 }
 
 // snapshot returns a copy of the Progress data, safe to send to callbacks/channels.
@@ -296,6 +306,16 @@ func archiveFileSize(path string) uint64 {
 	return uint64(info.Size())
 }
 
+func archiveFileSizes(paths ...string) uint64 {
+	var total uint64
+
+	for _, path := range paths {
+		total += archiveFileSize(path)
+	}
+
+	return total
+}
+
 // checkClaimedLimits fails closed when archive headers claim more than the
 // configured caps. Headers can understate, so this never replaces runtime
 // checks in Write / addFileLocked.
@@ -328,7 +348,7 @@ func (x *XFile) extractWriter(writer io.Writer) (io.Writer, error) {
 }
 
 func (x *XFile) wrapExtractWriter(writer io.Writer, parallel bool) (io.Writer, error) {
-	if x.prog == nil {
+	if x == nil || x.prog == nil {
 		return writer, nil
 	}
 
@@ -336,7 +356,7 @@ func (x *XFile) wrapExtractWriter(writer io.Writer, parallel bool) (io.Writer, e
 }
 
 func (x *XFile) countExtracted() error {
-	if x.prog == nil {
+	if x == nil || x.prog == nil {
 		return nil
 	}
 
@@ -344,6 +364,24 @@ func (x *XFile) countExtracted() error {
 	defer x.prog.mu.Unlock()
 
 	return x.prog.addFileLocked()
+}
+
+func (x *XFile) accountBytes(add uint64) error {
+	if x == nil || x.prog == nil {
+		return nil
+	}
+
+	x.prog.mu.Lock()
+	defer x.prog.mu.Unlock()
+
+	err := x.prog.checkWriteLocked(add)
+	if err != nil {
+		return err
+	}
+
+	x.prog.Wrote += add
+
+	return nil
 }
 
 func (p *progressTracker) reader(reader io.Reader) io.Reader {

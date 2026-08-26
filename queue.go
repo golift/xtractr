@@ -404,9 +404,9 @@ func (x *Xtractr) processArchive(filename string, resp *Response) (uint64, []str
 		Passwords:   resp.X.Passwords,
 		Password:    resp.X.Password,
 		FileWorkers: x.config.FileWorkers,
-		MaxBytes:    pickUint64(resp.X.MaxBytes, x.config.MaxBytes),
-		MaxFiles:    pickInt(resp.X.MaxFiles, x.config.MaxFiles),
-		MaxRatio:    pickFloat64(resp.X.MaxRatio, x.config.MaxRatio),
+		MaxBytes:    pick(resp.X.MaxBytes, x.config.MaxBytes),
+		MaxFiles:    pick(resp.X.MaxFiles, x.config.MaxFiles),
+		MaxRatio:    pick(resp.X.MaxRatio, x.config.MaxRatio),
 		log:         x.config.Logger,
 		Updates:     resp.X.Updates,
 		Progress:    resp.X.Progress,
@@ -425,24 +425,9 @@ func (x *Xtractr) processArchive(filename string, resp *Response) (uint64, []str
 	return bytes, files, archives, nil
 }
 
-func pickUint64(job, cfg uint64) uint64 {
-	if job != 0 {
-		return job
-	}
-
-	return cfg
-}
-
-func pickInt(job, cfg int) int {
-	if job != 0 {
-		return job
-	}
-
-	return cfg
-}
-
-func pickFloat64(job, cfg float64) float64 {
-	if job != 0 {
+func pick[T uint64 | int | float64](job, cfg T) T { //nolint:ireturn // numeric union, not an interface.
+	var zero T
+	if job != zero {
 		return job
 	}
 

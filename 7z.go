@@ -30,10 +30,13 @@ func Extract7z(xFile *XFile) (size uint64, filesList, archiveList []string, err 
 		attempt.Password = password
 
 		size, files, archives, err := extract7z(&attempt)
-		if err != nil && idx == len(passwords)-1 {
-			return size, files, archives, fmt.Errorf("used password %d of %d: %w", idx+1, len(passwords), err)
-		} else if err == nil {
+		switch {
+		case err == nil:
 			return size, files, archives, nil
+		case isLimitError(err):
+			return size, files, archives, err
+		case idx == len(passwords)-1:
+			return size, files, archives, fmt.Errorf("used password %d of %d: %w", idx+1, len(passwords), err)
 		}
 	}
 
@@ -47,7 +50,7 @@ func extract7z(xFile *XFile) (uint64, []string, []string, error) {
 		return 0, nil, nil, fmt.Errorf("%s: os.Open: %w", xFile.FilePath, err)
 	}
 
-	defer xFile.newArchiveProgress(getUncompressed7zSize(sevenZip)).done() // this closes sevenZip
+	defer xFile.newArchiveProgress(getUncompressed7zSize(sevenZip, xFile.FilePath)).done() // this closes sevenZip
 
 	sevenZip, err = sevenzip.OpenReaderWithPassword(xFile.FilePath, xFile.Password)
 	if err != nil {
@@ -80,16 +83,17 @@ func extract7z(xFile *XFile) (uint64, []string, []string, error) {
 	return xFile.prog.Wrote, files, normalizeVolumes(sevenZip.Volumes(), xFile.FilePath), err
 }
 
-func getUncompressed7zSize(reader *sevenzip.ReadCloser) (total, compressed uint64, count int) {
+func getUncompressed7zSize(reader *sevenzip.ReadCloser, filePath string) (total, compressed uint64, count int) {
 	defer reader.Close()
 
 	for _, zipFile := range reader.File {
 		total += zipFile.UncompressedSize
-		// compressed += uint64(zipFile.FileInfo().Size())
 		count++
 	}
 
-	return total, 0, count
+	compressed = archiveFileSizes(normalizeVolumes(reader.Volumes(), filePath)...)
+
+	return total, compressed, count
 }
 
 // sevenZipEntry holds a 7z file entry for the parallel dispatch pass.

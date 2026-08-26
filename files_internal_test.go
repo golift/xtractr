@@ -1,6 +1,7 @@
 package xtractr
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -591,4 +592,63 @@ func TestMoveFilesDoesNotDeleteSourceFile(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{src}, got)
 	require.FileExists(t, src)
+}
+
+func TestMkDirCountsEachMissingComponent(t *testing.T) {
+	t.Parallel()
+
+	out := t.TempDir()
+	xFile := &XFile{FilePath: "a.zip", OutputDir: out, MaxFiles: 2, DirMode: 0o755}
+	xFile.newProgress(0, 0, 0)
+
+	err := xFile.mkDir(filepath.Join(out, "a", "b", "c"), 0o755, time.Now())
+	require.ErrorIs(t, err, ErrMaxFiles)
+	require.DirExists(t, filepath.Join(out, "a"))
+	require.DirExists(t, filepath.Join(out, "a", "b"))
+	require.NoDirExists(t, filepath.Join(out, "a", "b", "c"))
+}
+
+func TestCreateSymlinkRemovesWhenMaxFilesExceeded(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	err := os.Symlink("target", filepath.Join(dir, "symlink-probe"))
+	if err != nil {
+		t.Skipf("symlinks unavailable on this platform: %v", err)
+	}
+
+	xFile := &XFile{FilePath: "a.zip", OutputDir: dir, MaxFiles: 1, DirMode: 0o755}
+	xFile.newProgress(0, 0, 0)
+	require.NoError(t, xFile.countExtracted())
+
+	link := filepath.Join(dir, "link")
+	err = xFile.createSymlink(link, "target")
+	require.ErrorIs(t, err, ErrMaxFiles)
+
+	_, statErr := os.Lstat(link)
+	require.ErrorIs(t, statErr, os.ErrNotExist)
+}
+
+func TestCreateHardLinkRemovesWhenMaxFilesExceeded(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "real"), []byte("x"), 0o600))
+
+	xFile := &XFile{FilePath: "a.zip", OutputDir: dir, MaxFiles: 1, DirMode: 0o755}
+	xFile.newProgress(0, 0, 0)
+	require.NoError(t, xFile.countExtracted())
+
+	link := filepath.Join(dir, "link")
+
+	err := xFile.createHardLink(link, "real")
+	if err != nil && !errors.Is(err, ErrMaxFiles) {
+		t.Skipf("hard links and symlink fallback unavailable: %v", err)
+	}
+
+	require.ErrorIs(t, err, ErrMaxFiles)
+
+	_, statErr := os.Lstat(link)
+	require.ErrorIs(t, statErr, os.ErrNotExist)
 }

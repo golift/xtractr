@@ -941,36 +941,91 @@ func openStatFile(path string) (*os.File, os.FileInfo, error) {
 // mkDir creates a folder (and parents) with safe permissions.
 // It refuses to leave the output folder through a pre-existing symlink.
 func (x *XFile) mkDir(path string, mode os.FileMode, mtime time.Time) error {
-	// Check before MkdirAll so we do not create directories (or Chtimes them)
-	// through a symlink that already points outside OutputDir.
+	// Check before creating so we do not mkdir (or Chtimes) through a symlink
+	// that already points outside OutputDir.
 	if !x.resolvedWithinOutput(path) {
 		return fmt.Errorf("%s: %w: %s resolves outside the output folder", x.FilePath, ErrInvalidPath, path)
 	}
 
-	_, statErr := os.Lstat(path)
-	existed := statErr == nil
-
-	err := os.MkdirAll(path, x.safeDirMode(mode))
+	err := x.mkdirAllCounted(path, mode)
 	if err != nil {
-		return err //nolint:wrapcheck
+		return err
 	}
 
-	// Recheck after create: MkdirAll follows symlinks, so a race could still
-	// land the new folder outside OutputDir.
+	// Recheck after create: a race could still land the new folder outside OutputDir.
 	if !x.resolvedWithinOutput(path) {
 		return fmt.Errorf("%s: %w: %s resolves outside the output folder", x.FilePath, ErrInvalidPath, path)
-	}
-
-	if !existed && filepath.Clean(path) != filepath.Clean(x.OutputDir) {
-		err = x.countExtracted()
-		if err != nil {
-			return err
-		}
 	}
 
 	_ = os.Chtimes(path, time.Time{}, mtime)
 
 	return nil
+}
+
+// mkdirAllCounted creates each missing component under OutputDir with os.Mkdir
+// so MaxFiles charges one slot per new directory. EEXIST from a parallel worker
+// is not counted. The caller-provided OutputDir itself is created if needed
+// but is not charged.
+func (x *XFile) mkdirAllCounted(path string, mode os.FileMode) error {
+	path = filepath.Clean(path)
+	base := filepath.Clean(x.OutputDir)
+	perm := x.safeDirMode(mode)
+
+	err := os.MkdirAll(base, perm)
+	if err != nil {
+		return fmt.Errorf("creating output directory: %w", err)
+	}
+
+	for _, dir := range dirComponentsUnder(base, path) {
+		err := os.Mkdir(dir, perm)
+		switch {
+		case err == nil:
+			if !x.resolvedWithinOutput(dir) {
+				_ = os.Remove(dir)
+
+				return fmt.Errorf("%s: %w: %s resolves outside the output folder", x.FilePath, ErrInvalidPath, dir)
+			}
+
+			countErr := x.countExtracted()
+			if countErr != nil {
+				_ = os.Remove(dir)
+
+				return countErr
+			}
+		case errors.Is(err, os.ErrExist):
+			if !x.resolvedWithinOutput(dir) {
+				return fmt.Errorf("%s: %w: %s resolves outside the output folder", x.FilePath, ErrInvalidPath, dir)
+			}
+		default:
+			return fmt.Errorf("creating directory %s: %w", dir, err)
+		}
+	}
+
+	return nil
+}
+
+// dirComponentsUnder returns cleaned descendants of base on the path from base
+// to path, parents first. path must be base or a descendant (see pathWithin).
+func dirComponentsUnder(base, path string) []string {
+	if !pathWithin(base, path) || path == base {
+		return nil
+	}
+
+	var stack []string
+
+	for path != base {
+		parent := filepath.Dir(path)
+		if parent == path {
+			break
+		}
+
+		stack = append(stack, path)
+		path = parent
+	}
+
+	slices.Reverse(stack)
+
+	return stack
 }
 
 // write a file from an io reader, making sure all parent directories exist.
@@ -1193,12 +1248,24 @@ func openFileNoFollowTrunc(open noFollowOpen, path string, flags int, mode os.Fi
 // symlink. Used for non-archive output (CUE copy, embedded pictures) that
 // otherwise goes through os.WriteFile, which follows links.
 func writeExtractFile(path string, data []byte, mode os.FileMode) error {
+	return (&XFile{}).writeExtractFile(path, data, mode)
+}
+
+func (x *XFile) writeExtractFile(path string, data []byte, mode os.FileMode) error {
 	fout, usedPath, err := openExtractFile(path, mode)
 	if err != nil {
 		return err
 	}
 
-	_, err = fout.Write(data)
+	writer, err := x.extractWriter(fout)
+	if err != nil {
+		_ = fout.Close()
+		_ = os.Remove(usedPath)
+
+		return err
+	}
+
+	_, err = writer.Write(data)
 	closeErr := fout.Close()
 
 	if err != nil {
@@ -1370,7 +1437,13 @@ func (x *XFile) createSymlink(path, linkName string) error {
 		return fmt.Errorf("%s: creating symlink: %w: %s -> %s", x.FilePath, err, path, linkName)
 	}
 
-	return x.countExtracted()
+	err = x.countExtracted()
+	if err != nil {
+		_ = os.Remove(path)
+		return err
+	}
+
+	return nil
 }
 
 func (x *XFile) createHardLink(path, linkName string) error {
@@ -1394,7 +1467,13 @@ func (x *XFile) createHardLink(path, linkName string) error {
 
 	err := os.Link(target, path)
 	if err == nil {
-		return x.countExtracted()
+		countErr := x.countExtracted()
+		if countErr != nil {
+			_ = os.Remove(path)
+			return countErr
+		}
+
+		return nil
 	}
 
 	linkErr := err

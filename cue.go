@@ -89,6 +89,8 @@ func ExtractCUE(xFile *XFile) (size uint64, files, archives []string, err error)
 		return 0, nil, nil, err
 	}
 
+	defer xFile.newProgress(0, archiveFileSize(audioPath), len(cue.Tracks)).done()
+
 	ext := strings.ToLower(filepath.Ext(audioPath))
 
 	switch ext {
@@ -115,19 +117,36 @@ func ExtractCUE(xFile *XFile) (size uint64, files, archives []string, err error)
 		return 0, nil, nil, fmt.Errorf("%s: %w: %s", xFile.FilePath, ErrInvalidPath, cueDest)
 	}
 
-	writeErr := copyCueToOutput(xFile.FilePath, cueDest, xFile.FileMode)
-	if writeErr != nil {
-		xFile.Debugf("Copying CUE sheet to output: %s", writeErr)
-	} else {
-		files = append(files, cueDest)
-		// Mark so recursion does not try to extract this copied CUE again.
-		xFile.SkipOnRecursion = append(xFile.SkipOnRecursion, cueDest)
+	files, err = copyCueSheetToOutput(xFile, cueDest, files)
+	if err != nil {
+		return size, files, nil, err
 	}
 
 	// The archive list includes both the CUE file and the FLAC file.
 	archives = []string{xFile.FilePath, audioPath}
 
 	return size, files, archives, nil
+}
+
+// copyCueSheetToOutput writes the source CUE into the extract folder. Limit
+// errors abort the extract; other copy failures are logged and ignored.
+func copyCueSheetToOutput(xFile *XFile, cueDest string, files []string) ([]string, error) {
+	writeErr := copyCueToOutput(xFile, xFile.FilePath, cueDest, xFile.FileMode)
+	if isLimitError(writeErr) {
+		return files, writeErr
+	}
+
+	if writeErr != nil {
+		xFile.Debugf("Copying CUE sheet to output: %s", writeErr)
+
+		return files, nil
+	}
+
+	files = append(files, cueDest)
+	// Mark so recursion does not try to extract this copied CUE again.
+	xFile.SkipOnRecursion = append(xFile.SkipOnRecursion, cueDest)
+
+	return files, nil
 }
 
 // parseCueSheetFile parses a CUE sheet from a file path and returns the sheet plus raw timestamps.
@@ -506,8 +525,11 @@ func splitFLAC(xFile *XFile, audioPath string, cue *CueSheet, timestamps []cueTi
 	)
 
 	if len(pictures) > 0 {
-		picturePaths, pictureBytes, err = writePicturesToFiles(xFile.OutputDir, pictures, xFile.FileMode)
-		if err != nil {
+		picturePaths, pictureBytes, err = writePicturesToFiles(xFile, xFile.OutputDir, pictures, xFile.FileMode)
+		switch {
+		case isLimitError(err):
+			return 0, nil, err
+		case err != nil:
 			xFile.Debugf("Error writing album art files: %s", err)
 		}
 
@@ -515,8 +537,6 @@ func splitFLAC(xFile *XFile, audioPath string, cue *CueSheet, timestamps []cueTi
 			xFile.Debugf("Wrote album art: %s", p)
 		}
 	}
-
-	defer xFile.newProgress(0, 0, len(cue.Tracks)).done()
 
 	// Stream frames one at a time, writing each to the appropriate track encoder.
 	totalSize, files, err := streamTracksFLAC(xFile, audioPath, cue, trackStarts, trackEnds, streamInfo, flacMeta)
@@ -698,6 +718,14 @@ func (s *trackSplitter) openEncoder(idx int) (*trackEncoder, error) {
 		return nil, fmt.Errorf("creating encoder for track %d: %w", track.Number, err)
 	}
 
+	err = s.xFile.countExtracted()
+	if err != nil {
+		_ = enc.Close()
+		_ = os.Remove(usedPath)
+
+		return nil, err
+	}
+
 	return &trackEncoder{
 		enc:        enc,
 		outputPath: usedPath,
@@ -786,6 +814,14 @@ func (s *trackSplitter) finalize(encoder *trackEncoder) error {
 	}
 
 	size := uint64(stat.Size())
+
+	err = s.xFile.accountBytes(size)
+	if err != nil {
+		_ = os.Remove(encoder.outputPath)
+
+		return err
+	}
+
 	s.totalSize += size
 
 	s.xFile.Debugf("Wrote track %d: %s (%d bytes)", encoder.number, encoder.outputPath, size)
@@ -974,7 +1010,12 @@ func pictureTypeNames() map[uint32]string {
 // writePicturesToFiles writes all picture blocks to files in outputDir. Front cover
 // (type 3) is named cover.<ext>; others use the picture type (e.g. cover_back.png).
 // Returns written paths, total bytes written, and any error from the first failed write.
-func writePicturesToFiles(outputDir string, pictures []*meta.Picture, fileMode os.FileMode) ([]string, uint64, error) {
+func writePicturesToFiles(
+	xFile *XFile,
+	outputDir string,
+	pictures []*meta.Picture,
+	fileMode os.FileMode,
+) ([]string, uint64, error) {
 	typeCount := make(map[string]int)
 	paths := make([]string, 0, len(pictures))
 	totalBytes := uint64(0)
@@ -1004,7 +1045,7 @@ func writePicturesToFiles(outputDir string, pictures []*meta.Picture, fileMode o
 		name += "." + ext
 		path := filepath.Join(outputDir, name)
 
-		err := writeExtractFile(path, pic.Data, fileMode)
+		err := xFile.writeExtractFile(path, pic.Data, fileMode)
 		if err != nil {
 			return paths, totalBytes, fmt.Errorf("writing %s: %w", name, err)
 		}
@@ -1018,13 +1059,13 @@ func writePicturesToFiles(outputDir string, pictures []*meta.Picture, fileMode o
 
 // copyCueToOutput copies the CUE sheet file into the output directory so the
 // extracted folder contains tracks, album art, and the CUE for verification/archival.
-func copyCueToOutput(srcPath, destPath string, fileMode os.FileMode) error {
+func copyCueToOutput(xFile *XFile, srcPath, destPath string, fileMode os.FileMode) error {
 	data, err := os.ReadFile(srcPath)
 	if err != nil {
 		return fmt.Errorf("reading cue sheet: %w", err)
 	}
 
-	err = writeExtractFile(destPath, data, fileMode)
+	err = xFile.writeExtractFile(destPath, data, fileMode)
 	if err != nil {
 		return fmt.Errorf("writing cue sheet: %w", err)
 	}

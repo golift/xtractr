@@ -71,7 +71,7 @@ func TestCopyCueToOutputReplacesSymlink(t *testing.T) {
 	src := filepath.Join(tmp, "src.cue")
 	require.NoError(t, os.WriteFile(src, []byte("REM GENRE Test\n"), 0o600))
 
-	require.NoError(t, copyCueToOutput(src, dest, 0o600))
+	require.NoError(t, copyCueToOutput(&XFile{}, src, dest, 0o600))
 
 	got, err := os.ReadFile(victim)
 	require.NoError(t, err)
