@@ -710,7 +710,7 @@ func (s *trackSplitter) openEncoder(idx int) (*trackEncoder, error) {
 		return nil, fmt.Errorf("creating output file for track %d: %w", track.Number, err)
 	}
 
-	enc, err := flac.NewEncoder(outFile, trackInfo, blocks...)
+	enc, err := flac.NewEncoder(s.xFile.countedWriteSeeker(outFile), trackInfo, blocks...)
 	if err != nil {
 		_ = outFile.Close()
 		_ = os.Remove(usedPath)
@@ -814,14 +814,6 @@ func (s *trackSplitter) finalize(encoder *trackEncoder) error {
 	}
 
 	size := uint64(stat.Size())
-
-	err = s.xFile.accountBytes(size)
-	if err != nil {
-		_ = os.Remove(encoder.outputPath)
-
-		return err
-	}
-
 	s.totalSize += size
 
 	s.xFile.Debugf("Wrote track %d: %s (%d bytes)", encoder.number, encoder.outputPath, size)

@@ -145,6 +145,28 @@ func (x *XFile) newArchiveProgress(total, compressed uint64, count int) *progres
 	return tracker
 }
 
+// continueArchiveProgress is newArchiveProgress that keeps Wrote/Files from the
+// current tracker. Used when ISO9660 follows a partial UDF attempt so the same
+// MaxBytes/MaxFiles budget is not reset.
+func (x *XFile) continueArchiveProgress(total, compressed uint64, count int) *progressTracker {
+	var wrote uint64
+
+	var files int
+
+	if x.prog != nil {
+		x.prog.mu.Lock()
+		wrote = x.prog.Wrote
+		files = x.prog.Files
+		x.prog.mu.Unlock()
+	}
+
+	tracker := x.newArchiveProgress(total, compressed, count)
+	tracker.Wrote = wrote
+	tracker.Files = files
+
+	return tracker
+}
+
 // snapshot returns a copy of the Progress data, safe to send to callbacks/channels.
 func (p *progressTracker) snapshot() Progress {
 	p.mu.Lock()
@@ -347,6 +369,97 @@ func (x *XFile) extractWriter(writer io.Writer) (io.Writer, error) {
 	return x.wrapExtractWriter(writer, false)
 }
 
+// countedWriteSeeker wraps a WriteSeeker so MaxBytes/MaxRatio apply to each
+// extending write. Overwrites (FLAC StreamInfo patch on Close) are not
+// counted again. The wrapper is an io.WriteSeeker (and io.Closer when the
+// inner type is) so flac.NewEncoder can still seek.
+func (x *XFile) countedWriteSeeker(writer io.WriteSeeker) *countedWriteSeeker {
+	var tracker *progressTracker
+	if x != nil {
+		tracker = x.prog
+	}
+
+	return &countedWriteSeeker{file: writer, progressTracker: tracker}
+}
+
+type countedWriteSeeker struct {
+	*progressTracker
+
+	file   io.WriteSeeker
+	offset int64
+	maxOff int64
+}
+
+func extraBytes(offset, wrote, maxOff int64) int64 {
+	end := offset + wrote
+	if end <= maxOff {
+		return 0
+	}
+
+	if offset >= maxOff {
+		return wrote
+	}
+
+	return end - maxOff
+}
+
+func (c *countedWriteSeeker) Write(data []byte) (int, error) {
+	want := extraBytes(c.offset, int64(len(data)), c.maxOff)
+	if want > 0 && c.progressTracker != nil {
+		c.mu.Lock()
+
+		err := c.checkWriteLocked(uint64(want))
+		if err != nil {
+			c.mu.Unlock()
+
+			return 0, err
+		}
+
+		c.Wrote += uint64(want)
+		c.mu.Unlock()
+	}
+
+	size, err := c.file.Write(data)
+	got := extraBytes(c.offset, int64(size), c.maxOff)
+
+	if got != want && c.progressTracker != nil {
+		c.mu.Lock()
+		c.Wrote -= uint64(want - got)
+		c.mu.Unlock()
+	}
+
+	c.offset += int64(size)
+	if c.offset > c.maxOff {
+		c.maxOff = c.offset
+	}
+
+	if c.progressTracker != nil {
+		c.send()
+	}
+
+	return size, err //nolint:wrapcheck
+}
+
+func (c *countedWriteSeeker) Seek(offset int64, whence int) (int64, error) {
+	pos, err := c.file.Seek(offset, whence)
+	if err != nil {
+		return pos, err //nolint:wrapcheck
+	}
+
+	c.offset = pos
+
+	return pos, nil
+}
+
+func (c *countedWriteSeeker) Close() error {
+	closer, ok := c.file.(io.Closer)
+	if !ok {
+		return nil
+	}
+
+	return closer.Close() //nolint:wrapcheck
+}
+
 func (x *XFile) wrapExtractWriter(writer io.Writer, parallel bool) (io.Writer, error) {
 	if x == nil || x.prog == nil {
 		return writer, nil
@@ -364,24 +477,6 @@ func (x *XFile) countExtracted() error {
 	defer x.prog.mu.Unlock()
 
 	return x.prog.addFileLocked()
-}
-
-func (x *XFile) accountBytes(add uint64) error {
-	if x == nil || x.prog == nil {
-		return nil
-	}
-
-	x.prog.mu.Lock()
-	defer x.prog.mu.Unlock()
-
-	err := x.prog.checkWriteLocked(add)
-	if err != nil {
-		return err
-	}
-
-	x.prog.Wrote += add
-
-	return nil
 }
 
 func (p *progressTracker) reader(reader io.Reader) io.Reader {

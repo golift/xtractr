@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"golift.io/xtractr"
@@ -139,6 +140,79 @@ func TestExtractGzipUnlimited(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint64(limitPayloadBytes), size)
 	require.Len(t, files, 1)
+}
+
+func TestQueueInheritsConfigMaxBytes(t *testing.T) {
+	t.Parallel()
+
+	src, _ := makeGzipOfZeros(t)
+	dir := filepath.Dir(src)
+
+	queue := xtractr.NewQueue(&xtractr.Config{
+		Logger:   xtractr.NoLogger(),
+		MaxBytes: 100,
+		FileMode: 0o600,
+		DirMode:  0o700,
+	})
+	defer queue.Stop()
+
+	job := &xtractr.Xtract{
+		Filter:           xtractr.Filter{Path: dir},
+		TempFolder:       true,
+		DisableRecursion: true,
+		CBChannel:        make(chan *xtractr.Response, 2),
+	}
+
+	_, err := queue.Extract(job)
+	require.NoError(t, err)
+	require.ErrorIs(t, waitExtract(t, job.CBChannel).Error, xtractr.ErrMaxBytes)
+}
+
+func TestQueueJobMaxBytesOverridesConfig(t *testing.T) {
+	t.Parallel()
+
+	src, _ := makeGzipOfZeros(t)
+	dir := filepath.Dir(src)
+
+	queue := xtractr.NewQueue(&xtractr.Config{
+		Logger:   xtractr.NoLogger(),
+		MaxBytes: 100,
+		FileMode: 0o600,
+		DirMode:  0o700,
+	})
+	defer queue.Stop()
+
+	job := &xtractr.Xtract{
+		Filter:           xtractr.Filter{Path: dir},
+		TempFolder:       true,
+		DisableRecursion: true,
+		MaxBytes:         limitPayloadBytes,
+		CBChannel:        make(chan *xtractr.Response, 2),
+	}
+
+	_, err := queue.Extract(job)
+	require.NoError(t, err)
+	require.NoError(t, waitExtract(t, job.CBChannel).Error)
+}
+
+func waitExtract(t *testing.T, responses chan *xtractr.Response) *xtractr.Response {
+	t.Helper()
+
+	timeout := time.NewTimer(15 * time.Second)
+	defer timeout.Stop()
+
+	for {
+		select {
+		case resp, ok := <-responses:
+			require.True(t, ok, "callback channel closed before extraction completed")
+
+			if resp.Done {
+				return resp
+			}
+		case <-timeout.C:
+			t.Fatal("timed out waiting for queued extraction")
+		}
+	}
 }
 
 func makeGzipOfZeros(t *testing.T) (src, out string) {

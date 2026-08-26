@@ -26,6 +26,10 @@ func ExtractISO(xFile *XFile) (size uint64, filesList []string, err error) {
 	}
 
 	if isLimitError(udfErr) {
+		if xFile.prog != nil {
+			xFile.prog.done()
+		}
+
 		return size, filesList, udfErr
 	}
 
@@ -34,10 +38,14 @@ func ExtractISO(xFile *XFile) (size uint64, filesList []string, err error) {
 	// Fall back to ISO9660 (now with Joliet support for full filenames).
 	image, isoErr := iso9660.OpenImage(openISO)
 	if isoErr != nil {
+		if xFile.prog != nil {
+			xFile.prog.done()
+		}
+
 		return 0, nil, fmt.Errorf("failed to open iso image: %s: %w", xFile.FilePath, isoErr)
 	}
 
-	defer xFile.newArchiveProgress(getUncompressedIsoSize(image)).done()
+	defer xFile.continueArchiveProgress(getUncompressedIsoSize(image)).done()
 
 	iso, err := iso9660.OpenImage(xFile.prog.readAter(openISO))
 	if err != nil {
