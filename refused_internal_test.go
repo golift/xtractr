@@ -24,7 +24,7 @@ func TestMoveFilesRefusesOccupiedFile(t *testing.T) {
 	require.NoError(t, os.WriteFile(src, []byte("extracted"), 0o600))
 	require.NoError(t, os.WriteFile(dest, []byte("existing"), 0o600))
 
-	got, err := moveFiles(NoLogger(), 0o755, fromDir, toDir, false)
+	got, err := moveFiles(NoLogger(), 0o755, fromDir, toDir, false, "")
 	require.NoError(t, err)
 	assert.Empty(t, got.NewFiles)
 	require.Len(t, got.Refused, 1)
@@ -51,7 +51,7 @@ func TestMoveFilesRefusesOccupiedDirectory(t *testing.T) {
 	require.NoError(t, os.Mkdir(dest, 0o750))
 	require.NoError(t, os.WriteFile(filepath.Join(dest, "keep.txt"), []byte("still here"), 0o600))
 
-	got, err := moveFiles(NoLogger(), 0o755, fromDir, toDir, false)
+	got, err := moveFiles(NoLogger(), 0o755, fromDir, toDir, false, "")
 	require.NoError(t, err)
 	require.Len(t, got.Refused, 1)
 	assert.Equal(t, src, got.Refused[0].Src)
@@ -73,7 +73,7 @@ func TestMoveFilesOverwriteRecordsNothing(t *testing.T) {
 	require.NoError(t, os.WriteFile(src, []byte("extracted"), 0o600))
 	require.NoError(t, os.WriteFile(dest, []byte("existing"), 0o600))
 
-	got, err := moveFiles(NoLogger(), 0o755, fromDir, toDir, true)
+	got, err := moveFiles(NoLogger(), 0o755, fromDir, toDir, true, "")
 	require.NoError(t, err)
 	assert.Empty(t, got.Refused)
 	require.Equal(t, []string{dest}, got.NewFiles)
@@ -140,7 +140,7 @@ func TestMoveFilesRefusesDanglingSymlink(t *testing.T) {
 	require.NoError(t, os.WriteFile(src, []byte("extracted"), 0o600))
 	require.NoError(t, os.Symlink(filepath.Join(toDir, "missing-target"), dest))
 
-	got, err := moveFiles(NoLogger(), 0o755, fromDir, toDir, false)
+	got, err := moveFiles(NoLogger(), 0o755, fromDir, toDir, false, "")
 	require.NoError(t, err)
 	assert.Empty(t, got.NewFiles)
 	require.Len(t, got.Refused, 1)
@@ -165,7 +165,7 @@ func TestMoveFilesRefusesLiveSymlink(t *testing.T) {
 	require.NoError(t, os.WriteFile(victim, []byte("secret"), 0o600))
 	require.NoError(t, os.Symlink(victim, dest))
 
-	got, err := moveFiles(NoLogger(), 0o755, fromDir, toDir, false)
+	got, err := moveFiles(NoLogger(), 0o755, fromDir, toDir, false, "")
 	require.NoError(t, err)
 	require.Len(t, got.Refused, 1)
 
@@ -190,7 +190,7 @@ func TestMoveFilesOverwriteReplacesDanglingSymlink(t *testing.T) {
 	require.NoError(t, os.WriteFile(src, []byte("extracted"), 0o600))
 	require.NoError(t, os.Symlink(filepath.Join(toDir, "missing-target"), dest))
 
-	got, err := moveFiles(NoLogger(), 0o755, fromDir, toDir, true)
+	got, err := moveFiles(NoLogger(), 0o755, fromDir, toDir, true, "")
 	require.NoError(t, err)
 	assert.Empty(t, got.Refused)
 	require.Equal(t, []string{dest}, got.NewFiles)
@@ -218,7 +218,7 @@ func TestMoveFilesOverwriteDoesNotFollowLiveSymlink(t *testing.T) {
 	require.NoError(t, os.WriteFile(victim, []byte("secret"), 0o600))
 	require.NoError(t, os.Symlink(victim, dest))
 
-	got, err := moveFiles(NoLogger(), 0o755, fromDir, toDir, true)
+	got, err := moveFiles(NoLogger(), 0o755, fromDir, toDir, true, "")
 	require.NoError(t, err)
 	assert.Empty(t, got.Refused)
 
@@ -261,7 +261,7 @@ func TestMoveFilesStatErrorIsNotARefusal(t *testing.T) {
 			notADir := filepath.Join(toDir, "not-a-dir")
 			require.NoError(t, os.WriteFile(notADir, []byte("file"), 0o600))
 
-			got, err := moveFiles(NoLogger(), 0o755, fromDir, filepath.Join(notADir, "sub"), testCase.overwrite)
+			got, err := moveFiles(NoLogger(), 0o755, fromDir, filepath.Join(notADir, "sub"), testCase.overwrite, "")
 			require.Error(t, err)
 			assert.Empty(t, got.Refused, "a stat error is not an occupied destination")
 		})
@@ -283,7 +283,7 @@ func TestMoveFilesOverwriteDoesNotFollowDirSymlink(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(realDir, "keep.txt"), []byte("still here"), 0o600))
 	require.NoError(t, os.Symlink(realDir, dest))
 
-	got, err := moveFiles(NoLogger(), 0o755, fromDir, toDir, true)
+	got, err := moveFiles(NoLogger(), 0o755, fromDir, toDir, true, "")
 	require.NoError(t, err)
 	assert.Empty(t, got.Refused)
 
@@ -318,7 +318,7 @@ func TestMoveFilesMoveErrorPreservesSource(t *testing.T) {
 	require.NoError(t, os.Mkdir(dest, 0o750))
 	require.NoError(t, os.WriteFile(filepath.Join(dest, "keep.txt"), []byte("keep"), 0o600))
 
-	_, err := moveFiles(NoLogger(), 0o755, fromDir, toDir, true)
+	_, err := moveFiles(NoLogger(), 0o755, fromDir, toDir, true, "")
 	require.Error(t, err)
 
 	// The temp source must survive so the data is recoverable.
@@ -339,7 +339,7 @@ func TestMoveFilesRefusalStillCleansSource(t *testing.T) {
 	require.NoError(t, os.WriteFile(src, []byte("extracted"), 0o600))
 	require.NoError(t, os.WriteFile(dest, []byte("existing"), 0o600))
 
-	got, err := moveFiles(NoLogger(), 0o755, fromDir, toDir, false)
+	got, err := moveFiles(NoLogger(), 0o755, fromDir, toDir, false, "")
 	require.NoError(t, err)
 	require.Len(t, got.Refused, 1)
 
