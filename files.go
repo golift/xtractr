@@ -155,6 +155,9 @@ type XFile struct {
 	FileMode os.FileMode
 	// Write folders with this mode.
 	DirMode os.FileMode
+	// Suffix brands cross-device copy siblings as a known extra extension
+	// (e.g. movie.mkv.xtractr_partial). Empty uses DefaultSuffix.
+	Suffix string
 	// (RAR/7z) Archive password. Blank for none. Gets prepended to Passwords, below.
 	Password string
 	// (RAR/7z) Archive passwords (to try multiple).
@@ -536,7 +539,7 @@ func (x *Xtractr) MoveFiles(fromPath, toPath string, overwrite bool) ([]string, 
 // Unlike MoveFiles, the result includes destinations that were already occupied.
 // This is a helper method and only exposed for convenience. You do not have to call this.
 func (x *Xtractr) RenameFiles(fromPath, toPath string, overwrite bool) (Renamed, error) {
-	return moveFiles(x.config, x.config.DirMode, fromPath, toPath, overwrite)
+	return moveFiles(x.config, x.config.DirMode, fromPath, toPath, overwrite, x.config.Suffix)
 }
 
 // bindMoveFiles wires ExtractFile to this job's logger and DirMode.
@@ -549,7 +552,7 @@ func (x *XFile) bindMoveFiles() { //nolint:funcorder // kept next to MoveFiles
 	}
 
 	x.moveFiles = func(fromPath, toPath string, overwrite bool) ([]string, error) {
-		renamed, err := moveFiles(x.log, x.DirMode, fromPath, toPath, overwrite)
+		renamed, err := moveFiles(x.log, x.DirMode, fromPath, toPath, overwrite, x.Suffix)
 		x.refused = append(x.refused, renamed.Refused...)
 
 		return renamed.NewFiles, err
@@ -561,6 +564,7 @@ func moveFiles( //nolint:cyclop,funlen
 	dirMode os.FileMode,
 	fromPath, toPath string,
 	overwrite bool,
+	suffix string,
 ) (Renamed, error) {
 	if log == nil {
 		log = NoLogger()
@@ -602,6 +606,8 @@ func moveFiles( //nolint:cyclop,funlen
 			continue
 		}
 
+		scavengePartials(newFile, suffix)
+
 		_, err = os.Lstat(newFile)
 		exists := err == nil
 
@@ -620,7 +626,7 @@ func moveFiles( //nolint:cyclop,funlen
 			continue
 		}
 
-		switch err = renameFile(file, newFile); {
+		switch err = renameFile(file, newFile, suffix); {
 		case err != nil:
 			keepErr = err
 			log.Printf("Error: Renaming Temp File: %v to %v: %v", file, newFile, err)
@@ -744,10 +750,29 @@ type file struct {
 
 // Rename is an attempt to deal with "invalid cross link device" on weird file systems.
 func (x *Xtractr) Rename(oldpath, newpath string) error {
-	return renameFile(oldpath, newpath)
+	return renameFile(oldpath, newpath, x.config.Suffix)
 }
 
-func renameFile(oldpath, newpath string) error {
+const (
+	partialTail = "_partial"
+	linkTail    = "_link"
+)
+
+func defaultSuffix(suffix string) string {
+	if suffix == "" {
+		return DefaultSuffix
+	}
+
+	return suffix
+}
+
+// copySiblingExt turns Config.Suffix ("_xtractr") into a dotted extra
+// extension: ".xtractr_partial" so leftovers look like movie.mkv.xtractr_partial.
+func copySiblingExt(suffix, tail string) string {
+	return "." + strings.Trim(defaultSuffix(suffix), "._") + tail
+}
+
+func renameFile(oldpath, newpath, suffix string) error {
 	origErr := os.Rename(oldpath, newpath)
 	if origErr == nil {
 		return nil
@@ -755,28 +780,53 @@ func renameFile(oldpath, newpath string) error {
 
 	origErr = fmt.Errorf("os.Rename(): %w", origErr)
 
-	/* Rename failed, try copy. */
-
-	// Open the source first so a missing/unreadable source returns an error
-	// without touching the destination.
-	oldFileStat, err := os.Stat(oldpath)
+	err := copyMove(oldpath, newpath, suffix)
 	if err != nil {
-		return &ExtractError{Errs: []error{origErr, fmt.Errorf("os.Stat(): %w", err)}}
+		return &ExtractError{Errs: []error{origErr, err}}
+	}
+
+	return nil
+}
+
+// copyMove is the EXDEV fallback for renameFile. It is a separate function so
+// tests can exercise it without forcing a cross-device rename.
+func copyMove(oldpath, newpath, suffix string) error {
+	oldInfo, err := os.Lstat(oldpath)
+	if err != nil {
+		return fmt.Errorf("os.Lstat(): %w", err)
+	}
+
+	if oldInfo.Mode()&os.ModeSymlink != 0 {
+		return moveSymlink(oldpath, newpath, suffix)
+	}
+
+	// A directory source never makes sense here; fail before scavenging or
+	// touching the destination so the caller doesn't delete it.
+	if !oldInfo.Mode().IsRegular() {
+		return fmt.Errorf("cannot move non-regular file %s: %w", oldpath, errExtractNotRegular)
+	}
+
+	return copyMoveFile(oldpath, newpath, suffix, oldInfo)
+}
+
+func copyMoveFile(oldpath, newpath, suffix string, oldInfo os.FileInfo) error {
+	scavengePartials(newpath, suffix)
+
+	partial, err := unusedSibling(newpath, suffix, partialTail)
+	if err != nil {
+		return err
 	}
 
 	oldFile, err := os.Open(oldpath)
 	if err != nil {
-		return &ExtractError{Errs: []error{origErr, fmt.Errorf("os.Open(): %w", err)}}
+		return fmt.Errorf("os.Open(): %w", err)
 	}
 
 	defer oldFile.Close() // also closed explicitly before the delete below.
 
-	// os.OpenFile(O_TRUNC) follows a dest symlink and would write through it.
-	// openExtractFile opens the dest without following a final-component symlink,
-	// unlinking and retrying like the extract writers do.
-	newFile, pathUsed, err := openExtractFile(newpath, oldFileStat.Mode())
+	newFile, pathUsed, err := openExtractFile(partial, oldInfo.Mode())
 	if err != nil {
-		return &ExtractError{Errs: []error{origErr, err}}
+		return err
 	}
 
 	_, err = io.Copy(newFile, oldFile)
@@ -785,22 +835,111 @@ func renameFile(oldpath, newpath string) error {
 	if err != nil {
 		_ = os.Remove(pathUsed)
 
-		return &ExtractError{Errs: []error{origErr, fmt.Errorf("io.Copy(): %w", err)}}
+		return fmt.Errorf("io.Copy(): %w", err)
 	}
 
 	if closeErr != nil {
 		_ = os.Remove(pathUsed)
 
-		return &ExtractError{Errs: []error{origErr, fmt.Errorf("closing dest: %w", closeErr)}}
+		return fmt.Errorf("closing dest: %w", closeErr)
 	}
 
-	// pathUsed may differ from newpath if the name had to be truncated.
-	_ = os.Chtimes(pathUsed, oldFileStat.ModTime(), oldFileStat.ModTime())
-	// The copy was successful, so now delete the original file
+	_ = os.Chtimes(pathUsed, oldInfo.ModTime(), oldInfo.ModTime())
+
+	err = os.Rename(pathUsed, newpath)
+	if err != nil {
+		_ = os.Remove(pathUsed)
+
+		return fmt.Errorf("os.Rename(): %w", err)
+	}
+
 	_ = oldFile.Close() // Needs to be closed before delete.
 	_ = os.Remove(oldpath)
 
 	return nil
+}
+
+func moveSymlink(oldpath, newpath, suffix string) error {
+	target, err := os.Readlink(oldpath)
+	if err != nil {
+		return fmt.Errorf("os.Readlink(): %w", err)
+	}
+
+	tmp, err := unusedSibling(newpath, suffix, linkTail)
+	if err != nil {
+		return err
+	}
+
+	err = os.Symlink(target, tmp)
+	if err != nil {
+		return fmt.Errorf("os.Symlink(): %w", err)
+	}
+
+	// rename-over replaces newpath atomically; if it was a symlink, the link is
+	// severed (never followed) rather than written through.
+	err = os.Rename(tmp, newpath)
+	if err != nil {
+		_ = os.Remove(tmp)
+
+		return fmt.Errorf("os.Rename(): %w", err)
+	}
+
+	_ = os.Remove(oldpath)
+
+	return nil
+}
+
+// scavengePartials removes leftover copy siblings named
+// <dest>.<brand>_partial and <dest>.<brand>_partial.<n>.
+func scavengePartials(dest, suffix string) {
+	prefix := filepath.Base(dest) + copySiblingExt(suffix, partialTail)
+	dir := filepath.Dir(dest)
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+
+	for _, entry := range entries {
+		name := entry.Name()
+		if name != prefix && !strings.HasPrefix(name, prefix+".") {
+			continue
+		}
+
+		_ = os.Remove(filepath.Join(dir, name))
+	}
+}
+
+// unusedSibling returns dest+.<brand>+tail, or dest+.<brand>+tail.N if that
+// name is taken. The dest basename is truncated to fit NAME_MAX.
+//
+//nolint:nilerr
+func unusedSibling(dest, suffix, tail string) (string, error) {
+	var (
+		fullTail = copySiblingExt(suffix, tail)
+		dir      = filepath.Dir(dest)
+		base     = filepath.Base(dest)
+		stem     = truncateToBytes(base, max(nameMax-len(fullTail), 1))
+		tryPath  = filepath.Join(dir, stem+fullTail)
+	)
+
+	_, err := os.Lstat(tryPath)
+	if err != nil {
+		return tryPath, nil
+	}
+
+	for attempt := range 1000 {
+		postfix := "." + strconv.Itoa(attempt+1)
+		newStem := truncateToBytes(stem, max(nameMax-len(fullTail)-len(postfix), 1))
+		tryPath = filepath.Join(dir, newStem+fullTail+postfix)
+
+		_, err = os.Lstat(tryPath)
+		if err != nil {
+			return tryPath, nil
+		}
+	}
+
+	return "", ErrNameTooLong
 }
 
 // AllExcept can be used as an input to ExcludeSuffix in a Filter.
