@@ -859,11 +859,11 @@ func copyMoveFile(oldpath, newpath, suffix string, oldInfo os.FileInfo) error {
 
 	_ = os.Chtimes(pathUsed, oldInfo.ModTime(), oldInfo.ModTime())
 
-	err = os.Rename(pathUsed, newpath)
+	err = renameOver(pathUsed, newpath)
 	if err != nil {
 		_ = os.Remove(pathUsed)
 
-		return fmt.Errorf("os.Rename(): %w", err)
+		return err
 	}
 
 	_ = oldFile.Close() // Needs to be closed before delete.
@@ -886,14 +886,44 @@ func moveSymlink(oldpath, newpath, suffix string) error {
 
 	// rename-over replaces newpath atomically; if it was a symlink, the link is
 	// severed (never followed) rather than written through.
-	err = os.Rename(tmp, newpath)
+	err = renameOver(tmp, newpath)
 	if err != nil {
 		_ = os.Remove(tmp)
 
-		return fmt.Errorf("os.Rename(): %w", err)
+		return err
 	}
 
 	_ = os.Remove(oldpath)
+
+	return nil
+}
+
+// renameOver replaces newpath with oldpath via os.Rename. On Windows a rename
+// cannot replace a directory (junction or directory symlink) with a file, so
+// when the rename fails and newpath is itself a symlink (never followed), the
+// link is unlinked and the rename retried. A real directory is never removed.
+func renameOver(oldpath, newpath string) error {
+	err := os.Rename(oldpath, newpath)
+	if err == nil {
+		return nil
+	}
+
+	info, lerr := os.Lstat(newpath)
+	if lerr != nil || info.Mode()&os.ModeSymlink == 0 {
+		return fmt.Errorf("os.Rename(): %w", err)
+	}
+
+	// newpath is a symlink (possibly a directory symlink on Windows). Remove the
+	// link itself, then rename. We never touch the link's target.
+	rmErr := os.Remove(newpath)
+	if rmErr != nil {
+		return fmt.Errorf("os.Rename(): %w (removing symlink: %w)", err, rmErr)
+	}
+
+	retryErr := os.Rename(oldpath, newpath)
+	if retryErr != nil {
+		return fmt.Errorf("os.Rename(): %w", retryErr)
+	}
 
 	return nil
 }
