@@ -365,7 +365,8 @@ func TestScavengePartialsLongName(t *testing.T) {
 
 // The scavenger removes only allocator-generated names: the bare branded tail
 // and numeric .N variants, for both partial and link tails. Lookalikes and
-// real files are left alone.
+// real files are left alone. Trailing-dot names (empty postfix) are covered by
+// TestIsCopySibling; Win32 strips trailing dots so they cannot be created here.
 func TestScavengePartialsExactMatches(t *testing.T) {
 	t.Parallel()
 
@@ -381,7 +382,6 @@ func TestScavengePartialsExactMatches(t *testing.T) {
 		"a.mkv",                        // real file
 		"a.mkv.xtractr_partial.backup", // non-numeric suffix
 		"a.mkv.xtractr_partial.1.5",    // not a single numeric postfix
-		"a.mkv.xtractr_partial.",       // empty postfix
 		".xtractr_partial",             // empty stem is never generated
 		"a.mkv.other_partial",          // different brand
 		"a.mkv.xtractr_partial.old.1",  // tail not final
@@ -400,6 +400,21 @@ func TestScavengePartialsExactMatches(t *testing.T) {
 	for _, name := range keep {
 		require.FileExists(t, filepath.Join(dir, name), "should keep %s", name)
 	}
+}
+
+func TestIsCopySibling(t *testing.T) {
+	t.Parallel()
+
+	assert.True(t, isCopySibling("a.mkv.xtractr_partial", DefaultSuffix))
+	assert.True(t, isCopySibling("a.mkv.xtractr_partial.1", DefaultSuffix))
+	assert.True(t, isCopySibling("a.mkv.xtractr_link.2", DefaultSuffix))
+	assert.False(t, isCopySibling("a.mkv", DefaultSuffix))
+	assert.False(t, isCopySibling("a.mkv.xtractr_partial.backup", DefaultSuffix))
+	assert.False(t, isCopySibling("a.mkv.xtractr_partial.1.5", DefaultSuffix))
+	assert.False(t, isCopySibling("a.mkv.xtractr_partial.", DefaultSuffix), "empty postfix is not numeric")
+	assert.False(t, isCopySibling(".xtractr_partial", DefaultSuffix), "empty stem is never generated")
+	assert.False(t, isCopySibling("a.mkv.other_partial", DefaultSuffix))
+	assert.False(t, isCopySibling("a.mkv.xtractr_partial.old.1", DefaultSuffix))
 }
 
 // A sibling registered by an in-flight copy must survive the scavenger; once
