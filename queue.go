@@ -52,6 +52,15 @@ type Xtract struct {
 	// Contains info about the progress of the extraction.
 	// Shared by all archive file extractions that occur with this Xtract.
 	Updates chan Progress
+	// MaxBytes is the maximum uncompressed bytes written per archive.
+	// 0 means unlimited; when 0, Config.MaxBytes is used.
+	MaxBytes uint64
+	// MaxFiles is the maximum files, directories, and symlinks created per archive.
+	// 0 means unlimited; when 0, Config.MaxFiles is used.
+	MaxFiles int
+	// MaxRatio is the maximum bytesWritten / archiveFileSize per archive.
+	// 0 means unlimited; when 0, Config.MaxRatio is used.
+	MaxRatio float64
 }
 
 // Response is sent to the call-back function. The first CBFunction call is just
@@ -195,6 +204,9 @@ func (x *Xtractr) decompressFolders(resp *Response) error {
 				LogFile:          resp.X.LogFile,
 				Updates:          resp.X.Updates,
 				Progress:         resp.X.Progress,
+				MaxBytes:         resp.X.MaxBytes,
+				MaxFiles:         resp.X.MaxFiles,
+				MaxRatio:         resp.X.MaxRatio,
 			},
 			Started:  resp.Started,
 			Output:   output,
@@ -329,6 +341,9 @@ func (x *Xtractr) decompressFiles(resp *Response) error {
 			Passwords: resp.X.Passwords,
 			Progress:  resp.X.Progress,
 			Updates:   resp.X.Updates,
+			MaxBytes:  resp.X.MaxBytes,
+			MaxFiles:  resp.X.MaxFiles,
+			MaxRatio:  resp.X.MaxRatio,
 		},
 		Started:  resp.Started,
 		Output:   resp.Output,
@@ -399,6 +414,9 @@ func (x *Xtractr) processArchive(filename string, resp *Response) (uint64, []str
 		Passwords:   resp.X.Passwords,
 		Password:    resp.X.Password,
 		FileWorkers: x.config.FileWorkers,
+		MaxBytes:    pick(resp.X.MaxBytes, x.config.MaxBytes),
+		MaxFiles:    pick(resp.X.MaxFiles, x.config.MaxFiles),
+		MaxRatio:    pick(resp.X.MaxRatio, x.config.MaxRatio),
 		log:         x.config.Logger,
 		Updates:     resp.X.Updates,
 		Progress:    resp.X.Progress,
@@ -419,6 +437,15 @@ func (x *Xtractr) processArchive(filename string, resp *Response) (uint64, []str
 	}
 
 	return bytes, files, archives, nil
+}
+
+func pick[T uint64 | int | float64](job, cfg T) T { //nolint:ireturn // numeric union, not an interface.
+	var zero T
+	if job != zero {
+		return job
+	}
+
+	return cfg
 }
 
 func (x *Xtractr) cleanupProcessedArchives(resp *Response) error {

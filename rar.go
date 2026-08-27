@@ -26,29 +26,36 @@ func ExtractRAR(xFile *XFile) (size uint64, filesList, archiveList []string, err
 	}
 
 	for idx, password := range passwords {
-		// Copy the input so the retry keeps the logger, progress callbacks,
-		// SquashRoot and the rest of the caller-provided configuration.
-		attempt := *xFile
-		attempt.Password = password
+		size, files, archives, err := tryRAR(xFile, password)
 
-		size, files, archives, err := extractRAR(&attempt)
-		if err == nil {
+		switch {
+		case err == nil:
 			return size, files, archives, nil
-		}
-
-		// https://github.com/nwaples/rardecode/issues/28
-		if strings.Contains(err.Error(), "incorrect password") {
+		case isLimitError(err):
+			return size, files, archives, err
+		case strings.Contains(err.Error(), "incorrect password"):
+			// https://github.com/nwaples/rardecode/issues/28
 			continue
+		default:
+			return size, files, archives, fmt.Errorf("used password %d of %d: %w", idx+1, len(passwords), err)
 		}
-
-		return size, files, archives, fmt.Errorf("used password %d of %d: %w", idx+1, len(passwords), err)
 	}
 
-	// No password worked, try without a password.
-	attempt := *xFile
-	attempt.Password = ""
+	// No password worked, try without a password. tryRAR copies the attempt
+	// tracker back so a later signature fallback keeps the same budget.
+	return tryRAR(xFile, "")
+}
 
-	return extractRAR(&attempt)
+// tryRAR runs one extractRAR attempt on a copy (so Password can change) and
+// writes the attempt's progress tracker back onto xFile.
+func tryRAR(xFile *XFile, password string) (uint64, []string, []string, error) {
+	attempt := *xFile
+	attempt.Password = password
+
+	size, files, archives, err := extractRAR(&attempt)
+	xFile.prog = attempt.prog
+
+	return size, files, archives, err
 }
 
 // extractRAR extracts a rar file. to a destination. This wraps github.com/nwaples/rardecode.
@@ -58,7 +65,12 @@ func extractRAR(xFile *XFile) (uint64, []string, []string, error) {
 		return 0, nil, nil, fmt.Errorf("rardecode.OpenReader: %w", err)
 	}
 
-	defer xFile.newProgress(getUncompressedRarSize(rarReader)).done() // this closes rarReader
+	tracker, headerErr := xFile.archiveProgress(getUncompressedRarSize(rarReader, xFile.FilePath))
+	defer tracker.done() // getUncompressedRarSize closed rarReader
+
+	if headerErr != nil {
+		return 0, nil, nil, headerErr
+	}
 
 	rarReader, err = rardecode.OpenReader(xFile.FilePath, rardecode.Password(xFile.Password)) // open it again.
 	if err != nil {
@@ -77,21 +89,18 @@ func extractRAR(xFile *XFile) (uint64, []string, []string, error) {
 	return xFile.prog.Wrote, files, normalizeVolumes(rarReader.Volumes(), xFile.FilePath), nil
 }
 
-func getUncompressedRarSize(rarReader *rardecode.ReadCloser) (total, compressed uint64, count int) {
+func getUncompressedRarSize(rarReader *rardecode.ReadCloser, filePath string) (total, compressed uint64, count int) {
 	defer rarReader.Close()
 
 	for {
 		header, err := rarReader.Next()
 		if err != nil {
-			if errors.Is(err, io.EOF) {
-				return total, 0, count
-			}
+			compressed = archiveFileSizes(normalizeVolumes(rarReader.Volumes(), filePath)...)
 
-			return total, 0, count
+			return total, compressed, count
 		}
 
 		total += uint64(header.UnPackedSize)
-		// compressed += uint64(header.PackedSize)
 		count++
 	}
 }

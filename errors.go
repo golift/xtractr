@@ -28,6 +28,14 @@ var (
 	errExtractSymlink    = errors.New("refusing to write through a symbolic link")
 	errExtractNotRegular = errors.New("refusing to extract onto a non-regular file")
 	errExtractConflict   = errors.New("too many concurrent changes at the extract path")
+	errNotDirectory      = errors.New("path exists and is not a directory")
+
+	// ErrMaxBytes is returned when uncompressed bytes written exceed MaxBytes (0 is unlimited).
+	ErrMaxBytes = errors.New("extracted size exceeds maximum bytes")
+	// ErrMaxFiles is returned when files, directories, and symlinks created exceed MaxFiles (0 is unlimited).
+	ErrMaxFiles = errors.New("extracted file count exceeds maximum")
+	// ErrMaxRatio is returned when bytesWritten / archiveFileSize exceeds MaxRatio (0 is unlimited).
+	ErrMaxRatio = errors.New("extracted size exceeds maximum compression ratio")
 
 	// CUE sheet.
 
@@ -35,12 +43,19 @@ var (
 	ErrNoTracks         = errors.New("cue sheet contains no tracks")
 	ErrAudioNotFound    = errors.New("audio file referenced by cue sheet not found")
 	ErrUnsupportedAudio = errors.New("cue sheet references unsupported audio format (only FLAC and APE are supported)")
+	// ErrTrackTooShort is returned when a CUE track holds fewer samples than the
+	// FLAC minimum block size; encoding it would record an invalid STREAMINFO.
+	ErrTrackTooShort = errors.New("cue track is shorter than the minimum FLAC block size")
 
 	// RPM.
 
 	ErrUnsupportedRPMCompression = errors.New("unsupported rpm compression")
 	ErrUnsupportedRPMArchiveFmt  = errors.New("unsupported rpm archive format")
 )
+
+func isLimitError(err error) bool {
+	return errors.Is(err, ErrMaxBytes) || errors.Is(err, ErrMaxFiles) || errors.Is(err, ErrMaxRatio)
+}
 
 // ExtractError is a rich error type that can carry multiple errors and warnings
 // from an extraction attempt. Consumers can use errors.As to retrieve it.

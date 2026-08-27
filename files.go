@@ -167,6 +167,14 @@ type XFile struct {
 	// Streaming formats ignore this. 0 or 1 = sequential (current behavior).
 	// Total concurrent I/O when using the queue = Config.Parallel * FileWorkers.
 	FileWorkers int
+	// MaxBytes is the maximum uncompressed bytes written for this archive.
+	// 0 means unlimited.
+	MaxBytes uint64
+	// MaxFiles is the maximum files, directories, and symlinks created for this
+	// archive. 0 means unlimited.
+	MaxFiles int
+	// MaxRatio is the maximum bytesWritten / archiveFileSize. 0 means unlimited.
+	MaxRatio float64
 	// Progress is called periodically during file extraction.
 	// Contains info about the progress of the extraction.
 	// This is not called if an Updates channel is also provided.
@@ -461,16 +469,24 @@ func ExtractFile(xFile *XFile) (size uint64, filesList, archiveList []string, er
 	var extensionType string // archive type from matched extension, for error reporting when extraction fails
 
 	for _, ext := range extension2function {
-		if strings.HasSuffix(sName, ext.Ext) {
-			size, filesList, archiveList, err = ext.Fn(xFile)
-			if err == nil {
-				return size, filesList, archiveList, nil
-			}
-
-			extensionType = ext.Type // preserve for error reporting before fallback
-			// Extension matched but extraction failed; try signature detection as fallback.
-			break
+		if !strings.HasSuffix(sName, ext.Ext) {
+			continue
 		}
+
+		size, filesList, archiveList, err = ext.Fn(xFile)
+		if err == nil {
+			return size, filesList, archiveList, nil
+		}
+
+		// A resource cap aborts the extraction; do not re-extract via signature
+		// detection, which would reset the counters and could even report success.
+		if isLimitError(err) {
+			return size, filesList, archiveList, err
+		}
+
+		extensionType = ext.Type // preserve for error reporting before fallback
+		// Extension matched but extraction failed; try signature detection as fallback.
+		break
 	}
 
 	// Fall back to file signature (magic number) detection.
@@ -1263,19 +1279,18 @@ func openStatFile(path string) (*os.File, os.FileInfo, error) {
 // mkDir creates a folder (and parents) with safe permissions.
 // It refuses to leave the output folder through a pre-existing symlink.
 func (x *XFile) mkDir(path string, mode os.FileMode, mtime time.Time) error {
-	// Check before MkdirAll so we do not create directories (or Chtimes them)
-	// through a symlink that already points outside OutputDir.
+	// Check before creating so we do not mkdir (or Chtimes) through a symlink
+	// that already points outside OutputDir.
 	if !x.resolvedWithinOutput(path) {
 		return fmt.Errorf("%s: %w: %s resolves outside the output folder", x.FilePath, ErrInvalidPath, path)
 	}
 
-	err := os.MkdirAll(path, x.safeDirMode(mode))
+	err := x.mkdirAllCounted(path, mode)
 	if err != nil {
-		return err //nolint:wrapcheck
+		return err
 	}
 
-	// Recheck after create: MkdirAll follows symlinks, so a race could still
-	// land the new folder outside OutputDir.
+	// Recheck after create: a race could still land the new folder outside OutputDir.
 	if !x.resolvedWithinOutput(path) {
 		return fmt.Errorf("%s: %w: %s resolves outside the output folder", x.FilePath, ErrInvalidPath, path)
 	}
@@ -1283,6 +1298,104 @@ func (x *XFile) mkDir(path string, mode os.FileMode, mtime time.Time) error {
 	_ = os.Chtimes(path, time.Time{}, mtime)
 
 	return nil
+}
+
+// mkdirAllCounted creates each missing component under OutputDir with os.Mkdir
+// so MaxFiles charges one slot per new directory. EEXIST from a parallel worker
+// is not counted. The caller-provided OutputDir itself is created if needed
+// but is not charged.
+func (x *XFile) mkdirAllCounted(path string, mode os.FileMode) error {
+	path = filepath.Clean(path)
+	base := filepath.Clean(x.OutputDir)
+	perm := x.safeDirMode(mode)
+
+	err := os.MkdirAll(base, perm)
+	if err != nil {
+		return fmt.Errorf("creating output directory: %w", err)
+	}
+
+	for _, dir := range dirComponentsUnder(base, path) {
+		err := x.mkdirComponent(dir, perm)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// mkdirComponent reserves a MaxFiles slot, then creates dir. Reservation is
+// rolled back on EEXIST (another worker or a pre-existing path) so parallel
+// ZIP/7z extracts cannot leave an over-limit directory that can no longer be
+// removed. A non-directory occupying the path is an error.
+func (x *XFile) mkdirComponent(dir string, perm os.FileMode) error {
+	err := x.countExtracted()
+	if err != nil {
+		return err
+	}
+
+	err = os.Mkdir(dir, perm)
+	switch {
+	case err == nil:
+		if !x.resolvedWithinOutput(dir) {
+			_ = os.Remove(dir)
+
+			x.uncountExtracted()
+
+			return fmt.Errorf("%s: %w: %s resolves outside the output folder", x.FilePath, ErrInvalidPath, dir)
+		}
+
+		return nil
+	case errors.Is(err, os.ErrExist):
+		x.uncountExtracted()
+
+		return x.existingDirOK(dir)
+	default:
+		x.uncountExtracted()
+
+		return fmt.Errorf("creating directory %s: %w", dir, err)
+	}
+}
+
+func (x *XFile) existingDirOK(dir string) error {
+	info, err := os.Stat(dir)
+	if err != nil {
+		return fmt.Errorf("stat existing path %s: %w", dir, err)
+	}
+
+	if !info.IsDir() {
+		return fmt.Errorf("%s: %w: %s", x.FilePath, errNotDirectory, dir)
+	}
+
+	if !x.resolvedWithinOutput(dir) {
+		return fmt.Errorf("%s: %w: %s resolves outside the output folder", x.FilePath, ErrInvalidPath, dir)
+	}
+
+	return nil
+}
+
+// dirComponentsUnder returns cleaned descendants of base on the path from base
+// to path, parents first. path must be base or a descendant (see pathWithin).
+func dirComponentsUnder(base, path string) []string {
+	if !pathWithin(base, path) || path == base {
+		return nil
+	}
+
+	var stack []string
+
+	for path != base {
+		parent := filepath.Dir(path)
+		if parent == path {
+			break
+		}
+
+		stack = append(stack, path)
+		path = parent
+	}
+
+	slices.Reverse(stack)
+
+	return stack
 }
 
 // write a file from an io reader, making sure all parent directories exist.
@@ -1320,9 +1433,12 @@ func (x *XFile) writeFile(file *file, parallel bool) (uint64, error) {
 
 	file.Path = pathUsed
 
-	progWriter := x.prog.writer(fout)
-	if parallel {
-		progWriter = x.prog.parallelWriter(fout)
+	progWriter, err := x.wrapExtractWriter(fout, parallel)
+	if err != nil {
+		_ = fout.Close()
+		_ = os.Remove(file.Path)
+
+		return 0, err
 	}
 
 	size, err := io.Copy(progWriter, file.Data)
@@ -1502,12 +1618,24 @@ func openFileNoFollowTrunc(open noFollowOpen, path string, flags int, mode os.Fi
 // symlink. Used for non-archive output (CUE copy, embedded pictures) that
 // otherwise goes through os.WriteFile, which follows links.
 func writeExtractFile(path string, data []byte, mode os.FileMode) error {
+	return (&XFile{}).writeExtractFile(path, data, mode)
+}
+
+func (x *XFile) writeExtractFile(path string, data []byte, mode os.FileMode) error {
 	fout, usedPath, err := openExtractFile(path, mode)
 	if err != nil {
 		return err
 	}
 
-	_, err = fout.Write(data)
+	writer, err := x.extractWriter(fout)
+	if err != nil {
+		_ = fout.Close()
+		_ = os.Remove(usedPath)
+
+		return err
+	}
+
+	_, err = writer.Write(data)
 	closeErr := fout.Close()
 
 	if err != nil {
@@ -1679,6 +1807,12 @@ func (x *XFile) createSymlink(path, linkName string) error {
 		return fmt.Errorf("%s: creating symlink: %w: %s -> %s", x.FilePath, err, path, linkName)
 	}
 
+	err = x.countExtracted()
+	if err != nil {
+		_ = os.Remove(path)
+		return err
+	}
+
 	return nil
 }
 
@@ -1703,6 +1837,12 @@ func (x *XFile) createHardLink(path, linkName string) error {
 
 	err := os.Link(target, path)
 	if err == nil {
+		countErr := x.countExtracted()
+		if countErr != nil {
+			_ = os.Remove(path)
+			return countErr
+		}
+
 		return nil
 	}
 

@@ -18,7 +18,7 @@ require (
 	github.com/pierrec/lz4/v4 v4.1.29
 	github.com/saintfish/chardet v0.0.0-20230101081208-5e3ef4b5456d
 	github.com/sshaman1101/dcompress v0.0.0-20200109162717-50436a6332de
-	github.com/stretchr/testify v1.12.0
+	github.com/stretchr/testify v1.12.1
 	github.com/therootcompany/xz v1.0.1
 	github.com/ulikunitz/xz v0.5.16
 	golang.org/x/text v0.41.0
@@ -30,14 +30,11 @@ require (
 	github.com/bodgit/windows v1.0.1 // indirect
 	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
 	github.com/icza/bitio v1.1.0 // indirect
-	github.com/kr/pretty v0.3.1 // indirect
 	github.com/mewkiz/pkg v0.0.0-20260703220044-4fb89b18cc87 // indirect
 	github.com/mewpkg/term v0.0.0-20241026122259-37a80af23985 // indirect
-	github.com/rogpeppe/go-internal v1.14.1 // indirect
 	github.com/spf13/afero v1.15.0 // indirect
 	github.com/stangelandcl/ppmd v0.1.1 // indirect
+	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	go4.org v0.0.0-20260112195520-a5071408f32f // indirect
 	golang.org/x/crypto v0.55.0 // indirect
-	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

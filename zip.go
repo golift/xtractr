@@ -18,7 +18,12 @@ func ExtractZIP(xFile *XFile) (size uint64, filesList []string, err error) {
 	}
 	defer zipReader.Close()
 
-	defer xFile.newProgress(getUncompressedZipSize(zipReader)).done()
+	tracker, headerErr := xFile.archiveProgress(getUncompressedZipSize(zipReader))
+	defer tracker.done()
+
+	if headerErr != nil {
+		return 0, nil, headerErr
+	}
 
 	// Detect encoding for non-UTF8 filenames in the archive.
 	decoder := detectZipEncoding(xFile, zipReader.File)
