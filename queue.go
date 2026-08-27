@@ -79,7 +79,10 @@ type Response struct {
 	NewFiles []string
 	// Refused lists files that were extracted but not moved into the final
 	// path because the destination was already occupied. The occupying file
-	// may have arrived with the download; it was kept. No error is set.
+	// may have arrived with the download; it was kept. A refusal alone does
+	// not set an error. The same logical file can appear twice (with different
+	// Src paths) if it is refused during the squash move and again during the
+	// final folder move; consumers should dedupe by Dest.
 	Refused []RefusedFile
 	// SkipOnRecursion lists paths that extractors copied into output (e.g. CUE sheet)
 	// and must not be re-extracted when recursing. Other files (e.g. CUE from a RAR) are still extracted.

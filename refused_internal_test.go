@@ -238,19 +238,34 @@ func TestMoveFilesOverwriteDoesNotFollowLiveSymlink(t *testing.T) {
 func TestMoveFilesStatErrorIsNotARefusal(t *testing.T) {
 	t.Parallel()
 
-	fromDir := t.TempDir()
-	toDir := t.TempDir()
-	src := filepath.Join(fromDir, "payload.bin")
-	require.NoError(t, os.WriteFile(src, []byte("extracted"), 0o600))
+	// overwrite does not change the skip-and-error path: a non-NotExist Lstat
+	// failure is not occupancy, so the file is not renamed and not refused.
+	cases := []struct {
+		name      string
+		overwrite bool
+	}{
+		{name: "overwrite false", overwrite: false},
+		{name: "overwrite true", overwrite: true},
+	}
 
-	// Lstat of a path under a regular file fails with ENOTDIR, not ErrNotExist.
-	// With overwrite=false that must surface as an error, not a false refusal.
-	notADir := filepath.Join(toDir, "not-a-dir")
-	require.NoError(t, os.WriteFile(notADir, []byte("file"), 0o600))
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
 
-	got, err := moveFiles(NoLogger(), 0o755, fromDir, filepath.Join(notADir, "sub"), false)
-	require.Error(t, err)
-	assert.Empty(t, got.Refused, "a stat error is not an occupied destination")
+			fromDir := t.TempDir()
+			toDir := t.TempDir()
+			src := filepath.Join(fromDir, "payload.bin")
+			require.NoError(t, os.WriteFile(src, []byte("extracted"), 0o600))
+
+			// Lstat of a path under a regular file fails with ENOTDIR, not ErrNotExist.
+			notADir := filepath.Join(toDir, "not-a-dir")
+			require.NoError(t, os.WriteFile(notADir, []byte("file"), 0o600))
+
+			got, err := moveFiles(NoLogger(), 0o755, fromDir, filepath.Join(notADir, "sub"), testCase.overwrite)
+			require.Error(t, err)
+			assert.Empty(t, got.Refused, "a stat error is not an occupied destination")
+		})
+	}
 }
 
 func TestMoveFilesOverwriteDoesNotFollowDirSymlink(t *testing.T) {
