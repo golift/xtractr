@@ -190,6 +190,9 @@ type XFile struct {
 	log       Logger
 	moveFiles func(fromPath, toPath string, overwrite bool) ([]string, error)
 	prog      *progressTracker
+	// refused collects files not moved into place during Extract; it is
+	// copied into Response.Refused by processArchive.
+	refused []RefusedFile
 }
 
 // Filter is the input to find compressed files.
@@ -515,10 +518,40 @@ func ExtractFile(xFile *XFile) (size uint64, filesList, archiveList []string, er
 	return size, filesList, archiveList, nil
 }
 
+// Renamed is the result of RenameFiles.
+type Renamed struct {
+	// NewFiles is the list of paths that were moved into place.
+	NewFiles []string
+	// Refused lists files that were not moved because the destination was occupied.
+	Refused []RefusedFile
+}
+
+// RefusedFile describes an extracted file that was not moved into place
+// because the destination path was already occupied and overwrite was false.
+// The occupying file was left untouched. The extracted copy is deleted when
+// the overall move succeeds, but may remain if another move fails.
+type RefusedFile struct {
+	// Src is the extracted copy's path in the temporary folder.
+	Src string
+	// Dest is the occupied destination path that was kept.
+	Dest string
+}
+
 // MoveFiles relocates files then removes the folder they were in.
-// Returns the new file paths.
+// Returns the new file paths. Occupied destinations are skipped when overwrite
+// is false; use RenameFiles to learn which names were refused.
 // This is a helper method and only exposed for convenience. You do not have to call this.
+//
+// Deprecated: Use RenameFiles instead.
 func (x *Xtractr) MoveFiles(fromPath, toPath string, overwrite bool) ([]string, error) {
+	renamed, err := x.RenameFiles(fromPath, toPath, overwrite)
+	return renamed.NewFiles, err
+}
+
+// RenameFiles relocates files then removes the folder they were in.
+// Unlike MoveFiles, the result includes destinations that were already occupied.
+// This is a helper method and only exposed for convenience. You do not have to call this.
+func (x *Xtractr) RenameFiles(fromPath, toPath string, overwrite bool) (Renamed, error) {
 	return moveFiles(x.config, x.config.DirMode, fromPath, toPath, overwrite)
 }
 
@@ -532,7 +565,10 @@ func (x *XFile) bindMoveFiles() { //nolint:funcorder // kept next to MoveFiles
 	}
 
 	x.moveFiles = func(fromPath, toPath string, overwrite bool) ([]string, error) {
-		return moveFiles(x.log, x.DirMode, fromPath, toPath, overwrite)
+		renamed, err := moveFiles(x.log, x.DirMode, fromPath, toPath, overwrite)
+		x.refused = append(x.refused, renamed.Refused...)
+
+		return renamed.NewFiles, err
 	}
 }
 
@@ -541,7 +577,7 @@ func moveFiles( //nolint:cyclop,funlen
 	dirMode os.FileMode,
 	fromPath, toPath string,
 	overwrite bool,
-) ([]string, error) {
+) (Renamed, error) {
 	if log == nil {
 		log = NoLogger()
 	}
@@ -552,12 +588,13 @@ func moveFiles( //nolint:cyclop,funlen
 
 	var (
 		newFiles = []string{}
+		refused  []RefusedFile
 		keepErr  error
 	)
 
 	files, err := listFiles(fromPath)
 	if err != nil {
-		return nil, err
+		return Renamed{}, err
 	}
 
 	// If the "to path" is an existing archive file, remove the suffix to make a directory.
@@ -570,7 +607,7 @@ func moveFiles( //nolint:cyclop,funlen
 
 	err = os.MkdirAll(toPath, dirMode)
 	if err != nil {
-		return nil, fmt.Errorf("making final dir: %w", err)
+		return Renamed{}, fmt.Errorf("making final dir: %w", err)
 	}
 
 	for _, file := range files {
@@ -581,11 +618,20 @@ func moveFiles( //nolint:cyclop,funlen
 			continue
 		}
 
-		_, err = os.Stat(newFile)
-		exists := !os.IsNotExist(err)
+		_, err = os.Lstat(newFile)
+		exists := err == nil
+
+		if err != nil && !os.IsNotExist(err) {
+			// Permission or I/O error is not an occupied destination.
+			keepErr = err
+			log.Printf("Error: Checking Temp File Destination: %v to %v: %v", file, newFile, err)
+
+			continue
+		}
 
 		if exists && !overwrite {
 			log.Printf("Error: Renaming Temp File: %v to %v: (refusing to overwrite existing file)", file, newFile)
+			refused = append(refused, RefusedFile{Src: file, Dest: newFile})
 			// keep trying.
 			continue
 		}
@@ -603,15 +649,21 @@ func moveFiles( //nolint:cyclop,funlen
 		}
 	}
 
-	info, statErr := os.Stat(fromPath)
-	if statErr == nil && info.IsDir() {
-		deleteFiles(log, fromPath)
+	// Only remove the temp source when every file moved. On a move or Lstat
+	// error (keepErr != nil) the destination holds a partial result, so the
+	// source must survive for recovery. Refusals are not errors; those files
+	// stay in the temp dir but the destination is otherwise complete.
+	if keepErr == nil {
+		info, statErr := os.Stat(fromPath)
+		if statErr == nil && info.IsDir() {
+			deleteFiles(log, fromPath)
+		}
 	}
 
 	// Since this is the last step, we tried to rename all the files, bubble the
 	// os.Rename error up, so it gets flagged as failed. It may have worked, but
 	// it should get attention.
-	return newFiles, keepErr
+	return Renamed{NewFiles: newFiles, Refused: refused}, keepErr
 }
 
 // DeleteFiles obliterates things and logs. Use with caution.
@@ -694,34 +746,6 @@ func truncateToBytes(str string, maxBytes int) string {
 	return string(raw)
 }
 
-// openFile opens path with the given flags and mode. If the path exceeds
-// filesystem name limits, the path is truncated via TruncatePathForFS and
-// retried. It returns the opened file and the path that was actually used
-// (the original or the truncated path), so the caller can update file.Path
-// for later use (e.g. os.Chtimes).
-func openFile(path string, flags int, mode os.FileMode) (*os.File, string, error) {
-	openFile, err := os.OpenFile(path, flags, mode)
-	if err == nil {
-		return openFile, path, nil
-	}
-
-	if !IsErrNameTooLong(err) {
-		return nil, "", fmt.Errorf("os.OpenFile(): %w", err)
-	}
-
-	shortPath, truncErr := TruncatePathForFS(path)
-	if truncErr != nil {
-		return nil, "", truncErr
-	}
-
-	openFile, err = os.OpenFile(shortPath, flags, mode)
-	if err != nil {
-		return nil, "", fmt.Errorf("os.OpenFile(): %w", err)
-	}
-
-	return openFile, shortPath, nil
-}
-
 type file struct {
 	Path     string
 	Data     io.Reader
@@ -749,6 +773,8 @@ func renameFile(oldpath, newpath string) error {
 
 	/* Rename failed, try copy. */
 
+	// Open the source first so a missing/unreadable source returns an error
+	// without touching the destination.
 	oldFileStat, err := os.Stat(oldpath)
 	if err != nil {
 		return &ExtractError{Errs: []error{origErr, fmt.Errorf("os.Stat(): %w", err)}}
@@ -761,7 +787,10 @@ func renameFile(oldpath, newpath string) error {
 
 	defer oldFile.Close() // also closed explicitly before the delete below.
 
-	newFile, pathUsed, err := openFile(newpath, os.O_TRUNC|os.O_CREATE|os.O_WRONLY, oldFileStat.Mode())
+	// os.OpenFile(O_TRUNC) follows a dest symlink and would write through it.
+	// openExtractFile opens the dest without following a final-component symlink,
+	// unlinking and retrying like the extract writers do.
+	newFile, pathUsed, err := openExtractFile(newpath, oldFileStat.Mode())
 	if err != nil {
 		return &ExtractError{Errs: []error{origErr, err}}
 	}
