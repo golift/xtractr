@@ -122,6 +122,68 @@ func TestNoTempFolder(t *testing.T) {
 	_ = os.RemoveAll(xFile.Path + xtractr.DefaultSuffix)
 }
 
+// TestRefusedExistingDestination is the reported bug, now observable: a file
+// already occupying the destination name is kept, the extracted copy is
+// discarded, the run reports success, and Response.Refused names the pair.
+func TestRefusedExistingDestination(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	testFileData, err := os.ReadFile(testFile)
+	require.NoError(t, err, "reading test data file failed")
+	require.NoError(t, makeFile(t, testFileData, filepath.Join(dir, "archive.rar")))
+
+	const junk = "not from the archive"
+
+	blocker := filepath.Join(dir, "doc.go")
+	require.NoError(t, os.WriteFile(blocker, []byte(junk), 0o600))
+
+	queue := xtractr.NewQueue(&xtractr.Config{Logger: &testLogger{t: t}})
+	defer queue.Stop()
+
+	xFile := &xtractr.Xtract{
+		Name:       "Refused",
+		Filter:     xtractr.Filter{Path: dir},
+		TempFolder: false,
+		DeleteOrig: false,
+		Password:   "some_password",
+		CBChannel:  make(chan *xtractr.Response),
+	}
+
+	_, err = queue.Extract(xFile)
+	require.NoError(t, err)
+
+	timeout := time.NewTimer(20 * time.Second)
+	defer timeout.Stop()
+
+	var done *xtractr.Response
+
+loop:
+	for {
+		select {
+		case resp, ok := <-xFile.CBChannel:
+			require.True(t, ok, "callback channel closed before extraction completed")
+			require.NoError(t, resp.Error)
+
+			if resp.Done {
+				done = resp
+				break loop
+			}
+		case <-timeout.C:
+			t.Fatal("timed out waiting for extraction to complete")
+		}
+	}
+
+	require.Len(t, done.Refused, 1)
+	assert.Equal(t, filepath.Join(dir+xtractr.DefaultSuffix, "doc.go"), done.Refused[0].Src)
+	assert.Equal(t, blocker, done.Refused[0].Dest)
+
+	got, err := os.ReadFile(blocker)
+	require.NoError(t, err)
+	assert.Equal(t, junk, string(got))
+}
+
 // testSetupTestDir creates a temp directory with 4 copies of a rar archive in it.
 func testSetupTestDir(t *testing.T) string {
 	t.Helper()

@@ -589,6 +589,6 @@ func TestMoveFilesDoesNotDeleteSourceFile(t *testing.T) {
 
 	got, err := moveFiles(NoLogger(), 0o755, src, dir, false)
 	require.NoError(t, err)
-	assert.Equal(t, []string{src}, got)
+	assert.Equal(t, []string{src}, got.NewFiles)
 	require.FileExists(t, src)
 }
