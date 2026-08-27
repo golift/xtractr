@@ -1,9 +1,11 @@
 package xtractr
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -26,7 +28,7 @@ func TestCopyMoveRegularFile(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []byte("extracted"), got)
 	require.NoFileExists(t, src)
-	assertNoPartials(t, dest, DefaultSuffix)
+	assertNoPartials(t, dest)
 }
 
 func TestCopyMoveSymlinkDest(t *testing.T) {
@@ -56,7 +58,7 @@ func TestCopyMoveSymlinkDest(t *testing.T) {
 	gotDest, err := os.ReadFile(dest)
 	require.NoError(t, err)
 	assert.Equal(t, []byte("extracted"), gotDest)
-	assertNoPartials(t, dest, DefaultSuffix)
+	assertNoPartials(t, dest)
 }
 
 func TestCopyMoveDanglingSymlinkDest(t *testing.T) {
@@ -156,7 +158,7 @@ func TestCopyMoveDirectorySourceLeavesDest(t *testing.T) {
 	got, err := os.ReadFile(dest)
 	require.NoError(t, err)
 	assert.Equal(t, []byte("existing"), got)
-	assertNoPartials(t, dest, DefaultSuffix)
+	assertNoPartials(t, dest)
 }
 
 func TestMoveFilesScavengesPartials(t *testing.T) {
@@ -180,7 +182,7 @@ func TestMoveFilesScavengesPartials(t *testing.T) {
 	content, err := os.ReadFile(dest)
 	require.NoError(t, err)
 	assert.Equal(t, []byte("extracted"), content)
-	assertNoPartials(t, dest, DefaultSuffix)
+	assertNoPartials(t, dest)
 }
 
 // A stale partial is safe to remove even when the destination is occupied:
@@ -228,7 +230,10 @@ func TestCopyMoveCustomSuffix(t *testing.T) {
 	got, err := os.ReadFile(dest)
 	require.NoError(t, err)
 	assert.Equal(t, []byte("extracted"), got)
-	assertNoPartials(t, dest, suffix)
+	// copyMove does not scavenge; the stale sibling is left for the next
+	// moveFiles sweep, and the copy used the numbered candidate instead.
+	require.FileExists(t, stale)
+	require.NoFileExists(t, dest+copySiblingExt(suffix, partialTail)+".1")
 	require.NoFileExists(t, dest+copySiblingExt(DefaultSuffix, partialTail))
 }
 
@@ -250,9 +255,12 @@ func TestCreateSiblingSkipsTakenName(t *testing.T) {
 	require.NoError(t, os.WriteFile(taken, []byte("taken"), 0o600))
 
 	// The taken name must not be opened/truncated; the next candidate is used.
-	f, got, err := createSibling(dest, DefaultSuffix, 0o600)
+	f, got, release, err := createSibling(dest, DefaultSuffix, 0o600)
 	require.NoError(t, err)
 	require.NoError(t, f.Close())
+
+	defer release()
+
 	assert.Equal(t, dest+".xtractr_partial.1", got)
 
 	// The pre-existing file is untouched.
@@ -267,9 +275,12 @@ func TestCreateSiblingKnownSuffix(t *testing.T) {
 	dir := t.TempDir()
 	dest := filepath.Join(dir, "movie.mkv")
 
-	f, got, err := createSibling(dest, DefaultSuffix, 0o600)
+	f, got, release, err := createSibling(dest, DefaultSuffix, 0o600)
 	require.NoError(t, err)
 	require.NoError(t, f.Close())
+
+	defer release()
+
 	assert.Equal(t, dest+".xtractr_partial", got)
 }
 
@@ -285,9 +296,12 @@ func TestCreateSiblingDoesNotFollowSymlink(t *testing.T) {
 	require.NoError(t, os.WriteFile(victim, []byte("secret"), 0o600))
 	require.NoError(t, os.Symlink(victim, dest+copySiblingExt(DefaultSuffix, partialTail)))
 
-	f, got, err := createSibling(dest, DefaultSuffix, 0o600)
+	f, got, release, err := createSibling(dest, DefaultSuffix, 0o600)
 	require.NoError(t, err)
 	require.NoError(t, f.Close())
+
+	defer release()
+
 	assert.Equal(t, dest+".xtractr_partial.1", got)
 
 	content, err := os.ReadFile(victim)
@@ -295,8 +309,9 @@ func TestCreateSiblingDoesNotFollowSymlink(t *testing.T) {
 	assert.Equal(t, []byte("secret"), content, "must not write through symlink")
 }
 
-// Long basenames near NAME_MAX are truncated in both the sibling allocator
-// and the scavenger, so leftovers are actually cleaned up.
+// Long basenames near NAME_MAX are truncated by the sibling allocator; the
+// scavenger anchors on the tail, so truncated and numbered-truncated
+// leftovers are still cleaned up.
 func TestScavengePartialsLongName(t *testing.T) {
 	t.Parallel()
 
@@ -304,19 +319,123 @@ func TestScavengePartialsLongName(t *testing.T) {
 	longBase := strings.Repeat("a", nameMax)
 	dest := filepath.Join(dir, longBase)
 
-	// Create the leftover with the exact truncated name createSibling would use.
+	// Create leftovers with the exact truncated names the allocator would use.
 	_, stem, fullTail := siblingStem(dest, DefaultSuffix, partialTail)
 	stale := filepath.Join(dir, stem+fullTail)
-	require.NoError(t, os.WriteFile(stale, []byte("stale"), 0o600))
+	staleN := siblingCandidate(dir, stem, fullTail, 1)
 
-	scavengePartials(dest, DefaultSuffix)
+	require.NoError(t, os.WriteFile(stale, []byte("stale"), 0o600))
+	require.NoError(t, os.WriteFile(staleN, []byte("stale.1"), 0o600))
+
+	scavengePartials(dir, DefaultSuffix)
 	require.NoFileExists(t, stale, "truncated-stem partial must be scavenged")
+	require.NoFileExists(t, staleN, "numbered truncated-stem partial must be scavenged")
 }
 
-func assertNoPartials(t *testing.T, dest, suffix string) {
+// The scavenger removes only allocator-generated names: the bare branded tail
+// and numeric .N variants, for both partial and link tails. Lookalikes and
+// real files are left alone.
+func TestScavengePartialsExactMatches(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	remove := []string{
+		"a.mkv.xtractr_partial",
+		"a.mkv.xtractr_partial.1",
+		"a.mkv.xtractr_partial.1000",
+		"a.mkv.xtractr_link",
+		"a.mkv.xtractr_link.2",
+	}
+	keep := []string{
+		"a.mkv",                        // real file
+		"a.mkv.xtractr_partial.backup", // non-numeric suffix
+		"a.mkv.xtractr_partial.1.5",    // not a single numeric postfix
+		"a.mkv.xtractr_partial.",       // empty postfix
+		".xtractr_partial",             // empty stem is never generated
+		"a.mkv.other_partial",          // different brand
+		"a.mkv.xtractr_partial.old.1",  // tail not final
+	}
+
+	for _, name := range append(append([]string{}, remove...), keep...) {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o600))
+	}
+
+	scavengePartials(dir, DefaultSuffix)
+
+	for _, name := range remove {
+		require.NoFileExists(t, filepath.Join(dir, name), "should scavenge %s", name)
+	}
+
+	for _, name := range keep {
+		require.FileExists(t, filepath.Join(dir, name), "should keep %s", name)
+	}
+}
+
+// A sibling registered by an in-flight copy must survive the scavenger; once
+// released (renamed away or removed), it becomes scavengable again.
+func TestScavengeSkipsActiveSibling(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "movie.mkv")
+
+	file, partial, release, err := createSibling(dest, DefaultSuffix, 0o600)
+	require.NoError(t, err)
+
+	defer release() // a second release is a harmless map delete
+
+	_, err = file.WriteString("still copying")
+	require.NoError(t, err)
+
+	scavengePartials(dir, DefaultSuffix)
+	require.FileExists(t, partial, "in-flight partial must survive the sweep")
+
+	require.NoError(t, file.Close())
+	release()
+
+	scavengePartials(dir, DefaultSuffix)
+	require.NoFileExists(t, partial, "released partial is scavenged")
+}
+
+// Parallel moves into the same destination directory must all succeed; the
+// registry (not a move-wide lock) is what keeps their siblings and scavenges
+// from interfering. Run under -race to catch unsynchronized registry access.
+func TestMoveFilesConcurrentSameDest(t *testing.T) {
+	t.Parallel()
+
+	toDir := t.TempDir()
+
+	const workers = 4
+
+	var waitGrp sync.WaitGroup
+
+	errs := make([]error, workers)
+
+	for idx := range workers {
+		fromDir := t.TempDir()
+		name := fmt.Sprintf("file%d.bin", idx)
+		require.NoError(t, os.WriteFile(filepath.Join(fromDir, name), []byte(fmt.Sprintf("data%d", idx)), 0o600))
+
+		waitGrp.Go(func() {
+			_, errs[idx] = moveFiles(NoLogger(), 0o755, fromDir, toDir, false, "")
+		})
+	}
+
+	waitGrp.Wait()
+
+	for idx := range workers {
+		require.NoError(t, errs[idx])
+
+		content, err := os.ReadFile(filepath.Join(toDir, fmt.Sprintf("file%d.bin", idx)))
+		require.NoError(t, err)
+		assert.Equal(t, fmt.Sprintf("data%d", idx), string(content))
+	}
+}
+
+func assertNoPartials(t *testing.T, dest string) {
 	t.Helper()
 
-	dir, stem, fullTail := siblingStem(dest, suffix, partialTail)
+	dir, stem, fullTail := siblingStem(dest, DefaultSuffix, partialTail)
 	prefix := stem + fullTail
 	entries, err := os.ReadDir(dir)
 	require.NoError(t, err)
