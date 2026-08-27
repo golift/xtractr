@@ -512,8 +512,8 @@ type Renamed struct {
 
 // RefusedFile describes an extracted file that was not moved into place
 // because the destination path was already occupied and overwrite was false.
-// The occupying file was left untouched; the extracted copy was deleted
-// with the temporary folder.
+// The occupying file was left untouched. The extracted copy is deleted when
+// the overall move succeeds, but may remain if another move fails.
 type RefusedFile struct {
 	// Src is the extracted copy's path in the temporary folder.
 	Src string
