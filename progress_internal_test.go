@@ -93,3 +93,19 @@ func TestArchiveProgressKeepsCountsAcrossCalls(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 7, attempt.prog.Files)
 }
+
+func TestExceedsRatioFailsClosedWithoutCompressedSize(t *testing.T) {
+	t.Parallel()
+
+	require.False(t, exceedsRatio(100, 0, 0), "MaxRatio 0 is unlimited")
+	require.False(t, exceedsRatio(0, 0, 2), "nothing written yet")
+	require.True(t, exceedsRatio(1, 0, 2), "any write without a denominator exceeds")
+}
+
+func TestArchiveProgressFailsClosedWithoutCompressedSize(t *testing.T) {
+	t.Parallel()
+
+	xFile := &XFile{MaxRatio: 2, FilePath: filepath.Join(t.TempDir(), "missing.zip")}
+	_, err := xFile.archiveProgress(0, 0, 0)
+	require.ErrorIs(t, err, ErrMaxRatio)
+}

@@ -254,6 +254,10 @@ func TestStreamTracksFLACSubMinimumTrack(t *testing.T) {
 
 	_, _, err = streamTracksFLAC(xFile, flacPath, cue, trackStarts, trackEnds, info, &flacMetadata{Info: info})
 	require.ErrorIs(t, err, ErrTrackTooShort)
+	require.NoFileExists(t, filepath.Join(tmpDir, "01 - Track 1.flac"),
+		"failed track must be removed")
+	require.NoFileExists(t, filepath.Join(tmpDir, "02 - Track 2.flac"),
+		"sibling tracks opened in the same frame must be removed on error")
 }
 
 // TestBalanceFrames covers the frame-pair sizing rules: both-valid pairs pass

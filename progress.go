@@ -142,6 +142,12 @@ func (x *XFile) newArchiveProgress(total, compressed uint64, count int) *progres
 	tracker := x.newProgress(total, compressed, count)
 	tracker.headerErr = x.checkClaimedLimits(total, count, compressed)
 
+	// Fail closed: MaxRatio with no denominator would otherwise be treated as
+	// unlimited (exceedsRatio used to return false when compressed == 0).
+	if tracker.headerErr == nil && x.MaxRatio > 0 && compressed == 0 {
+		tracker.headerErr = fmt.Errorf("%w: compressed size unavailable", ErrMaxRatio)
+	}
+
 	return tracker
 }
 
@@ -367,8 +373,12 @@ func (x *XFile) checkClaimedLimits(claimedBytes uint64, claimedFiles int, compre
 }
 
 func exceedsRatio(wrote, compressed uint64, ratio float64) bool {
-	if ratio <= 0 || compressed == 0 {
+	if ratio <= 0 {
 		return false
+	}
+
+	if compressed == 0 {
+		return wrote > 0
 	}
 
 	return float64(wrote) > float64(compressed)*ratio

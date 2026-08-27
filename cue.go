@@ -626,7 +626,12 @@ func streamTracksFLAC(
 
 	err = splitter.run(stream)
 	if err != nil {
-		return splitter.totalSize, splitter.files, err
+		// Close before unlink so Windows can remove the files; ExtractCUE
+		// discards the file list on error, so leftovers would otherwise stay.
+		splitter.closeOpen()
+		splitter.removeFiles()
+
+		return 0, nil, err
 	}
 
 	return splitter.totalSize, splitter.files, nil
@@ -963,11 +968,15 @@ func (s *trackSplitter) finalize(encoder *trackEncoder) error {
 		// The encoder is removed from s.open by the caller, so closeOpen cannot
 		// reach it; close it here to avoid leaking the output descriptor.
 		_ = encoder.enc.Close()
+		_ = os.Remove(encoder.outputPath)
+
 		return fmt.Errorf("writing final frame to track %d (%s): %w", encoder.number, encoder.outputPath, err)
 	}
 
 	err = encoder.enc.Close()
 	if err != nil {
+		_ = os.Remove(encoder.outputPath)
+
 		return fmt.Errorf("closing track %d encoder (%s): %w", encoder.number, encoder.outputPath, err)
 	}
 
@@ -993,6 +1002,12 @@ func (s *trackSplitter) closeOpen() {
 	}
 
 	s.open = nil
+}
+
+func (s *trackSplitter) removeFiles() {
+	for _, path := range s.files {
+		_ = os.Remove(path)
+	}
 }
 
 // flacMetadata holds metadata read from a FLAC file for use when splitting by CUE.
