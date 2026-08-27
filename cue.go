@@ -562,7 +562,7 @@ type trackEncoder struct {
 }
 
 // minFLACBlockSize is the smallest block size (in samples) the FLAC format allows
-// for any frame except the final frame of a stream (RFC 9639, section 9.1).
+// for any frame except the final frame of a stream (RFC 9639, section 4.1).
 // maxFLACBlockSize is the largest block size a FLAC frame can hold.
 const (
 	minFLACBlockSize = 16
@@ -891,9 +891,20 @@ func clipFrame(src *frame.Frame, offset, count int, prefix *frame.Frame) *frame.
 }
 
 // flushHeld writes the buffered frame, if any. Called when a track ends.
+// A track shorter than the FLAC minimum block size has nothing to balance
+// against, so the encoder would record a STREAMINFO minimum block size below
+// 16 and strict parsers would reject the file. Refuse instead of writing a
+// corrupt track.
 func (e *trackEncoder) flushHeld() error {
 	if e.held == nil {
 		return nil
+	}
+
+	if e.held.Subframes[0].NSamples < minFLACBlockSize {
+		samples := e.held.Subframes[0].NSamples
+		e.held = nil
+
+		return fmt.Errorf("%w (%d samples)", ErrTrackTooShort, samples)
 	}
 
 	err := e.enc.WriteFrame(e.held)

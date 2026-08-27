@@ -43,6 +43,9 @@ var (
 	ErrNoTracks         = errors.New("cue sheet contains no tracks")
 	ErrAudioNotFound    = errors.New("audio file referenced by cue sheet not found")
 	ErrUnsupportedAudio = errors.New("cue sheet references unsupported audio format (only FLAC and APE are supported)")
+	// ErrTrackTooShort is returned when a CUE track holds fewer samples than the
+	// FLAC minimum block size; encoding it would record an invalid STREAMINFO.
+	ErrTrackTooShort = errors.New("cue track is shorter than the minimum FLAC block size")
 
 	// RPM.
 

@@ -200,6 +200,62 @@ func TestStreamTracksFLACTinyBoundaryClips(t *testing.T) {
 	}
 }
 
+// A CUE track shorter than the FLAC minimum block size cannot be encoded
+// without producing a spec-invalid STREAMINFO; the splitter must refuse it
+// with ErrTrackTooShort instead of writing a corrupt file.
+func TestStreamTracksFLACSubMinimumTrack(t *testing.T) {
+	t.Parallel()
+
+	const blockSize = 4096
+
+	tmpDir := t.TempDir()
+	flacPath := filepath.Join(tmpDir, "album.flac")
+	info := &meta.StreamInfo{
+		BlockSizeMin:  blockSize,
+		BlockSizeMax:  blockSize,
+		SampleRate:    44100,
+		NChannels:     2,
+		BitsPerSample: 16,
+		NSamples:      blockSize,
+	}
+
+	outFile, err := os.Create(flacPath)
+	require.NoError(t, err)
+
+	enc, err := flac.NewEncoder(outFile, info)
+	require.NoError(t, err)
+
+	subframes := make([]*frame.Subframe, 2)
+	for channel := range subframes {
+		subframes[channel] = &frame.Subframe{
+			SubHeader: frame.SubHeader{Pred: frame.PredVerbatim},
+			Samples:   make([]int32, blockSize),
+			NSamples:  blockSize,
+		}
+	}
+
+	require.NoError(t, enc.WriteFrame(&frame.Frame{
+		Header: frame.Header{
+			HasFixedBlockSize: true,
+			BlockSize:         blockSize,
+			SampleRate:        44100,
+			Channels:          frame.ChannelsLR,
+			BitsPerSample:     16,
+		},
+		Subframes: subframes,
+	}))
+	require.NoError(t, enc.Close())
+
+	// Track 1 is 8 samples long; track 2 is the rest. Track 1 is degenerate.
+	trackStarts := []uint64{0, 8}
+	trackEnds := []uint64{8, blockSize}
+	cue := &CueSheet{Tracks: []CueTrack{{Number: 1}, {Number: 2}}}
+	xFile := &XFile{OutputDir: tmpDir, FileMode: 0o600}
+
+	_, _, err = streamTracksFLAC(xFile, flacPath, cue, trackStarts, trackEnds, info, &flacMetadata{Info: info})
+	require.ErrorIs(t, err, ErrTrackTooShort)
+}
+
 // TestBalanceFrames covers the frame-pair sizing rules: both-valid pairs pass
 // through, small pairs concatenate, and a tiny clip next to a maximum-size frame
 // redistributes samples so neither output frame is below the minimum block size.

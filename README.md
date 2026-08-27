@@ -20,6 +20,8 @@ Optional extraction caps on `XFile`, `Xtract`, and `Config` (`0` means unlimited
 
 Exceeding a cap returns `ErrMaxBytes`, `ErrMaxFiles`, or `ErrMaxRatio` and stops the extract. Queue jobs inherit `Config` values when the `Xtract` field is `0`.
 
+`MaxFiles` counts claimed-plus-created entries, not just created. An archive whose header claims more entries than `MaxFiles` fails fast with `ErrMaxFiles` even when every entry already exists on disk and nothing new would be created. This fail-closed default is intentional for a security cap: headers can understate, so the runtime write path always re-checks regardless of what the header claimed.
+
 # Interface
 
 This library provides a queue, and a common interface to extract files.
