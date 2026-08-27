@@ -25,15 +25,35 @@ func ExtractISO(xFile *XFile) (size uint64, filesList []string, err error) {
 		return size, filesList, nil
 	}
 
+	if isLimitError(udfErr) {
+		if xFile.prog != nil {
+			xFile.prog.done()
+		}
+
+		return size, filesList, udfErr
+	}
+
 	xFile.Debugf("UDF extraction failed for %s, falling back to ISO9660: %v", xFile.FilePath, udfErr)
 
-	// Fall back to ISO9660 (now with Joliet support for full filenames).
+	return extractISO9660(xFile, openISO)
+}
+
+func extractISO9660(xFile *XFile, openISO *os.File) (uint64, []string, error) {
 	image, isoErr := iso9660.OpenImage(openISO)
 	if isoErr != nil {
+		if xFile.prog != nil {
+			xFile.prog.done()
+		}
+
 		return 0, nil, fmt.Errorf("failed to open iso image: %s: %w", xFile.FilePath, isoErr)
 	}
 
-	defer xFile.newProgress(getUncompressedIsoSize(image)).done()
+	tracker, headerErr := xFile.archiveProgress(getUncompressedIsoSize(image))
+	defer tracker.done()
+
+	if headerErr != nil {
+		return 0, nil, headerErr
+	}
 
 	iso, err := iso9660.OpenImage(xFile.prog.readAter(openISO))
 	if err != nil {
@@ -45,7 +65,6 @@ func ExtractISO(xFile *XFile) (size uint64, filesList []string, err error) {
 		return 0, nil, fmt.Errorf("failed to open iso root: %s: %w", xFile.FilePath, err)
 	}
 
-	// Extract directly to output directory (no ISO-name subfolder).
 	size, files, err := xFile.uniso(root, "")
 	if err != nil {
 		return size, files, fmt.Errorf("%s: %w", xFile.FilePath, err)
@@ -63,16 +82,20 @@ func getUncompressedIsoSize(image *iso9660.Image) (total, _ uint64, count int) {
 	var loop func(isoFile *iso9660.File)
 
 	loop = func(isoFile *iso9660.File) {
-		count++
-
 		children, err := isoFile.GetChildren()
 		if err != nil {
 			return
 		}
 
 		for _, child := range children {
+			count++
+
+			if child.IsDir() {
+				loop(child)
+				continue
+			}
+
 			total += uint64(child.Size())
-			loop(child)
 		}
 	}
 

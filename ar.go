@@ -13,10 +13,15 @@ import (
 func ExtractAr(xFile *XFile) (size uint64, filesList []string, err error) {
 	arFile, err := os.Open(xFile.FilePath)
 	if err != nil {
-		return 0, nil, fmt.Errorf("rardecode.OpenReader: %w", err)
+		return 0, nil, fmt.Errorf("os.Open: %w", err)
 	}
 
-	defer xFile.newProgress(getUncompressedArSize(arFile)).done() // this closes arFile
+	tracker, headerErr := xFile.archiveProgress(getUncompressedArSize(arFile))
+	defer tracker.done() // getUncompressedArSize closed arFile
+
+	if headerErr != nil {
+		return 0, nil, headerErr
+	}
 
 	arFile, err = os.Open(xFile.FilePath)
 	if err != nil {

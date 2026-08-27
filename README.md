@@ -12,6 +12,16 @@ Can also be used ad-hoc for direct decompression and extraction. See docs.
 -   Splits FLAC+CUE sheets into individual tracks.
 -   Detects non-UTF8 zip filenames automatically.
 
+Optional extraction caps on `XFile`, `Xtract`, and `Config` (`0` means unlimited):
+
+-   `MaxBytes` — uncompressed bytes written for one archive
+-   `MaxFiles` — files, directories, and symlinks created for one archive
+-   `MaxRatio` — `bytesWritten / archiveFileSize`
+
+Exceeding a cap returns `ErrMaxBytes`, `ErrMaxFiles`, or `ErrMaxRatio` and stops the extract. Queue jobs inherit `Config` values when the `Xtract` field is `0`.
+
+`MaxFiles` counts claimed-plus-created entries, not just created. An archive whose header claims more entries than `MaxFiles` fails fast with `ErrMaxFiles` even when every entry already exists on disk and nothing new would be created. This fail-closed default is intentional for a security cap: headers can understate, so the runtime write path always re-checks regardless of what the header claimed.
+
 # Interface
 
 This library provides a queue, and a common interface to extract files.

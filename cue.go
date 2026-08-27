@@ -89,6 +89,8 @@ func ExtractCUE(xFile *XFile) (size uint64, files, archives []string, err error)
 		return 0, nil, nil, err
 	}
 
+	defer xFile.newProgress(0, archiveFileSize(audioPath), len(cue.Tracks)).done()
+
 	ext := strings.ToLower(filepath.Ext(audioPath))
 
 	switch ext {
@@ -115,19 +117,36 @@ func ExtractCUE(xFile *XFile) (size uint64, files, archives []string, err error)
 		return 0, nil, nil, fmt.Errorf("%s: %w: %s", xFile.FilePath, ErrInvalidPath, cueDest)
 	}
 
-	writeErr := copyCueToOutput(xFile.FilePath, cueDest, xFile.FileMode)
-	if writeErr != nil {
-		xFile.Debugf("Copying CUE sheet to output: %s", writeErr)
-	} else {
-		files = append(files, cueDest)
-		// Mark so recursion does not try to extract this copied CUE again.
-		xFile.SkipOnRecursion = append(xFile.SkipOnRecursion, cueDest)
+	files, err = copyCueSheetToOutput(xFile, cueDest, files)
+	if err != nil {
+		return size, files, nil, err
 	}
 
 	// The archive list includes both the CUE file and the FLAC file.
 	archives = []string{xFile.FilePath, audioPath}
 
 	return size, files, archives, nil
+}
+
+// copyCueSheetToOutput writes the source CUE into the extract folder. Limit
+// errors abort the extract; other copy failures are logged and ignored.
+func copyCueSheetToOutput(xFile *XFile, cueDest string, files []string) ([]string, error) {
+	writeErr := copyCueToOutput(xFile, xFile.FilePath, cueDest, xFile.FileMode)
+	if isLimitError(writeErr) {
+		return files, writeErr
+	}
+
+	if writeErr != nil {
+		xFile.Debugf("Copying CUE sheet to output: %s", writeErr)
+
+		return files, nil
+	}
+
+	files = append(files, cueDest)
+	// Mark so recursion does not try to extract this copied CUE again.
+	xFile.SkipOnRecursion = append(xFile.SkipOnRecursion, cueDest)
+
+	return files, nil
 }
 
 // parseCueSheetFile parses a CUE sheet from a file path and returns the sheet plus raw timestamps.
@@ -506,8 +525,11 @@ func splitFLAC(xFile *XFile, audioPath string, cue *CueSheet, timestamps []cueTi
 	)
 
 	if len(pictures) > 0 {
-		picturePaths, pictureBytes, err = writePicturesToFiles(xFile.OutputDir, pictures, xFile.FileMode)
-		if err != nil {
+		picturePaths, pictureBytes, err = writePicturesToFiles(xFile, xFile.OutputDir, pictures, xFile.FileMode)
+		switch {
+		case isLimitError(err):
+			return 0, nil, err
+		case err != nil:
 			xFile.Debugf("Error writing album art files: %s", err)
 		}
 
@@ -515,8 +537,6 @@ func splitFLAC(xFile *XFile, audioPath string, cue *CueSheet, timestamps []cueTi
 			xFile.Debugf("Wrote album art: %s", p)
 		}
 	}
-
-	defer xFile.newProgress(0, 0, len(cue.Tracks)).done()
 
 	// Stream frames one at a time, writing each to the appropriate track encoder.
 	totalSize, files, err := streamTracksFLAC(xFile, audioPath, cue, trackStarts, trackEnds, streamInfo, flacMeta)
@@ -534,11 +554,20 @@ func splitFLAC(xFile *XFile, audioPath string, cue *CueSheet, timestamps []cueTi
 // trackEncoder holds an open encoder for a single output track during streaming.
 type trackEncoder struct {
 	enc        *flac.Encoder
+	held       *frame.Frame // last built frame, not yet written (see writeClip)
 	outputPath string
 	number     int
 	start      uint64
 	end        uint64
 }
+
+// minFLACBlockSize is the smallest block size (in samples) the FLAC format allows
+// for any frame except the final frame of a stream (RFC 9639, section 4.1).
+// maxFLACBlockSize is the largest block size a FLAC frame can hold.
+const (
+	minFLACBlockSize = 16
+	maxFLACBlockSize = 65535
+)
 
 // trackSplitter streams source FLAC frames into per-track encoders. It opens a track
 // encoder only when the stream reaches that track and closes it as soon as the stream
@@ -597,7 +626,12 @@ func streamTracksFLAC(
 
 	err = splitter.run(stream)
 	if err != nil {
-		return splitter.totalSize, splitter.files, err
+		// Close before unlink so Windows can remove the files; ExtractCUE
+		// discards the file list on error, so leftovers would otherwise stay.
+		splitter.closeOpen()
+		splitter.removeFiles()
+
+		return 0, nil, err
 	}
 
 	return splitter.totalSize, splitter.files, nil
@@ -690,12 +724,20 @@ func (s *trackSplitter) openEncoder(idx int) (*trackEncoder, error) {
 		return nil, fmt.Errorf("creating output file for track %d: %w", track.Number, err)
 	}
 
-	enc, err := flac.NewEncoder(outFile, trackInfo, blocks...)
+	enc, err := flac.NewEncoder(s.xFile.countedWriteSeeker(outFile), trackInfo, blocks...)
 	if err != nil {
 		_ = outFile.Close()
 		_ = os.Remove(usedPath)
 
 		return nil, fmt.Errorf("creating encoder for track %d: %w", track.Number, err)
+	}
+
+	err = s.xFile.countExtracted()
+	if err != nil {
+		_ = enc.Close()
+		_ = os.Remove(usedPath)
+
+		return nil, err
 	}
 
 	return &trackEncoder{
@@ -725,10 +767,156 @@ func (s *trackSplitter) writeFrame(parsed *frame.Frame, frameStart, frameEnd uin
 			continue
 		}
 
-		err := encoder.enc.WriteFrame(buildOutputFrame(parsed, offsetInFrame, samplesToTake))
+		err := encoder.writeClip(parsed, offsetInFrame, samplesToTake)
 		if err != nil {
 			return fmt.Errorf("writing frame to track %d (%s): %w", encoder.number, encoder.outputPath, err)
 		}
+	}
+
+	return nil
+}
+
+// writeClip builds an output frame from a clip of the source frame and writes it to
+// the track. One frame is held back so a clip smaller than the FLAC minimum block
+// size merges with its neighbor instead of becoming a spec-invalid tiny frame: a CUE
+// boundary that falls near a source frame's edge otherwise produces a track whose
+// first or last clip is under 16 samples, and the encoder records the smallest
+// written frame as STREAMINFO's minimum block size, which strict parsers reject.
+func (e *trackEncoder) writeClip(src *frame.Frame, offset, count int) error {
+	newFrame := buildOutputFrame(src, offset, count)
+
+	if e.held == nil {
+		e.held = newFrame
+		return nil
+	}
+
+	write, hold := balanceFrames(e.held, newFrame)
+	e.held = hold
+
+	if write == nil {
+		return nil // the clips were concatenated into the held frame
+	}
+
+	err := e.enc.WriteFrame(write)
+	if err != nil {
+		return fmt.Errorf("encoding flac frame: %w", err)
+	}
+
+	return nil
+}
+
+// balanceFrames returns the frame to write now and the frame to hold for the next
+// clip, sized so neither is smaller than the FLAC minimum block size. When the two
+// fit in one frame it concatenates them (write is nil); otherwise it moves the
+// smallest possible tail of the larger frame onto the smaller one. Total samples
+// and their order are always preserved.
+func balanceFrames(held, next *frame.Frame) (write, hold *frame.Frame) {
+	heldSamples := held.Subframes[0].NSamples
+	nextSamples := next.Subframes[0].NSamples
+	combined := heldSamples + nextSamples
+
+	switch {
+	case heldSamples >= minFLACBlockSize && nextSamples >= minFLACBlockSize:
+		// Both already valid; write the earlier frame and hold the later one.
+		return held, next
+	case combined <= maxFLACBlockSize:
+		// Fits in one frame; write nothing and hold the concatenation.
+		return nil, concatFrames(held, next)
+	default:
+		// Too large to concatenate. Move the tail of the larger frame onto the
+		// smaller one so both meet the minimum block size.
+		move := minFLACBlockSize - min(heldSamples, nextSamples)
+
+		if heldSamples >= nextSamples {
+			// held is larger: shrink held by its tail, prepend that tail to next.
+			return clipFrame(held, 0, heldSamples-move, nil), clipFrame(next, 0, nextSamples, tailFrame(held, move))
+		}
+
+		// next is larger: shrink next by its tail, append held before next's head.
+		return concatFrames(held, clipFrame(next, 0, move, nil)), clipFrame(next, move, nextSamples-move, nil)
+	}
+}
+
+// concatFrames returns one frame holding held's samples followed by next's.
+func concatFrames(held, next *frame.Frame) *frame.Frame {
+	combined := held.Subframes[0].NSamples + next.Subframes[0].NSamples
+	merged := &frame.Frame{Header: held.Header}
+	merged.BlockSize = uint16(combined)
+	merged.Subframes = make([]*frame.Subframe, len(held.Subframes))
+
+	for channel := range held.Subframes {
+		samples := make([]int32, 0, combined)
+		samples = append(samples, held.Subframes[channel].Samples...)
+		samples = append(samples, next.Subframes[channel].Samples...)
+
+		merged.Subframes[channel] = &frame.Subframe{
+			SubHeader: held.Subframes[channel].SubHeader,
+			Samples:   samples,
+			NSamples:  combined,
+		}
+	}
+
+	return merged
+}
+
+// tailFrame returns a frame holding the last count samples of src.
+func tailFrame(src *frame.Frame, count int) *frame.Frame {
+	return clipFrame(src, src.Subframes[0].NSamples-count, count, nil)
+}
+
+// clipFrame returns a frame of count samples starting at offset. When prefix is
+// non-nil, that many samples from the end of prefix are prepended first (used to
+// move an earlier frame's tail onto the start of the next frame).
+func clipFrame(src *frame.Frame, offset, count int, prefix *frame.Frame) *frame.Frame {
+	total := count
+	if prefix != nil {
+		total += prefix.Subframes[0].NSamples
+	}
+
+	out := &frame.Frame{Header: src.Header}
+	out.BlockSize = uint16(total)
+	out.Subframes = make([]*frame.Subframe, len(src.Subframes))
+
+	for channel := range src.Subframes {
+		var samples []int32
+		if prefix != nil {
+			samples = append(samples, prefix.Subframes[channel].Samples...)
+		}
+
+		samples = append(samples, src.Subframes[channel].Samples[offset:offset+count]...)
+
+		out.Subframes[channel] = &frame.Subframe{
+			SubHeader: src.Subframes[channel].SubHeader,
+			Samples:   samples,
+			NSamples:  total,
+		}
+	}
+
+	return out
+}
+
+// flushHeld writes the buffered frame, if any. Called when a track ends.
+// A track shorter than the FLAC minimum block size has nothing to balance
+// against, so the encoder would record a STREAMINFO minimum block size below
+// 16 and strict parsers would reject the file. Refuse instead of writing a
+// corrupt track.
+func (e *trackEncoder) flushHeld() error {
+	if e.held == nil {
+		return nil
+	}
+
+	if e.held.Subframes[0].NSamples < minFLACBlockSize {
+		samples := e.held.Subframes[0].NSamples
+		e.held = nil
+
+		return fmt.Errorf("%w (%d samples)", ErrTrackTooShort, samples)
+	}
+
+	err := e.enc.WriteFrame(e.held)
+	e.held = nil
+
+	if err != nil {
+		return fmt.Errorf("encoding flac frame: %w", err)
 	}
 
 	return nil
@@ -775,8 +963,20 @@ func (s *trackSplitter) finishAll() error {
 
 // finalize closes a track encoder (flushing the FLAC stream) and records its size.
 func (s *trackSplitter) finalize(encoder *trackEncoder) error {
-	err := encoder.enc.Close()
+	err := encoder.flushHeld()
 	if err != nil {
+		// The encoder is removed from s.open by the caller, so closeOpen cannot
+		// reach it; close it here to avoid leaking the output descriptor.
+		_ = encoder.enc.Close()
+		_ = os.Remove(encoder.outputPath)
+
+		return fmt.Errorf("writing final frame to track %d (%s): %w", encoder.number, encoder.outputPath, err)
+	}
+
+	err = encoder.enc.Close()
+	if err != nil {
+		_ = os.Remove(encoder.outputPath)
+
 		return fmt.Errorf("closing track %d encoder (%s): %w", encoder.number, encoder.outputPath, err)
 	}
 
@@ -802,6 +1002,12 @@ func (s *trackSplitter) closeOpen() {
 	}
 
 	s.open = nil
+}
+
+func (s *trackSplitter) removeFiles() {
+	for _, path := range s.files {
+		_ = os.Remove(path)
+	}
 }
 
 // flacMetadata holds metadata read from a FLAC file for use when splitting by CUE.
@@ -974,7 +1180,12 @@ func pictureTypeNames() map[uint32]string {
 // writePicturesToFiles writes all picture blocks to files in outputDir. Front cover
 // (type 3) is named cover.<ext>; others use the picture type (e.g. cover_back.png).
 // Returns written paths, total bytes written, and any error from the first failed write.
-func writePicturesToFiles(outputDir string, pictures []*meta.Picture, fileMode os.FileMode) ([]string, uint64, error) {
+func writePicturesToFiles(
+	xFile *XFile,
+	outputDir string,
+	pictures []*meta.Picture,
+	fileMode os.FileMode,
+) ([]string, uint64, error) {
 	typeCount := make(map[string]int)
 	paths := make([]string, 0, len(pictures))
 	totalBytes := uint64(0)
@@ -1004,7 +1215,7 @@ func writePicturesToFiles(outputDir string, pictures []*meta.Picture, fileMode o
 		name += "." + ext
 		path := filepath.Join(outputDir, name)
 
-		err := writeExtractFile(path, pic.Data, fileMode)
+		err := xFile.writeExtractFile(path, pic.Data, fileMode)
 		if err != nil {
 			return paths, totalBytes, fmt.Errorf("writing %s: %w", name, err)
 		}
@@ -1018,13 +1229,13 @@ func writePicturesToFiles(outputDir string, pictures []*meta.Picture, fileMode o
 
 // copyCueToOutput copies the CUE sheet file into the output directory so the
 // extracted folder contains tracks, album art, and the CUE for verification/archival.
-func copyCueToOutput(srcPath, destPath string, fileMode os.FileMode) error {
+func copyCueToOutput(xFile *XFile, srcPath, destPath string, fileMode os.FileMode) error {
 	data, err := os.ReadFile(srcPath)
 	if err != nil {
 		return fmt.Errorf("reading cue sheet: %w", err)
 	}
 
-	err = writeExtractFile(destPath, data, fileMode)
+	err = xFile.writeExtractFile(destPath, data, fileMode)
 	if err != nil {
 		return fmt.Errorf("writing cue sheet: %w", err)
 	}
