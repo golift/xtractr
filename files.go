@@ -614,6 +614,10 @@ func moveFiles( //nolint:cyclop,funlen
 		return Renamed{}, fmt.Errorf("making final dir: %w", err)
 	}
 
+	// Scavenge once per move; in-flight siblings are registered and skipped,
+	// so parallel extractors sharing this destination are unaffected.
+	scavengePartials(toPath, suffix)
+
 	for _, file := range files {
 		newFile := filepath.Join(toPath, filepath.Base(file))
 		if filepath.Clean(file) == filepath.Clean(newFile) {
@@ -621,8 +625,6 @@ func moveFiles( //nolint:cyclop,funlen
 			newFiles = append(newFiles, newFile)
 			continue
 		}
-
-		scavengePartials(newFile, suffix)
 
 		_, err = os.Lstat(newFile)
 		exists := err == nil
@@ -826,8 +828,6 @@ func copyMove(oldpath, newpath, suffix string) error {
 }
 
 func copyMoveFile(oldpath, newpath, suffix string, oldInfo os.FileInfo) error {
-	scavengePartials(newpath, suffix)
-
 	oldFile, err := os.Open(oldpath)
 	if err != nil {
 		return fmt.Errorf("os.Open(): %w", err)
@@ -837,10 +837,12 @@ func copyMoveFile(oldpath, newpath, suffix string, oldInfo os.FileInfo) error {
 
 	// createSibling exclusively creates the partial (no-follow), so a name
 	// raced in by another process is never truncated.
-	newFile, pathUsed, err := createSibling(newpath, suffix, oldInfo.Mode())
+	newFile, pathUsed, release, err := createSibling(newpath, suffix, oldInfo.Mode())
 	if err != nil {
 		return err
 	}
+
+	defer release() // after the rename (or error cleanup) below.
 
 	_, err = io.Copy(newFile, oldFile)
 	closeErr := newFile.Close()
@@ -879,10 +881,12 @@ func moveSymlink(oldpath, newpath, suffix string) error {
 	}
 
 	// Reserve an exclusive sibling name, then point the new link at it.
-	tmp, err := createSymlinkSibling(newpath, suffix, linkTail, target)
+	tmp, release, err := createSymlinkSibling(newpath, suffix, linkTail, target)
 	if err != nil {
 		return err
 	}
+
+	defer release() // after the rename (or error cleanup) below.
 
 	// rename-over replaces newpath atomically; if it was a symlink, the link is
 	// severed (never followed) rather than written through.
@@ -929,8 +933,7 @@ func renameOver(oldpath, newpath string) error {
 }
 
 // siblingStem is the shared basename for a copy sibling: the dest basename
-// truncated so the full sibling name fits NAME_MAX. scavengePartials and the
-// sibling allocators must agree on this prefix or leftovers are never cleaned.
+// truncated so the full sibling name fits NAME_MAX.
 func siblingStem(dest, suffix, tail string) (dir, stem, fullTail string) {
 	fullTail = copySiblingExt(suffix, tail)
 	dir = filepath.Dir(dest)
@@ -952,19 +955,60 @@ func siblingCandidate(dir, stem, fullTail string, attempt int) string {
 	return filepath.Join(dir, newStem+fullTail+postfix)
 }
 
-// createSibling exclusively creates the <dest>.<brand>_partial copy sibling
-// and returns the open, no-follow file and its path. On EEXIST it tries the
-// next numbered candidate, so a name raced in by another process is never
-// opened/truncated.
-func createSibling(dest, suffix string, mode os.FileMode) (*os.File, string, error) {
+// activeSiblings tracks in-flight copy sibling paths so a concurrent
+// scavengePartials skips them instead of unlinking a partial mid-copy.
+// Registering (in createSibling/createSymlinkSibling) and the scavenger's
+// check-and-remove both hold this lock, so no window exists between creating
+// a sibling and marking it active. This is what replaces a move-wide lock and
+// lets parallel extractors share a destination directory.
+//
+//nolint:gochecknoglobals // process-local registry shared by every extractor in it.
+var activeSiblings = struct {
+	sync.Mutex
+
+	set map[string]struct{}
+}{set: make(map[string]struct{})}
+
+// claimSibling marks path active; the returned release func marks it inactive
+// and must be called only after path has been renamed away or removed.
+func claimSibling(path string) func() {
+	return func() {
+		activeSiblings.Lock()
+		delete(activeSiblings.set, path)
+		activeSiblings.Unlock()
+	}
+}
+
+// removeInactiveSibling removes path unless another move is still copying it.
+func removeInactiveSibling(path string) {
+	activeSiblings.Lock()
+	if _, active := activeSiblings.set[path]; !active {
+		_ = os.Remove(path)
+	}
+	activeSiblings.Unlock()
+}
+
+// createSibling exclusively creates the <dest>.<brand>_partial copy sibling,
+// registers it as active, and returns the open, no-follow file, its path and
+// a release func. On EEXIST it tries the next numbered candidate, so a name
+// raced in by another process is never opened/truncated.
+func createSibling(dest, suffix string, mode os.FileMode) (*os.File, string, func(), error) {
 	dir, stem, fullTail := siblingStem(dest, suffix, partialTail)
+
+	// The create+register pair must be atomic with the scavenger's
+	// check-and-remove; creating is a metadata-only syscall, so holding the
+	// registry lock across the (few) attempts here is cheap.
+	activeSiblings.Lock()
+	defer activeSiblings.Unlock()
 
 	for attempt := range 1001 {
 		tryPath := siblingCandidate(dir, stem, fullTail, attempt)
 
 		file, err := openFileNoFollow(tryPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
 		if err == nil {
-			return file, tryPath, nil
+			activeSiblings.set[tryPath] = struct{}{}
+
+			return file, tryPath, claimSibling(tryPath), nil
 		}
 
 		// Name taken (or a symlink sits there); try the next candidate.
@@ -972,56 +1016,93 @@ func createSibling(dest, suffix string, mode os.FileMode) (*os.File, string, err
 			continue
 		}
 
-		return nil, "", err
+		return nil, "", nil, err
 	}
 
-	return nil, "", ErrNameTooLong
+	return nil, "", nil, ErrNameTooLong
 }
 
 // createSymlinkSibling creates a symlink named as a sibling of dest, pointing
-// at target, using the same collision-free numbered naming as createSibling.
-// os.Symlink is itself exclusive (fails if the name exists), so no Lstat race.
-func createSymlinkSibling(dest, suffix, tail, target string) (string, error) {
+// at target, using the same collision-free numbered naming and active
+// registration as createSibling. os.Symlink is itself exclusive (fails if the
+// name exists), so no Lstat race.
+func createSymlinkSibling(dest, suffix, tail, target string) (string, func(), error) {
 	dir, stem, fullTail := siblingStem(dest, suffix, tail)
+
+	activeSiblings.Lock()
+	defer activeSiblings.Unlock()
 
 	for attempt := range 1001 {
 		tryPath := siblingCandidate(dir, stem, fullTail, attempt)
 
 		err := os.Symlink(target, tryPath)
 		if err == nil {
-			return tryPath, nil
+			activeSiblings.set[tryPath] = struct{}{}
+
+			return tryPath, claimSibling(tryPath), nil
 		}
 
 		if errors.Is(err, os.ErrExist) {
 			continue
 		}
 
-		return "", fmt.Errorf("os.Symlink(): %w", err)
+		return "", nil, fmt.Errorf("os.Symlink(): %w", err)
 	}
 
-	return "", ErrNameTooLong
+	return "", nil, ErrNameTooLong
 }
 
-// scavengePartials removes leftover copy siblings named
-// <stem><tail> and <stem><tail>.<n>, using the same truncated-stem naming as
-// createSibling so near-NAME_MAX names are matched too.
-func scavengePartials(dest, suffix string) {
-	dir, stem, fullTail := siblingStem(dest, suffix, partialTail)
-	prefix := stem + fullTail
-
+// scavengePartials makes one pass over dir and removes leftover copy
+// siblings: files named <name><tail> or <name><tail>.<N>, where tail is the
+// branded partial or link tail (e.g. .xtractr_partial) and N is numeric.
+// The brand marks these as xtractr-created; lookalikes such as
+// movie.mkv.xtractr_partial.backup are left alone, and registered in-flight
+// siblings of parallel moves are skipped.
+func scavengePartials(dir, suffix string) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return
 	}
 
 	for _, entry := range entries {
-		name := entry.Name()
-		if name != prefix && !strings.HasPrefix(name, prefix+".") {
+		if isCopySibling(entry.Name(), suffix) {
+			removeInactiveSibling(filepath.Join(dir, entry.Name()))
+		}
+	}
+}
+
+// isCopySibling reports whether name is an allocator-generated copy sibling:
+// <stem><tail> or <stem><tail>.<N> with a non-empty stem and numeric N.
+// Matching anchors on the tail, so truncated-stem numbered names match too.
+func isCopySibling(name, suffix string) bool {
+	for _, tail := range []string{partialTail, linkTail} {
+		fullTail := copySiblingExt(suffix, tail)
+
+		if stem, ok := strings.CutSuffix(name, fullTail); ok && stem != "" {
+			return true
+		}
+
+		dot := strings.LastIndex(name, ".")
+		if dot <= 0 || !isDigits(name[dot+1:]) {
 			continue
 		}
 
-		_ = os.Remove(filepath.Join(dir, name))
+		if stem, ok := strings.CutSuffix(name[:dot], fullTail); ok && stem != "" {
+			return true
+		}
 	}
+
+	return false
+}
+
+func isDigits(str string) bool {
+	for _, r := range str {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+
+	return str != ""
 }
 
 // AllExcept can be used as an input to ExcludeSuffix in a Filter.
