@@ -31,6 +31,37 @@ func TestCopyMoveRegularFile(t *testing.T) {
 	assertNoPartials(t, dest)
 }
 
+// createSibling truncates the temp name to fit NAME_MAX, but the commit used
+// to target the original overlong dest and fail with ENAMETOOLONG. The previous
+// openExtractFile fallback truncated the final destination; restore that.
+func TestCopyMoveNameTooLongTruncatesDest(t *testing.T) {
+	t.Parallel()
+
+	fromDir := t.TempDir()
+	toDir := t.TempDir()
+	src := filepath.Join(fromDir, "payload.bin")
+	dest := filepath.Join(toDir, strings.Repeat("a", 300)+".bin")
+
+	_, err := os.Lstat(dest)
+	if !IsErrNameTooLong(err) {
+		t.Skipf("filesystem accepted a 300-byte filename (got %v)", err)
+	}
+
+	require.NoError(t, os.WriteFile(src, []byte("extracted"), 0o600))
+
+	short, err := TruncatePathForFS(dest)
+	require.NoError(t, err)
+
+	require.NoError(t, copyMove(src, dest, DefaultSuffix))
+
+	got, err := os.ReadFile(short)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("extracted"), got)
+	require.NoFileExists(t, src)
+	assertNoPartials(t, dest)
+	assert.LessOrEqual(t, len(filepath.Base(short)), nameMax)
+}
+
 func TestCopyMoveSymlinkDest(t *testing.T) {
 	t.Parallel()
 	skipWithoutSymlinks(t)

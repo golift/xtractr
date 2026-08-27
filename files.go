@@ -890,10 +890,25 @@ func moveSymlink(oldpath, newpath, suffix string) error {
 // cannot replace a directory (junction or directory symlink) with a file, so
 // when the rename fails and newpath is itself a symlink (never followed), the
 // link is unlinked and the rename retried. A real directory is never removed.
+//
+// When newpath exceeds NAME_MAX the rename fails with ENAMETOOLONG; retry
+// against TruncatePathForFS so the cross-device fallback matches the extract
+// writers (openExtractFile), which already truncate the final destination.
 func renameOver(oldpath, newpath string) error {
 	err := os.Rename(oldpath, newpath)
 	if err == nil {
 		return nil
+	}
+
+	if IsErrNameTooLong(err) {
+		short, truncErr := TruncatePathForFS(newpath)
+		if truncErr != nil {
+			return truncErr
+		}
+
+		if short != newpath {
+			return renameOver(oldpath, short)
+		}
 	}
 
 	info, lerr := os.Lstat(newpath)
