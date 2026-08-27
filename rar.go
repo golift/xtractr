@@ -26,13 +26,7 @@ func ExtractRAR(xFile *XFile) (size uint64, filesList, archiveList []string, err
 	}
 
 	for idx, password := range passwords {
-		// Copy the input so the retry keeps the logger, progress callbacks,
-		// SquashRoot and the rest of the caller-provided configuration.
-		attempt := *xFile
-		attempt.Password = password
-
-		size, files, archives, err := extractRAR(&attempt)
-		xFile.prog = attempt.prog
+		size, files, archives, err := tryRAR(xFile, password)
 
 		switch {
 		case err == nil:
@@ -47,11 +41,21 @@ func ExtractRAR(xFile *XFile) (size uint64, filesList, archiveList []string, err
 		}
 	}
 
-	// No password worked, try without a password.
-	attempt := *xFile
-	attempt.Password = ""
+	// No password worked, try without a password. tryRAR copies the attempt
+	// tracker back so a later signature fallback keeps the same budget.
+	return tryRAR(xFile, "")
+}
 
-	return extractRAR(&attempt)
+// tryRAR runs one extractRAR attempt on a copy (so Password can change) and
+// writes the attempt's progress tracker back onto xFile.
+func tryRAR(xFile *XFile, password string) (uint64, []string, []string, error) {
+	attempt := *xFile
+	attempt.Password = password
+
+	size, files, archives, err := extractRAR(&attempt)
+	xFile.prog = attempt.prog
+
+	return size, files, archives, err
 }
 
 // extractRAR extracts a rar file. to a destination. This wraps github.com/nwaples/rardecode.
