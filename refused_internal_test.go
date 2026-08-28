@@ -103,6 +103,7 @@ func TestRenameFilesReportsRefused(t *testing.T) {
 	require.Len(t, renamed.Refused, 1)
 	assert.Equal(t, src, renamed.Refused[0].Src)
 	assert.Equal(t, dest, renamed.Refused[0].Dest)
+	assert.Equal(t, toDir, renamed.Dest, "Dest is set when the move completes even if every file was refused")
 }
 
 func TestMoveFilesOmitsRefused(t *testing.T) {

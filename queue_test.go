@@ -214,8 +214,8 @@ func TestFinalDestMovedBack(t *testing.T) {
 	require.NoError(t, done.Error)
 	// Move-back writes into the search path itself; the archive-extension
 	// strip only applies to the kept temp folder's final name.
-	assert.Equal(t, dir, done.FinalDest)
-	assert.DirExists(t, done.FinalDest)
+	assert.Equal(t, map[string]string{dir: dir}, done.FinalDests)
+	assert.DirExists(t, done.FinalDests[dir])
 	assert.FileExists(t, filepath.Join(dir, "doc.go"))
 }
 
@@ -247,16 +247,100 @@ func TestFinalDestTempFolder(t *testing.T) {
 
 	done := waitFinalResponse(t, xFile.CBChannel)
 	require.NoError(t, done.Error)
-	require.NotEmpty(t, done.FinalDest, "FinalDest must name the moved output folder")
-	assert.NotContains(t, done.FinalDest, xtractr.DefaultSuffix)
-	assert.Equal(t, done.Output, done.FinalDest)
-	assert.DirExists(t, done.FinalDest)
+	require.NotEmpty(t, done.FinalDests, "FinalDests must name the moved output folder")
+	assert.Equal(t, map[string]string{dir: done.Output}, done.FinalDests)
+	assert.NotContains(t, done.FinalDests[dir], xtractr.DefaultSuffix)
+	assert.DirExists(t, done.FinalDests[dir])
+}
+
+// TestFinalDestsMultiFolder reports each per-folder destination when a search
+// path holds archives in more than one subfolder (a multi-key ArchiveList).
+func TestFinalDestsMultiFolder(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	testFileData, err := os.ReadFile(testFile)
+	require.NoError(t, err, "reading test data file failed")
+
+	subA := filepath.Join(dir, "cd1")
+	subB := filepath.Join(dir, "cd2")
+
+	require.NoError(t, os.MkdirAll(subA, 0o750))
+	require.NoError(t, os.MkdirAll(subB, 0o750))
+	require.NoError(t, makeFile(t, testFileData, filepath.Join(subA, "archive.rar")))
+	require.NoError(t, makeFile(t, testFileData, filepath.Join(subB, "archive.rar")))
+
+	queue := xtractr.NewQueue(&xtractr.Config{Logger: &testLogger{t: t}})
+	defer queue.Stop()
+
+	xFile := &xtractr.Xtract{
+		Name:       "FinalDestMulti",
+		Filter:     xtractr.Filter{Path: dir},
+		TempFolder: false,
+		DeleteOrig: false,
+		Password:   "some_password",
+		CBChannel:  make(chan *xtractr.Response),
+	}
+
+	_, err = queue.Extract(xFile)
+	require.NoError(t, err)
+
+	done := waitFinalResponse(t, xFile.CBChannel)
+	require.NoError(t, done.Error)
+	// Both per-folder destinations are reported, keyed by their input folder.
+	assert.Equal(t, map[string]string{subA: subA, subB: subB}, done.FinalDests)
+	assert.DirExists(t, done.FinalDests[subA])
+	assert.DirExists(t, done.FinalDests[subB])
+}
+
+// TestFinalDestsTempFolderMultiFolder keeps one destination for the renamed
+// output tree, keyed by the original search path (TempFolder=true does not
+// produce a per-subfolder entry).
+func TestFinalDestsTempFolderMultiFolder(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	testFileData, err := os.ReadFile(testFile)
+	require.NoError(t, err, "reading test data file failed")
+
+	subA := filepath.Join(dir, "cd1")
+	subB := filepath.Join(dir, "cd2")
+
+	require.NoError(t, os.MkdirAll(subA, 0o750))
+	require.NoError(t, os.MkdirAll(subB, 0o750))
+	require.NoError(t, makeFile(t, testFileData, filepath.Join(subA, "archive.rar")))
+	require.NoError(t, makeFile(t, testFileData, filepath.Join(subB, "archive.rar")))
+
+	queue := xtractr.NewQueue(&xtractr.Config{Logger: &testLogger{t: t}, TryNames: true})
+	defer queue.Stop()
+
+	xFile := &xtractr.Xtract{
+		Name:       "FinalDestTmpMulti",
+		Filter:     xtractr.Filter{Path: dir},
+		TempFolder: true,
+		DeleteOrig: false,
+		Password:   "some_password",
+		CBChannel:  make(chan *xtractr.Response),
+	}
+
+	_, err = queue.Extract(xFile)
+	require.NoError(t, err)
+
+	done := waitFinalResponse(t, xFile.CBChannel)
+	require.NoError(t, done.Error)
+	require.Len(t, done.FinalDests, 1)
+	assert.Equal(t, done.Output, done.FinalDests[dir])
+	assert.NotContains(t, done.FinalDests[dir], xtractr.DefaultSuffix)
+	assert.DirExists(t, done.FinalDests[dir])
 }
 
 func waitFinalResponse(t *testing.T, chResponse chan *xtractr.Response) *xtractr.Response {
 	t.Helper()
 
-	timeout := time.NewTimer(20 * time.Second)
+	// Multi-folder move-back sleeps fsSyncDelay (10s) per folder.
+	timeout := time.NewTimer(60 * time.Second)
 	defer timeout.Stop()
 
 	for {

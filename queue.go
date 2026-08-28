@@ -101,14 +101,16 @@ type Response struct {
 	// Src paths) if it is refused during the squash move and again during the
 	// final folder move; consumers should dedupe by Dest.
 	Refused []RefusedFile
-	// FinalDest is the directory extracted files were moved into. When
-	// TempFolder is false this is the (archive-extension-stripped) extraction
-	// path; when the temp folder is kept it is the final unsuffixed output
-	// folder. It is "" before the final move runs (in-progress callbacks) or
-	// when nothing was moved into place. Consumers use it to distinguish
-	// files that belong to the download from interrupted-extraction remnants
-	// without re-deriving the move destination.
-	FinalDest string
+	// FinalDests maps each input folder that produced a completed final move
+	// to the directory its files were moved into. The key is the per-folder
+	// X.Path (a key of Archives), so a caller can correlate each destination
+	// — and each Refused entry — back to the folder that produced it.
+	// A folder is omitted until its move completes without error (in-progress
+	// callbacks, and any move that returned an error). When TempFolder is true
+	// the whole output tree is renamed once, so this map has a single entry
+	// keyed by the original search Path. Dest is recorded even when NewFiles
+	// is empty (every destination already occupied, or a no-op squash).
+	FinalDests map[string]string
 	// SkipOnRecursion lists paths that extractors copied into output (e.g. CUE sheet)
 	// and must not be re-extracted when recursing. Other files (e.g. CUE from a RAR) are still extracted.
 	SkipOnRecursion []string
@@ -233,10 +235,7 @@ func (x *Xtractr) decompressFolders(resp *Response) error {
 		resp.NewFiles = append(resp.NewFiles, subResp.NewFiles...)
 		resp.Refused = append(resp.Refused, subResp.Refused...)
 		resp.Size += subResp.Size
-
-		if subResp.FinalDest != "" {
-			resp.FinalDest = subResp.FinalDest
-		}
+		mergeFinalDests(resp, subResp)
 
 		if err != nil {
 			return err
@@ -488,7 +487,7 @@ func (x *Xtractr) cleanupProcessedArchives(resp *Response) error {
 		renamed, err = x.RenameFiles(resp.Output, resp.X.Path, false)
 		resp.NewFiles = renamed.NewFiles
 		resp.Refused = append(resp.Refused, renamed.Refused...)
-		resp.FinalDest = renamed.Dest
+		recordFinalDest(resp, resp.X.Path, renamed.Dest)
 	}
 
 	if err != nil {
@@ -590,7 +589,7 @@ func (x *Xtractr) cleanTempFolder(resp *Response) {
 		x.config.Debugf("Renamed Temp Folder: %v -> %v", resp.Output, newName)
 		resp.Output = newName
 		resp.NewFiles = renamed.NewFiles
-		resp.FinalDest = renamed.Dest
+		recordFinalDest(resp, resp.X.Path, renamed.Dest)
 	}
 
 	files, err := x.GetFileList(resp.X.Path)
@@ -602,5 +601,29 @@ func (x *Xtractr) cleanTempFolder(resp *Response) {
 	if len(files) == 0 {
 		// If the original path is empty, delete it.
 		x.DeleteFiles(resp.X.Path)
+	}
+}
+
+// recordFinalDest records a completed move. Empty dir or dest is ignored so a
+// failed move (Renamed.Dest == "") never occupies a map slot.
+func recordFinalDest(resp *Response, dir, dest string) {
+	if resp == nil || dir == "" || dest == "" {
+		return
+	}
+
+	if resp.FinalDests == nil {
+		resp.FinalDests = make(map[string]string)
+	}
+
+	resp.FinalDests[dir] = dest
+}
+
+func mergeFinalDests(dst, src *Response) {
+	if dst == nil || src == nil {
+		return
+	}
+
+	for dir, dest := range src.FinalDests {
+		recordFinalDest(dst, dir, dest)
 	}
 }

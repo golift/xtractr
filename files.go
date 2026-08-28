@@ -528,7 +528,9 @@ type Renamed struct {
 	// Refused lists files that were not moved because the destination was occupied.
 	Refused []RefusedFile
 	// Dest is the directory files were moved into (toPath, after any archive
-	// extension strip). It is "" when no files were moved.
+	// extension strip). It is "" when the move did not complete (err != nil).
+	// It is set whenever the move completes without error, even when NewFiles
+	// is empty (e.g. a squash where files were already in place).
 	Dest string
 }
 

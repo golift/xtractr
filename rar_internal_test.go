@@ -1,6 +1,7 @@
 package xtractr
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -12,6 +13,13 @@ import (
 // ExtractFile's signature retry resumed from the pre-final counters.
 func TestTryRARCopiesProgress(t *testing.T) {
 	t.Parallel()
+
+	tmp := t.TempDir()
+
+	err := os.Symlink("target", filepath.Join(tmp, "symlink-probe"))
+	if err != nil {
+		t.Skipf("symlinks unavailable on this platform: %v", err)
+	}
 
 	xFile := &XFile{
 		FilePath:  filepath.Join("test_data", "symlink.rar"),
