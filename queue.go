@@ -68,23 +68,31 @@ type Xtract struct {
 // call by checking Response.Done. false = started, true = finished. When done=false
 // the only other meaningful data provided is the re.Archives, re.Output and re.Queue.
 type Response struct {
-	// Extract Started (false) or Finished (true).
+	// Done is false on the start notification and true on the single finished
+	// callback. Only the finished callback carries the full result below.
 	Done bool
-	// Size of data written.
+	// Size is the total uncompressed bytes written to disk across all archives,
+	// including Extras. Only set when Done is true.
 	Size uint64
-	// Temporary output folder.
+	// Output is the temporary folder files were extracted into (Path+Suffix,
+	// rebased onto ExtractTo when set). When TempFolder is true it is updated
+	// to the final renamed folder; when TempFolder is false its contents are
+	// moved out and the folder removed, so it is empty by the time Done is true.
 	Output string
-	// Items still in queue.
+	// Queued is how many extractions are still waiting in the queue at the
+	// moment this response is sent. Useful for progress display.
 	Queued int
-	// When this extract began.
+	// Started is when extraction of this item began.
 	Started time.Time
-	// Elapsed extraction duration. ie. How long it took.
+	// Elapsed is how long the extraction took. Only set when Done is true.
 	Elapsed time.Duration
-	// Extra archives extracted from within an archive.
+	// Extras are archives found inside an extracted archive and also extracted
+	// (skipped when DisableRecursion is true).
 	Extras ArchiveList
-	// Initial archives found and extracted.
+	// Archives are the archives found in the search path and extracted.
 	Archives ArchiveList
-	// Files written to final path.
+	// NewFiles lists the final paths of files that were moved into place.
+	// Only set when Done is true.
 	NewFiles []string
 	// Refused lists files that were extracted but not moved into the final
 	// path because the destination was already occupied. The occupying file
@@ -93,6 +101,14 @@ type Response struct {
 	// Src paths) if it is refused during the squash move and again during the
 	// final folder move; consumers should dedupe by Dest.
 	Refused []RefusedFile
+	// FinalDest is the directory extracted files were moved into. When
+	// TempFolder is false this is the (archive-extension-stripped) extraction
+	// path; when the temp folder is kept it is the final unsuffixed output
+	// folder. It is "" before the final move runs (in-progress callbacks) or
+	// when nothing was moved into place. Consumers use it to distinguish
+	// files that belong to the download from interrupted-extraction remnants
+	// without re-deriving the move destination.
+	FinalDest string
 	// SkipOnRecursion lists paths that extractors copied into output (e.g. CUE sheet)
 	// and must not be re-extracted when recursing. Other files (e.g. CUE from a RAR) are still extracted.
 	SkipOnRecursion []string
@@ -217,6 +233,10 @@ func (x *Xtractr) decompressFolders(resp *Response) error {
 		resp.NewFiles = append(resp.NewFiles, subResp.NewFiles...)
 		resp.Refused = append(resp.Refused, subResp.Refused...)
 		resp.Size += subResp.Size
+
+		if subResp.FinalDest != "" {
+			resp.FinalDest = subResp.FinalDest
+		}
 
 		if err != nil {
 			return err
@@ -468,6 +488,7 @@ func (x *Xtractr) cleanupProcessedArchives(resp *Response) error {
 		renamed, err = x.RenameFiles(resp.Output, resp.X.Path, false)
 		resp.NewFiles = renamed.NewFiles
 		resp.Refused = append(resp.Refused, renamed.Refused...)
+		resp.FinalDest = renamed.Dest
 	}
 
 	if err != nil {
@@ -569,6 +590,7 @@ func (x *Xtractr) cleanTempFolder(resp *Response) {
 		x.config.Debugf("Renamed Temp Folder: %v -> %v", resp.Output, newName)
 		resp.Output = newName
 		resp.NewFiles = renamed.NewFiles
+		resp.FinalDest = renamed.Dest
 	}
 
 	files, err := x.GetFileList(resp.X.Path)

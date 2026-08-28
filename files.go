@@ -527,6 +527,9 @@ type Renamed struct {
 	NewFiles []string
 	// Refused lists files that were not moved because the destination was occupied.
 	Refused []RefusedFile
+	// Dest is the directory files were moved into (toPath, after any archive
+	// extension strip). It is "" when no files were moved.
+	Dest string
 }
 
 // RefusedFile describes an extracted file that was not moved into place
@@ -671,7 +674,16 @@ func moveFiles( //nolint:cyclop,funlen
 	// Since this is the last step, we tried to rename all the files, bubble the
 	// os.Rename error up, so it gets flagged as failed. It may have worked, but
 	// it should get attention.
-	return Renamed{NewFiles: newFiles, Refused: refused}, keepErr
+	//
+	// Dest is set whenever the move step completed (keepErr == nil): the
+	// destination is known even if NewFiles is empty (e.g. the lone top-level
+	// file was already in place, so nothing needed renaming).
+	dest := ""
+	if keepErr == nil {
+		dest = toPath
+	}
+
+	return Renamed{NewFiles: newFiles, Refused: refused, Dest: dest}, keepErr
 }
 
 // DeleteFiles obliterates things and logs. Use with caution.

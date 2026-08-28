@@ -184,6 +184,95 @@ loop:
 	assert.Equal(t, junk, string(got))
 }
 
+// TestFinalDestMovedBack reports the move destination when the temp folder is
+// moved back into the download path (TempFolder=false).
+func TestFinalDestMovedBack(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	testFileData, err := os.ReadFile(testFile)
+	require.NoError(t, err, "reading test data file failed")
+	require.NoError(t, makeFile(t, testFileData, filepath.Join(dir, "archive.rar")))
+
+	queue := xtractr.NewQueue(&xtractr.Config{Logger: &testLogger{t: t}})
+	defer queue.Stop()
+
+	xFile := &xtractr.Xtract{
+		Name:       "FinalDest",
+		Filter:     xtractr.Filter{Path: dir},
+		TempFolder: false,
+		DeleteOrig: false,
+		Password:   "some_password",
+		CBChannel:  make(chan *xtractr.Response),
+	}
+
+	_, err = queue.Extract(xFile)
+	require.NoError(t, err)
+
+	done := waitFinalResponse(t, xFile.CBChannel)
+	require.NoError(t, done.Error)
+	// Move-back writes into the search path itself; the archive-extension
+	// strip only applies to the kept temp folder's final name.
+	assert.Equal(t, dir, done.FinalDest)
+	assert.DirExists(t, done.FinalDest)
+	assert.FileExists(t, filepath.Join(dir, "doc.go"))
+}
+
+// TestFinalDestTempFolder reports the final unsuffixed output folder when the
+// temp folder is kept (TempFolder=true).
+func TestFinalDestTempFolder(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	testFileData, err := os.ReadFile(testFile)
+	require.NoError(t, err, "reading test data file failed")
+	require.NoError(t, makeFile(t, testFileData, filepath.Join(dir, "archive.rar")))
+
+	queue := xtractr.NewQueue(&xtractr.Config{Logger: &testLogger{t: t}, TryNames: true})
+	defer queue.Stop()
+
+	xFile := &xtractr.Xtract{
+		Name:       "FinalDestTmp",
+		Filter:     xtractr.Filter{Path: dir},
+		TempFolder: true,
+		DeleteOrig: false,
+		Password:   "some_password",
+		CBChannel:  make(chan *xtractr.Response),
+	}
+
+	_, err = queue.Extract(xFile)
+	require.NoError(t, err)
+
+	done := waitFinalResponse(t, xFile.CBChannel)
+	require.NoError(t, done.Error)
+	require.NotEmpty(t, done.FinalDest, "FinalDest must name the moved output folder")
+	assert.NotContains(t, done.FinalDest, xtractr.DefaultSuffix)
+	assert.Equal(t, done.Output, done.FinalDest)
+	assert.DirExists(t, done.FinalDest)
+}
+
+func waitFinalResponse(t *testing.T, chResponse chan *xtractr.Response) *xtractr.Response {
+	t.Helper()
+
+	timeout := time.NewTimer(20 * time.Second)
+	defer timeout.Stop()
+
+	for {
+		select {
+		case resp, ok := <-chResponse:
+			require.True(t, ok, "callback channel closed before extraction completed")
+
+			if resp.Done {
+				return resp
+			}
+		case <-timeout.C:
+			t.Fatal("timed out waiting for extraction to complete")
+		}
+	}
+}
+
 // testSetupTestDir creates a temp directory with 4 copies of a rar archive in it.
 func testSetupTestDir(t *testing.T) string {
 	t.Helper()
