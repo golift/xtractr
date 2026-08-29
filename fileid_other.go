@@ -13,5 +13,10 @@ func identifyFile(path string) (string, bool) {
 		resolved = filepath.Clean(path)
 	}
 
-	return resolved, true
+	abs, err := filepath.Abs(resolved)
+	if err != nil {
+		return "", false
+	}
+
+	return abs, true
 }
