@@ -2,6 +2,7 @@ package xtractr_test
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -117,6 +118,107 @@ func TestFindCompressedFiles(t *testing.T) {
 	}
 
 	assert.Equal(t, 8, total, "When skipping the four ISOs, we have 8 archives remaining.")
+}
+
+func TestFindCompressedFilesSkipsSymlinks(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	realZip := filepath.Join(base, "real.zip")
+	require.NoError(t, os.WriteFile(realZip, []byte("pk"), 0o600))
+
+	err := os.Symlink(realZip, filepath.Join(base, "alias.zip"))
+	if err != nil {
+		t.Skipf("symlinks unavailable on this platform: %v", err)
+	}
+
+	require.NoError(t, os.Mkdir(filepath.Join(base, "subdir"), 0o700))
+	err = os.Symlink(base, filepath.Join(base, "subdir", "loop.zip"))
+	require.NoError(t, err)
+
+	paths := xtractr.FindCompressedFiles(xtractr.Filter{Path: base})
+	require.Equal(t, 1, paths.Count())
+	require.Equal(t, realZip, paths.List()[0])
+
+	allowed := xtractr.FindCompressedFiles(xtractr.Filter{Path: base, AllowSymlinks: true})
+	assert.Equal(t, 2, allowed.Count(), "file symlink is included; dir symlink named .zip is not")
+	assert.Contains(t, allowed.List(), realZip)
+	assert.Contains(t, allowed.List(), filepath.Join(base, "alias.zip"))
+}
+
+func TestFindCompressedFilesMaxArchives(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	for idx := range 5 {
+		require.NoError(t, os.WriteFile(filepath.Join(base, fmt.Sprintf("f%d.zip", idx)), []byte("pk"), 0o600))
+	}
+
+	nested := filepath.Join(base, "nested")
+	require.NoError(t, os.Mkdir(nested, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(nested, "deep.zip"), []byte("pk"), 0o600))
+
+	paths := xtractr.FindCompressedFiles(xtractr.Filter{Path: base, MaxArchives: 3})
+	assert.Equal(t, 3, paths.Count())
+}
+
+func TestFindCompressedFilesSkipsSymlinkPath(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	src := filepath.Join(dir, "payload.zip")
+	require.NoError(t, os.WriteFile(src, []byte("pk"), 0o600))
+
+	link := filepath.Join(dir, "payload-link.zip")
+
+	err := os.Symlink(src, link)
+	if err != nil {
+		t.Skipf("symlinks unavailable on this platform: %v", err)
+	}
+
+	paths := xtractr.FindCompressedFiles(xtractr.Filter{Path: link})
+	assert.Empty(t, paths, "a symlink search path must not be returned as an archive")
+
+	allowed := xtractr.FindCompressedFiles(xtractr.Filter{Path: link, AllowSymlinks: true})
+	require.Equal(t, 1, allowed.Count())
+	assert.Equal(t, link, allowed.List()[0])
+}
+
+func TestExtractFileRefusesSymlink(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	src := filepath.Join(dir, "payload.zip")
+	require.NoError(t, os.WriteFile(src, []byte("pk"), 0o600))
+
+	link := filepath.Join(dir, "payload-link.zip")
+
+	err := os.Symlink(src, link)
+	if err != nil {
+		t.Skipf("symlinks unavailable on this platform: %v", err)
+	}
+
+	_, _, _, err = xtractr.ExtractFile(&xtractr.XFile{ //nolint:dogsled // only the error matters here.
+		FilePath:  link,
+		OutputDir: filepath.Join(dir, "out"),
+		FileMode:  0o600,
+		DirMode:   0o700,
+	})
+	require.ErrorIs(t, err, xtractr.ErrArchiveSymlink)
+
+	var extErr *xtractr.ExtractError
+	require.ErrorAs(t, err, &extErr)
+	assert.Equal(t, link, extErr.FilePath)
+
+	_, _, _, err = xtractr.ExtractFile(&xtractr.XFile{ //nolint:dogsled // only the error matters here.
+		FilePath:      link,
+		OutputDir:     filepath.Join(dir, "allowed"),
+		FileMode:      0o600,
+		DirMode:       0o700,
+		AllowSymlinks: true,
+	})
+	require.Error(t, err)
+	require.NotErrorIs(t, err, xtractr.ErrArchiveSymlink)
 }
 
 func TestFindCompressedFilesSkipsDotFiles(t *testing.T) {

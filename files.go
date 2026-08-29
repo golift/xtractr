@@ -175,6 +175,8 @@ type XFile struct {
 	MaxFiles int
 	// MaxRatio is the maximum bytesWritten / archiveFileSize. 0 means unlimited.
 	MaxRatio float64
+	// AllowSymlinks allows FilePath to be a symbolic link to an archive.
+	AllowSymlinks bool
 	// Progress is called periodically during file extraction.
 	// Contains info about the progress of the extraction.
 	// This is not called if an Updates channel is also provided.
@@ -209,6 +211,13 @@ type Filter struct {
 	MaxDepth int
 	// Only find archives this many child-folders deep. 0 and 1 are equal.
 	MinDepth int
+	// MaxArchives stops the walk after this many archives are found. 0 is unlimited.
+	MaxArchives int
+	// AllowSymlinks includes symlink-named archive files in the listing.
+	// Default false. Symlink directories found during the walk are never
+	// followed; a symlink passed as Path is (operator-chosen search root).
+	// The extras/recursion pass always ignores this and never lists archive-member links.
+	AllowSymlinks bool
 }
 
 // Exclude represents an exclusion list.
@@ -320,6 +329,10 @@ func findCompressedFiles(path string, filter *Filter, depth int) ArchiveList {
 	}
 
 	if !info.IsDir() && IsArchiveFile(path) {
+		if skipSymlinkArchivePath(filter, path) {
+			return nil
+		}
+
 		return ArchiveList{path: {path}} // passed in an archive file; send it back out.
 	}
 
@@ -388,7 +401,14 @@ func getCompressedFiles(path string, filter *Filter, fileList []os.FileInfo, dep
 	files := ArchiveList{}
 
 	for _, file := range fileList {
+		if archivesAtCap(files, filter) {
+			return files
+		}
+
 		switch lowerName := strings.ToLower(file.Name()); {
+		case file.Mode()&os.ModeSymlink != 0 &&
+			(!filter.AllowSymlinks || symlinkTargetsDir(path, file.Name())):
+			continue // skip symlink archives unless allowed; never walk symlink dirs.
 		case !file.IsDir() &&
 			(filter.ExcludeSuffix.Has(lowerName) || depth < filter.MinDepth):
 			continue // file suffix is excluded or we are not deep enough.
@@ -412,6 +432,10 @@ func getCompressedFiles(path string, filter *Filter, fileList []os.FileInfo, dep
 	}
 
 	return files
+}
+
+func archivesAtCap(files ArchiveList, filter *Filter) bool {
+	return filter != nil && filter.MaxArchives > 0 && files.Count() >= filter.MaxArchives
 }
 
 // normalizeVolumes maps the volume list reported by an archive decoder into
@@ -463,6 +487,11 @@ func (x *XFile) Extract() (size uint64, filesList, archiveList []string, err err
 // ExtractFile calls the correct procedure for the type of file being extracted.
 // Returns size of extracted data, list of extracted files, list of archives processed, and/or error.
 func ExtractFile(xFile *XFile) (size uint64, filesList, archiveList []string, err error) {
+	err = refuseSymlinkArchiveUnlessAllowed(xFile)
+	if err != nil {
+		return 0, nil, nil, wrapSymlinkArchiveError(xFile, err)
+	}
+
 	sName := strings.ToLower(xFile.FilePath)
 	xFile.bindMoveFiles()
 
@@ -1273,6 +1302,54 @@ func (x *XFile) safeFileMode(current os.FileMode) os.FileMode {
 	const minimum = 0o400 // ensure owner has read access to the file.
 
 	return current | minimum
+}
+
+func skipSymlinkArchivePath(filter *Filter, path string) bool {
+	if filter != nil && filter.AllowSymlinks {
+		return false
+	}
+
+	linkInfo, linkErr := os.Lstat(path)
+
+	return linkErr != nil || linkInfo.Mode()&os.ModeSymlink != 0
+}
+
+func wrapSymlinkArchiveError(xFile *XFile, err error) error {
+	if xFile == nil {
+		return err
+	}
+
+	return NewExtractError(err, xFile.FilePath, xFile.OutputDir, 0, "")
+}
+
+func refuseSymlinkArchiveUnlessAllowed(xFile *XFile) error {
+	if xFile == nil || xFile.AllowSymlinks {
+		return nil
+	}
+
+	return refuseSymlinkArchive(xFile.FilePath)
+}
+
+func symlinkTargetsDir(dir, name string) bool {
+	info, err := os.Stat(filepath.Join(dir, name))
+	return err != nil || info.IsDir()
+}
+
+func refuseSymlinkArchive(path string) error {
+	if path == "" {
+		return nil
+	}
+
+	info, err := os.Lstat(path)
+	if err != nil {
+		return fmt.Errorf("lstat archive: %w", err)
+	}
+
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("%w: %s", ErrArchiveSymlink, path)
+	}
+
+	return nil
 }
 
 func openStatFile(path string) (*os.File, os.FileInfo, error) {

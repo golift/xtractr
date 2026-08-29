@@ -61,6 +61,15 @@ type Xtract struct {
 	// MaxRatio is the maximum bytesWritten / archiveFileSize per archive.
 	// 0 means unlimited; when 0, Config.MaxRatio is used.
 	MaxRatio float64
+	// MaxNested is the maximum archives extracted from one source folder's
+	// output (one extras pass). 0 means unlimited; when 0, Config.MaxNested
+	// is used. Negative also means unlimited. Not a job-wide total across
+	// decompressFolders, and not a second-round nesting budget.
+	MaxNested int
+	// ExtrasMaxDepth is how deep the extras pass walks extract output.
+	// 0 means unlimited; when 0, Config.ExtrasMaxDepth is used. Negative
+	// also means unlimited. Distinct from Filter.MaxDepth (initial search).
+	ExtrasMaxDepth int
 }
 
 // Response is sent to the call-back function. The first CBFunction call is just
@@ -210,6 +219,7 @@ func (x *Xtractr) decompressFolders(resp *Response) error {
 				Filter: Filter{
 					Path:          subDir,
 					ExcludeSuffix: resp.X.ExcludeSuffix,
+					AllowSymlinks: resp.X.AllowSymlinks,
 				},
 				Name:             resp.X.Name,
 				Password:         resp.X.Password,
@@ -225,6 +235,8 @@ func (x *Xtractr) decompressFolders(resp *Response) error {
 				MaxBytes:         resp.X.MaxBytes,
 				MaxFiles:         resp.X.MaxFiles,
 				MaxRatio:         resp.X.MaxRatio,
+				MaxNested:        resp.X.MaxNested,
+				ExtrasMaxDepth:   resp.X.ExtrasMaxDepth,
 			},
 			Started:  resp.Started,
 			Output:   output,
@@ -346,23 +358,29 @@ func (x *Xtractr) decompressFiles(resp *Response) error {
 	}
 
 	// Now do it again with the output folder.
-	resp.Extras = FindCompressedFiles(Filter{
-		Path:          resp.Output,
-		ExcludeSuffix: resp.X.ExcludeSuffix,
-	})
+	resp.Extras = FindCompressedFiles(x.extrasFilter(resp))
 	// Do not try to extract files that an extractor copied into output (e.g. CUE sheet);
 	// re-extracting the copied CUE would fail and delete the output directory.
 	// Other archives in the output (e.g. CUE+FLAC from a RAR) are still extracted.
 	resp.Extras = excludePathsFromArchiveList(resp.Extras, resp.SkipOnRecursion)
+
+	err = x.checkExtrasLimit(resp)
+	if err != nil {
+		x.DeleteFiles(resp.Output)
+		return err
+	}
+
 	nre := &Response{
 		X: &Xtract{
-			Password:  resp.X.Password,
-			Passwords: resp.X.Passwords,
-			Progress:  resp.X.Progress,
-			Updates:   resp.X.Updates,
-			MaxBytes:  resp.X.MaxBytes,
-			MaxFiles:  resp.X.MaxFiles,
-			MaxRatio:  resp.X.MaxRatio,
+			Password:       resp.X.Password,
+			Passwords:      resp.X.Passwords,
+			Progress:       resp.X.Progress,
+			Updates:        resp.X.Updates,
+			MaxBytes:       resp.X.MaxBytes,
+			MaxFiles:       resp.X.MaxFiles,
+			MaxRatio:       resp.X.MaxRatio,
+			MaxNested:      resp.X.MaxNested,
+			ExtrasMaxDepth: resp.X.ExtrasMaxDepth,
 		},
 		Started:  resp.Started,
 		Output:   resp.Output,
@@ -425,20 +443,21 @@ func (x *Xtractr) processArchive(filename string, resp *Response) (uint64, []str
 	x.config.Debugf("Extracting File: %v to %v", filename, resp.Output)
 
 	xFile := &XFile{
-		FilePath:    filename,
-		OutputDir:   resp.Output,
-		FileMode:    x.config.FileMode,
-		DirMode:     x.config.DirMode,
-		Suffix:      x.config.Suffix,
-		Passwords:   resp.X.Passwords,
-		Password:    resp.X.Password,
-		FileWorkers: x.config.FileWorkers,
-		MaxBytes:    pick(resp.X.MaxBytes, x.config.MaxBytes),
-		MaxFiles:    pick(resp.X.MaxFiles, x.config.MaxFiles),
-		MaxRatio:    pick(resp.X.MaxRatio, x.config.MaxRatio),
-		log:         x.config.Logger,
-		Updates:     resp.X.Updates,
-		Progress:    resp.X.Progress,
+		FilePath:      filename,
+		OutputDir:     resp.Output,
+		FileMode:      x.config.FileMode,
+		DirMode:       x.config.DirMode,
+		Suffix:        x.config.Suffix,
+		Passwords:     resp.X.Passwords,
+		Password:      resp.X.Password,
+		FileWorkers:   x.config.FileWorkers,
+		MaxBytes:      pick(resp.X.MaxBytes, x.config.MaxBytes),
+		MaxFiles:      pick(resp.X.MaxFiles, x.config.MaxFiles),
+		MaxRatio:      pick(resp.X.MaxRatio, x.config.MaxRatio),
+		AllowSymlinks: resp.X.AllowSymlinks,
+		log:           x.config.Logger,
+		Updates:       resp.X.Updates,
+		Progress:      resp.X.Progress,
 	}
 
 	bytes, files, archives, err := ExtractFile(xFile)
@@ -458,13 +477,42 @@ func (x *Xtractr) processArchive(filename string, resp *Response) (uint64, []str
 	return bytes, files, archives, nil
 }
 
-func pick[T uint64 | int | float64](job, cfg T) T { //nolint:ireturn // numeric union, not an interface.
+func pick[T uint64 | int | float64](vals ...T) T { //nolint:ireturn // numeric union, not an interface.
 	var zero T
-	if job != zero {
-		return job
+
+	for _, val := range vals {
+		if val != zero {
+			return val
+		}
 	}
 
-	return cfg
+	return zero
+}
+
+func (x *Xtractr) extrasFilter(resp *Response) Filter {
+	filter := Filter{
+		Path:          resp.Output,
+		ExcludeSuffix: resp.X.ExcludeSuffix,
+		MaxDepth:      pick(resp.X.ExtrasMaxDepth, x.config.ExtrasMaxDepth),
+	}
+
+	if limit := pick(resp.X.MaxNested, x.config.MaxNested); limit > 0 {
+		filter.MaxArchives = limit + 1
+	}
+
+	return filter
+}
+
+// checkExtrasLimit applies MaxNested to this extras list only (one source
+// folder, one extras pass). Archives left unextracted inside those extras
+// are not counted.
+func (x *Xtractr) checkExtrasLimit(resp *Response) error {
+	limit := pick(resp.X.MaxNested, x.config.MaxNested)
+	if limit <= 0 || resp.Extras.Count() <= limit {
+		return nil
+	}
+
+	return fmt.Errorf("%w: %d archives (max %d)", ErrMaxNested, resp.Extras.Count(), limit)
 }
 
 func (x *Xtractr) cleanupProcessedArchives(resp *Response) error {

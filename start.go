@@ -51,6 +51,13 @@ type Config struct {
 	// MaxRatio is the default maximum bytesWritten / archiveFileSize per archive.
 	// 0 means unlimited. Copied onto each XFile when Xtract.MaxRatio is 0.
 	MaxRatio float64
+	// MaxNested is the default maximum archives extracted from one source folder's
+	// extras pass. 0 or negative means unlimited. Used when Xtract.MaxNested is 0.
+	MaxNested int
+	// ExtrasMaxDepth is the default extras-pass walk depth. 0 means unlimited.
+	// Used when Xtract.ExtrasMaxDepth is 0. Negative also means unlimited.
+	// 0 is the search root; 2 is two subfolders.
+	ExtrasMaxDepth int
 }
 
 // Logger allows this library to write logs.
