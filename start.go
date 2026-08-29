@@ -60,6 +60,9 @@ type Config struct {
 	// MaxNested is the default maximum archives extracted from an archive's
 	// output (the extras pass). 0 uses DefaultMaxNested. Negative means unlimited.
 	MaxNested int
+	// ExtrasMaxDepth is the default extras-pass walk depth. 0 uses
+	// DefaultExtrasMaxDepth. Negative means unlimited.
+	ExtrasMaxDepth int
 }
 
 // Logger allows this library to write logs.

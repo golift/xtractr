@@ -65,6 +65,10 @@ type Xtract struct {
 	// (the extras pass). 0 uses Config.MaxNested, then DefaultMaxNested.
 	// Negative means unlimited.
 	MaxNested int
+	// ExtrasMaxDepth is how deep the extras pass walks extract output.
+	// 0 uses Config.ExtrasMaxDepth, then DefaultExtrasMaxDepth.
+	// Negative means unlimited. Distinct from Filter.MaxDepth (initial search).
+	ExtrasMaxDepth int
 }
 
 // Response is sent to the call-back function. The first CBFunction call is just
@@ -230,6 +234,7 @@ func (x *Xtractr) decompressFolders(resp *Response) error {
 				MaxFiles:         resp.X.MaxFiles,
 				MaxRatio:         resp.X.MaxRatio,
 				MaxNested:        resp.X.MaxNested,
+				ExtrasMaxDepth:   resp.X.ExtrasMaxDepth,
 			},
 			Started:  resp.Started,
 			Output:   output,
@@ -365,14 +370,15 @@ func (x *Xtractr) decompressFiles(resp *Response) error {
 
 	nre := &Response{
 		X: &Xtract{
-			Password:  resp.X.Password,
-			Passwords: resp.X.Passwords,
-			Progress:  resp.X.Progress,
-			Updates:   resp.X.Updates,
-			MaxBytes:  resp.X.MaxBytes,
-			MaxFiles:  resp.X.MaxFiles,
-			MaxRatio:  resp.X.MaxRatio,
-			MaxNested: resp.X.MaxNested,
+			Password:       resp.X.Password,
+			Passwords:      resp.X.Passwords,
+			Progress:       resp.X.Progress,
+			Updates:        resp.X.Updates,
+			MaxBytes:       resp.X.MaxBytes,
+			MaxFiles:       resp.X.MaxFiles,
+			MaxRatio:       resp.X.MaxRatio,
+			MaxNested:      resp.X.MaxNested,
+			ExtrasMaxDepth: resp.X.ExtrasMaxDepth,
 		},
 		Started:  resp.Started,
 		Output:   resp.Output,
@@ -477,9 +483,9 @@ func pick[T uint64 | int | float64](job, cfg T) T { //nolint:ireturn // numeric 
 	return cfg
 }
 
-// extrasCap is the extras-pass archive count limit. 0 from both job and config
-// uses DefaultMaxNested. A negative job or config value means unlimited (return 0).
-func extrasCap(job, cfg int) int {
+// extrasLimit picks a job value, then config, then fallback. 0 from both job
+// and config uses fallback. A negative job or config value means unlimited (0).
+func extrasLimit(job, cfg, fallback int) int {
 	if job < 0 || (job == 0 && cfg < 0) {
 		return 0
 	}
@@ -492,14 +498,22 @@ func extrasCap(job, cfg int) int {
 		return cfg
 	}
 
-	return DefaultMaxNested
+	return fallback
+}
+
+func extrasCap(job, cfg int) int {
+	return extrasLimit(job, cfg, DefaultMaxNested)
+}
+
+func extrasDepth(job, cfg int) int {
+	return extrasLimit(job, cfg, DefaultExtrasMaxDepth)
 }
 
 func (x *Xtractr) extrasFilter(resp *Response) Filter {
 	filter := Filter{
 		Path:          resp.Output,
 		ExcludeSuffix: resp.X.ExcludeSuffix,
-		MaxDepth:      DefaultExtrasMaxDepth,
+		MaxDepth:      extrasDepth(resp.X.ExtrasMaxDepth, x.config.ExtrasMaxDepth),
 	}
 
 	limit := extrasCap(resp.X.MaxNested, x.config.MaxNested)

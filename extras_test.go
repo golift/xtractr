@@ -31,7 +31,7 @@ func TestQueueSkipsZipSymlinkExtras(t *testing.T) {
 		"c.zip": "payload.zip",
 	})
 
-	resp := extractQueueJob(t, dir, 0)
+	resp := extractQueueJob(t, dir, 0, 0)
 	require.NoError(t, resp.Error)
 	require.Equal(t, 1, resp.Extras.Count(), "symlink-named extras must not be queued")
 
@@ -51,7 +51,7 @@ func TestQueueMaxNestedRejectsTooManyExtras(t *testing.T) {
 		"three.zip": tinyZipBytes(t, "three.txt", "3"),
 	}, nil)
 
-	resp := extractQueueJob(t, dir, 2)
+	resp := extractQueueJob(t, dir, 2, 0)
 	require.ErrorIs(t, resp.Error, xtractr.ErrMaxNested)
 }
 
@@ -65,7 +65,7 @@ func TestQueueMaxNestedAllowsAtLimit(t *testing.T) {
 		"two.zip": tinyZipBytes(t, "two.txt", "2"),
 	}, nil)
 
-	resp := extractQueueJob(t, dir, 2)
+	resp := extractQueueJob(t, dir, 2, 0)
 	require.NoError(t, resp.Error)
 	require.Equal(t, 2, resp.Extras.Count())
 
@@ -85,7 +85,7 @@ func TestQueueExtrasMaxDepthSkipsDeepArchives(t *testing.T) {
 		"shallow/sibling.zip": tinyZipBytes(t, "near.txt", "ok"),
 	}, nil)
 
-	resp := extractQueueJob(t, dir, 64)
+	resp := extractQueueJob(t, dir, 64, 0)
 	require.NoError(t, resp.Error)
 
 	out := firstExisting(t, resp.Output, dir+xtractr.DefaultSuffix)
@@ -95,7 +95,26 @@ func TestQueueExtrasMaxDepthSkipsDeepArchives(t *testing.T) {
 	require.FileExists(t, filepath.Join(out, "near.txt"))
 }
 
-func extractQueueJob(t *testing.T, dir string, maxNested int) *xtractr.Response {
+func TestQueueExtrasMaxDepthOverrideExtractsDeep(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	src := filepath.Join(dir, "outer.zip")
+	writeOuterZip(t, src, map[string][]byte{
+		"keep.txt":            []byte("surface"),
+		"a/b/c/inner.zip":     tinyZipBytes(t, "deep.txt", "buried"),
+		"shallow/sibling.zip": tinyZipBytes(t, "near.txt", "ok"),
+	}, nil)
+
+	resp := extractQueueJob(t, dir, 64, 3)
+	require.NoError(t, resp.Error)
+
+	out := firstExisting(t, resp.Output, dir+xtractr.DefaultSuffix)
+	require.FileExists(t, filepath.Join(out, "deep.txt"))
+	require.FileExists(t, filepath.Join(out, "near.txt"))
+}
+
+func extractQueueJob(t *testing.T, dir string, maxNested, extrasMaxDepth int) *xtractr.Response {
 	t.Helper()
 
 	queue := xtractr.NewQueue(&xtractr.Config{
@@ -107,10 +126,11 @@ func extractQueueJob(t *testing.T, dir string, maxNested int) *xtractr.Response 
 	defer queue.Stop()
 
 	job := &xtractr.Xtract{
-		Filter:     xtractr.Filter{Path: dir},
-		TempFolder: true,
-		MaxNested:  maxNested,
-		CBChannel:  make(chan *xtractr.Response, 2),
+		Filter:         xtractr.Filter{Path: dir},
+		TempFolder:     true,
+		MaxNested:      maxNested,
+		ExtrasMaxDepth: extrasMaxDepth,
+		CBChannel:      make(chan *xtractr.Response, 2),
 	}
 	if maxNested == 0 {
 		job.MaxNested = -1
