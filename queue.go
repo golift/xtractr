@@ -327,7 +327,8 @@ func (x *Xtractr) decompressFiles(resp *Response) error {
 	}
 
 	// Now do it again with the output folder. extrasFilter.Accept skips
-	// extractor-copied paths (e.g. CUE sheets) so they do not consume MaxArchives.
+	// extractor-copied paths and duplicate device+inode aliases so they
+	// do not consume MaxArchives.
 	resp.Extras = FindCompressedFiles(x.extrasFilter(resp))
 
 	err = x.checkExtrasLimit(resp)
@@ -460,7 +461,7 @@ func (x *Xtractr) extrasFilter(resp *Response) Filter {
 		Path:          resp.Output,
 		ExcludeSuffix: resp.X.ExcludeSuffix,
 		MaxDepth:      pick(resp.X.ExtrasMaxDepth, x.config.ExtrasMaxDepth),
-		Accept:        skipRecursionPaths(resp.SkipOnRecursion),
+		Accept:        extrasAccept(resp.SkipOnRecursion),
 	}
 
 	if limit := pick(resp.X.MaxNested, x.config.MaxNested); limit > 0 {
@@ -470,20 +471,19 @@ func (x *Xtractr) extrasFilter(resp *Response) Filter {
 	return filter
 }
 
-// skipRecursionPaths returns an Accept func that rejects extractor-copied
-// paths (e.g. a CUE sheet). Nil when there is nothing to skip.
-func skipRecursionPaths(exclude []string) func(ArchiveCandidate) bool {
-	if len(exclude) == 0 {
-		return nil
-	}
-
+// extrasAccept skips extractor-copied paths (e.g. a CUE sheet) and later
+// names that share a device+inode with a path already accepted.
+func extrasAccept(exclude []string) func(ArchiveCandidate) bool {
 	skip := make(map[string]bool, len(exclude))
 	for _, p := range exclude {
 		skip[filepath.Clean(p)] = true
 	}
 
+	// This lives through the extras pass.
+	seen := make(map[string]struct{})
+
 	return func(candidate ArchiveCandidate) bool {
-		return !skip[filepath.Clean(candidate.Path)]
+		return !skip[filepath.Clean(candidate.Path)] && rememberFile(seen, candidate.Path)
 	}
 }
 
