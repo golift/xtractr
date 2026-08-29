@@ -58,18 +58,15 @@ func TestQueueAllowSymlinksDoesNotRecurseArchiveMemberLinks(t *testing.T) {
 	})
 
 	queue := xtractr.NewQueue(&xtractr.Config{
-		Logger:        xtractr.NoLogger(),
-		FileMode:      0o600,
-		DirMode:       0o700,
-		MaxNested:     -1,
-		AllowSymlinks: true,
+		Logger:   xtractr.NoLogger(),
+		FileMode: 0o600,
+		DirMode:  0o700,
 	})
 	defer queue.Stop()
 
 	job := &xtractr.Xtract{
 		Filter:     xtractr.Filter{Path: dir, AllowSymlinks: true},
 		TempFolder: true,
-		MaxNested:  -1,
 		CBChannel:  make(chan *xtractr.Response, 2),
 	}
 	_, err = queue.Extract(job)
@@ -124,7 +121,7 @@ func TestQueueExtrasMaxDepthSkipsDeepArchives(t *testing.T) {
 		"shallow/sibling.zip": tinyZipBytes(t, "near.txt", "ok"),
 	}, nil)
 
-	resp := extractQueueJob(t, dir, 64, 0)
+	resp := extractQueueJob(t, dir, 64, 2)
 	require.NoError(t, resp.Error)
 
 	out := firstExisting(t, resp.Output, dir+xtractr.DefaultSuffix)
@@ -157,10 +154,9 @@ func extractQueueJob(t *testing.T, dir string, maxNested, extrasMaxDepth int) *x
 	t.Helper()
 
 	queue := xtractr.NewQueue(&xtractr.Config{
-		Logger:    xtractr.NoLogger(),
-		FileMode:  0o600,
-		DirMode:   0o700,
-		MaxNested: -1,
+		Logger:   xtractr.NoLogger(),
+		FileMode: 0o600,
+		DirMode:  0o700,
 	})
 	defer queue.Stop()
 
@@ -170,9 +166,6 @@ func extractQueueJob(t *testing.T, dir string, maxNested, extrasMaxDepth int) *x
 		MaxNested:      maxNested,
 		ExtrasMaxDepth: extrasMaxDepth,
 		CBChannel:      make(chan *xtractr.Response, 2),
-	}
-	if maxNested == 0 {
-		job.MaxNested = -1
 	}
 
 	_, err := queue.Extract(job)

@@ -214,7 +214,8 @@ type Filter struct {
 	// MaxArchives stops the walk after this many archives are found. 0 is unlimited.
 	MaxArchives int
 	// AllowSymlinks includes symlink-named archive files in the listing.
-	// Default false. Symlink directories are never walked.
+	// Default false. Symlink directories found during the walk are never
+	// followed; a symlink passed as Path is (operator-chosen search root).
 	// The extras/recursion pass always ignores this and never lists archive-member links.
 	AllowSymlinks bool
 }
@@ -488,7 +489,7 @@ func (x *XFile) Extract() (size uint64, filesList, archiveList []string, err err
 func ExtractFile(xFile *XFile) (size uint64, filesList, archiveList []string, err error) {
 	err = refuseSymlinkArchiveUnlessAllowed(xFile)
 	if err != nil {
-		return 0, nil, nil, err
+		return 0, nil, nil, wrapSymlinkArchiveError(xFile, err)
 	}
 
 	sName := strings.ToLower(xFile.FilePath)
@@ -1311,6 +1312,14 @@ func skipSymlinkArchivePath(filter *Filter, path string) bool {
 	linkInfo, linkErr := os.Lstat(path)
 
 	return linkErr != nil || linkInfo.Mode()&os.ModeSymlink != 0
+}
+
+func wrapSymlinkArchiveError(xFile *XFile, err error) error {
+	if xFile == nil {
+		return err
+	}
+
+	return NewExtractError(err, xFile.FilePath, xFile.OutputDir, 0, "")
 }
 
 func refuseSymlinkArchiveUnlessAllowed(xFile *XFile) error {

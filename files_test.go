@@ -206,6 +206,10 @@ func TestExtractFileRefusesSymlink(t *testing.T) {
 	})
 	require.ErrorIs(t, err, xtractr.ErrArchiveSymlink)
 
+	var extErr *xtractr.ExtractError
+	require.ErrorAs(t, err, &extErr)
+	assert.Equal(t, link, extErr.FilePath)
+
 	_, _, _, err = xtractr.ExtractFile(&xtractr.XFile{ //nolint:dogsled // only the error matters here.
 		FilePath:      link,
 		OutputDir:     filepath.Join(dir, "allowed"),

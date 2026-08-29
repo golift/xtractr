@@ -61,13 +61,14 @@ type Xtract struct {
 	// MaxRatio is the maximum bytesWritten / archiveFileSize per archive.
 	// 0 means unlimited; when 0, Config.MaxRatio is used.
 	MaxRatio float64
-	// MaxNested is the maximum archives extracted from this job's output
-	// (the extras pass). 0 uses Config.MaxNested, then DefaultMaxNested.
-	// Negative means unlimited.
+	// MaxNested is the maximum archives extracted from one source folder's
+	// output (one extras pass). 0 means unlimited; when 0, Config.MaxNested
+	// is used. Negative also means unlimited. Not a job-wide total across
+	// decompressFolders, and not a second-round nesting budget.
 	MaxNested int
 	// ExtrasMaxDepth is how deep the extras pass walks extract output.
-	// 0 uses Config.ExtrasMaxDepth, then DefaultExtrasMaxDepth.
-	// Negative means unlimited. Distinct from Filter.MaxDepth (initial search).
+	// 0 means unlimited; when 0, Config.ExtrasMaxDepth is used. Negative
+	// also means unlimited. Distinct from Filter.MaxDepth (initial search).
 	ExtrasMaxDepth int
 }
 
@@ -157,10 +158,6 @@ func (x *Xtractr) processQueue() {
 // extract is where the real work begins and files get extracted.
 // This is fired off from processQueue() in a go routine.
 func (x *Xtractr) extract(ext *Xtract) {
-	if x.config.AllowSymlinks {
-		ext.AllowSymlinks = true
-	}
-
 	resp := &Response{
 		X:        ext,
 		Started:  time.Now(),
@@ -480,58 +477,37 @@ func (x *Xtractr) processArchive(filename string, resp *Response) (uint64, []str
 	return bytes, files, archives, nil
 }
 
-func pick[T uint64 | int | float64](job, cfg T) T { //nolint:ireturn // numeric union, not an interface.
+func pick[T uint64 | int | float64](vals ...T) T { //nolint:ireturn // numeric union, not an interface.
 	var zero T
-	if job != zero {
-		return job
+
+	for _, val := range vals {
+		if val != zero {
+			return val
+		}
 	}
 
-	return cfg
-}
-
-// extrasLimit picks a job value, then config, then fallback. 0 from both job
-// and config uses fallback. A negative job or config value means unlimited (0).
-func extrasLimit(job, cfg, fallback int) int {
-	if job < 0 || (job == 0 && cfg < 0) {
-		return 0
-	}
-
-	if job > 0 {
-		return job
-	}
-
-	if cfg > 0 {
-		return cfg
-	}
-
-	return fallback
-}
-
-func extrasCap(job, cfg int) int {
-	return extrasLimit(job, cfg, DefaultMaxNested)
-}
-
-func extrasDepth(job, cfg int) int {
-	return extrasLimit(job, cfg, DefaultExtrasMaxDepth)
+	return zero
 }
 
 func (x *Xtractr) extrasFilter(resp *Response) Filter {
 	filter := Filter{
 		Path:          resp.Output,
 		ExcludeSuffix: resp.X.ExcludeSuffix,
-		MaxDepth:      extrasDepth(resp.X.ExtrasMaxDepth, x.config.ExtrasMaxDepth),
+		MaxDepth:      pick(resp.X.ExtrasMaxDepth, x.config.ExtrasMaxDepth),
 	}
 
-	limit := extrasCap(resp.X.MaxNested, x.config.MaxNested)
-	if limit > 0 {
+	if limit := pick(resp.X.MaxNested, x.config.MaxNested); limit > 0 {
 		filter.MaxArchives = limit + 1
 	}
 
 	return filter
 }
 
+// checkExtrasLimit applies MaxNested to this extras list only (one source
+// folder, one extras pass). Archives left unextracted inside those extras
+// are not counted.
 func (x *Xtractr) checkExtrasLimit(resp *Response) error {
-	limit := extrasCap(resp.X.MaxNested, x.config.MaxNested)
+	limit := pick(resp.X.MaxNested, x.config.MaxNested)
 	if limit <= 0 || resp.Extras.Count() <= limit {
 		return nil
 	}
