@@ -162,6 +162,27 @@ func TestFindCompressedFilesMaxArchives(t *testing.T) {
 	assert.Equal(t, 3, paths.Count())
 }
 
+func TestFindCompressedFilesAcceptSkipsAndDoesNotCount(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+
+	skip := filepath.Join(base, "skip.zip")
+	for _, name := range []string{"skip.zip", "keep1.zip", "keep2.zip", "keep3.zip"} {
+		require.NoError(t, os.WriteFile(filepath.Join(base, name), []byte("pk"), 0o600))
+	}
+
+	paths := xtractr.FindCompressedFiles(xtractr.Filter{
+		Path:        base,
+		MaxArchives: 2,
+		Accept: func(candidate xtractr.ArchiveCandidate) bool {
+			return candidate.Path != skip
+		},
+	})
+	assert.Equal(t, 2, paths.Count())
+	assert.NotContains(t, paths.List(), skip)
+}
+
 func TestFindCompressedFilesSkipsSymlinkPath(t *testing.T) {
 	t.Parallel()
 
