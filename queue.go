@@ -474,32 +474,16 @@ func (x *Xtractr) extrasFilter(resp *Response) Filter {
 // extrasAccept skips extractor-copied paths (e.g. a CUE sheet) and later
 // names that share a device+inode with a path already accepted.
 func extrasAccept(exclude []string) func(ArchiveCandidate) bool {
-	skip := skipRecursionPaths(exclude)
-	seen := make(map[string]struct{})
-
-	return func(candidate ArchiveCandidate) bool {
-		if skip != nil && !skip(candidate) {
-			return false
-		}
-
-		return rememberFile(seen, candidate.Path)
-	}
-}
-
-// skipRecursionPaths returns an Accept func that rejects extractor-copied
-// paths (e.g. a CUE sheet). Nil when there is nothing to skip.
-func skipRecursionPaths(exclude []string) func(ArchiveCandidate) bool {
-	if len(exclude) == 0 {
-		return nil
-	}
-
 	skip := make(map[string]bool, len(exclude))
 	for _, p := range exclude {
 		skip[filepath.Clean(p)] = true
 	}
 
+	// This lives through the extras pass.
+	seen := make(map[string]struct{})
+
 	return func(candidate ArchiveCandidate) bool {
-		return !skip[filepath.Clean(candidate.Path)]
+		return !skip[filepath.Clean(candidate.Path)] && rememberFile(seen, candidate.Path)
 	}
 }
 
