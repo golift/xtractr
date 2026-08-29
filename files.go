@@ -215,6 +215,7 @@ type Filter struct {
 	MaxArchives int
 	// AllowSymlinks includes symlink-named archive files in the listing.
 	// Default false. Symlink directories are never walked.
+	// The extras/recursion pass always ignores this and never lists archive-member links.
 	AllowSymlinks bool
 }
 
@@ -1322,7 +1323,6 @@ func refuseSymlinkArchiveUnlessAllowed(xFile *XFile) error {
 
 func symlinkTargetsDir(dir, name string) bool {
 	info, err := os.Stat(filepath.Join(dir, name))
-
 	return err != nil || info.IsDir()
 }
 

@@ -157,6 +157,10 @@ func (x *Xtractr) processQueue() {
 // extract is where the real work begins and files get extracted.
 // This is fired off from processQueue() in a go routine.
 func (x *Xtractr) extract(ext *Xtract) {
+	if x.config.AllowSymlinks {
+		ext.AllowSymlinks = true
+	}
+
 	resp := &Response{
 		X:        ext,
 		Started:  time.Now(),
@@ -380,7 +384,6 @@ func (x *Xtractr) decompressFiles(resp *Response) error {
 			MaxRatio:       resp.X.MaxRatio,
 			MaxNested:      resp.X.MaxNested,
 			ExtrasMaxDepth: resp.X.ExtrasMaxDepth,
-			Filter:         Filter{AllowSymlinks: resp.X.AllowSymlinks},
 		},
 		Started:  resp.Started,
 		Output:   resp.Output,
@@ -454,7 +457,7 @@ func (x *Xtractr) processArchive(filename string, resp *Response) (uint64, []str
 		MaxBytes:      pick(resp.X.MaxBytes, x.config.MaxBytes),
 		MaxFiles:      pick(resp.X.MaxFiles, x.config.MaxFiles),
 		MaxRatio:      pick(resp.X.MaxRatio, x.config.MaxRatio),
-		AllowSymlinks: resp.X.AllowSymlinks || x.config.AllowSymlinks,
+		AllowSymlinks: resp.X.AllowSymlinks,
 		log:           x.config.Logger,
 		Updates:       resp.X.Updates,
 		Progress:      resp.X.Progress,
@@ -517,7 +520,6 @@ func (x *Xtractr) extrasFilter(resp *Response) Filter {
 		Path:          resp.Output,
 		ExcludeSuffix: resp.X.ExcludeSuffix,
 		MaxDepth:      extrasDepth(resp.X.ExtrasMaxDepth, x.config.ExtrasMaxDepth),
-		AllowSymlinks: resp.X.AllowSymlinks || x.config.AllowSymlinks,
 	}
 
 	limit := extrasCap(resp.X.MaxNested, x.config.MaxNested)

@@ -63,7 +63,8 @@ type Config struct {
 	// ExtrasMaxDepth is the default extras-pass walk depth. 0 uses
 	// DefaultExtrasMaxDepth. Negative means unlimited.
 	ExtrasMaxDepth int
-	// AllowSymlinks includes symlink-named archive files when finding extras.
+	// AllowSymlinks allows the initial search to include symlink-named archives.
+	// The extras/recursion pass never follows archive-member symlinks.
 	// Default false.
 	AllowSymlinks bool
 }

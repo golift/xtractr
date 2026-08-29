@@ -40,6 +40,45 @@ func TestQueueSkipsZipSymlinkExtras(t *testing.T) {
 	require.FileExists(t, filepath.Join(out, "hello.txt"))
 }
 
+func TestQueueAllowSymlinksDoesNotRecurseArchiveMemberLinks(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	err := os.Symlink("target", filepath.Join(dir, "symlink-probe"))
+	if err != nil {
+		t.Skipf("symlinks unavailable on this platform: %v", err)
+	}
+
+	inner := tinyZipBytes(t, "hello.txt", "from-inner")
+	src := filepath.Join(dir, "outer.zip")
+	writeOuterZip(t, src, map[string][]byte{"payload.zip": inner}, map[string]string{
+		"a.zip": "payload.zip",
+		"b.zip": "payload.zip",
+	})
+
+	queue := xtractr.NewQueue(&xtractr.Config{
+		Logger:        xtractr.NoLogger(),
+		FileMode:      0o600,
+		DirMode:       0o700,
+		MaxNested:     -1,
+		AllowSymlinks: true,
+	})
+	defer queue.Stop()
+
+	job := &xtractr.Xtract{
+		Filter:     xtractr.Filter{Path: dir, AllowSymlinks: true},
+		TempFolder: true,
+		MaxNested:  -1,
+		CBChannel:  make(chan *xtractr.Response, 2),
+	}
+	_, err = queue.Extract(job)
+	require.NoError(t, err)
+	resp := waitExtract(t, job.CBChannel)
+	require.NoError(t, resp.Error)
+	require.Equal(t, 1, resp.Extras.Count(), "archive-member zip symlinks must not be extras")
+}
+
 func TestQueueMaxNestedRejectsTooManyExtras(t *testing.T) {
 	t.Parallel()
 
