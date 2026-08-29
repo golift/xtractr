@@ -218,6 +218,7 @@ func (x *Xtractr) decompressFolders(resp *Response) error {
 				Filter: Filter{
 					Path:          subDir,
 					ExcludeSuffix: resp.X.ExcludeSuffix,
+					AllowSymlinks: resp.X.AllowSymlinks,
 				},
 				Name:             resp.X.Name,
 				Password:         resp.X.Password,
@@ -379,6 +380,7 @@ func (x *Xtractr) decompressFiles(resp *Response) error {
 			MaxRatio:       resp.X.MaxRatio,
 			MaxNested:      resp.X.MaxNested,
 			ExtrasMaxDepth: resp.X.ExtrasMaxDepth,
+			Filter:         Filter{AllowSymlinks: resp.X.AllowSymlinks},
 		},
 		Started:  resp.Started,
 		Output:   resp.Output,
@@ -441,20 +443,21 @@ func (x *Xtractr) processArchive(filename string, resp *Response) (uint64, []str
 	x.config.Debugf("Extracting File: %v to %v", filename, resp.Output)
 
 	xFile := &XFile{
-		FilePath:    filename,
-		OutputDir:   resp.Output,
-		FileMode:    x.config.FileMode,
-		DirMode:     x.config.DirMode,
-		Suffix:      x.config.Suffix,
-		Passwords:   resp.X.Passwords,
-		Password:    resp.X.Password,
-		FileWorkers: x.config.FileWorkers,
-		MaxBytes:    pick(resp.X.MaxBytes, x.config.MaxBytes),
-		MaxFiles:    pick(resp.X.MaxFiles, x.config.MaxFiles),
-		MaxRatio:    pick(resp.X.MaxRatio, x.config.MaxRatio),
-		log:         x.config.Logger,
-		Updates:     resp.X.Updates,
-		Progress:    resp.X.Progress,
+		FilePath:      filename,
+		OutputDir:     resp.Output,
+		FileMode:      x.config.FileMode,
+		DirMode:       x.config.DirMode,
+		Suffix:        x.config.Suffix,
+		Passwords:     resp.X.Passwords,
+		Password:      resp.X.Password,
+		FileWorkers:   x.config.FileWorkers,
+		MaxBytes:      pick(resp.X.MaxBytes, x.config.MaxBytes),
+		MaxFiles:      pick(resp.X.MaxFiles, x.config.MaxFiles),
+		MaxRatio:      pick(resp.X.MaxRatio, x.config.MaxRatio),
+		AllowSymlinks: resp.X.AllowSymlinks || x.config.AllowSymlinks,
+		log:           x.config.Logger,
+		Updates:       resp.X.Updates,
+		Progress:      resp.X.Progress,
 	}
 
 	bytes, files, archives, err := ExtractFile(xFile)
@@ -514,6 +517,7 @@ func (x *Xtractr) extrasFilter(resp *Response) Filter {
 		Path:          resp.Output,
 		ExcludeSuffix: resp.X.ExcludeSuffix,
 		MaxDepth:      extrasDepth(resp.X.ExtrasMaxDepth, x.config.ExtrasMaxDepth),
+		AllowSymlinks: resp.X.AllowSymlinks || x.config.AllowSymlinks,
 	}
 
 	limit := extrasCap(resp.X.MaxNested, x.config.MaxNested)

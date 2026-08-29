@@ -139,6 +139,11 @@ func TestFindCompressedFilesSkipsSymlinks(t *testing.T) {
 	paths := xtractr.FindCompressedFiles(xtractr.Filter{Path: base})
 	require.Equal(t, 1, paths.Count())
 	require.Equal(t, realZip, paths.List()[0])
+
+	allowed := xtractr.FindCompressedFiles(xtractr.Filter{Path: base, AllowSymlinks: true})
+	assert.Equal(t, 2, allowed.Count(), "file symlink is included; dir symlink named .zip is not")
+	assert.Contains(t, allowed.List(), realZip)
+	assert.Contains(t, allowed.List(), filepath.Join(base, "alias.zip"))
 }
 
 func TestFindCompressedFilesMaxArchives(t *testing.T) {
@@ -173,6 +178,10 @@ func TestFindCompressedFilesSkipsSymlinkPath(t *testing.T) {
 
 	paths := xtractr.FindCompressedFiles(xtractr.Filter{Path: link})
 	assert.Empty(t, paths, "a symlink search path must not be returned as an archive")
+
+	allowed := xtractr.FindCompressedFiles(xtractr.Filter{Path: link, AllowSymlinks: true})
+	require.Equal(t, 1, allowed.Count())
+	assert.Equal(t, link, allowed.List()[0])
 }
 
 func TestExtractFileRefusesSymlink(t *testing.T) {
@@ -196,6 +205,16 @@ func TestExtractFileRefusesSymlink(t *testing.T) {
 		DirMode:   0o700,
 	})
 	require.ErrorIs(t, err, xtractr.ErrArchiveSymlink)
+
+	_, _, _, err = xtractr.ExtractFile(&xtractr.XFile{ //nolint:dogsled // only the error matters here.
+		FilePath:      link,
+		OutputDir:     filepath.Join(dir, "allowed"),
+		FileMode:      0o600,
+		DirMode:       0o700,
+		AllowSymlinks: true,
+	})
+	require.Error(t, err)
+	require.NotErrorIs(t, err, xtractr.ErrArchiveSymlink)
 }
 
 func TestFindCompressedFilesSkipsDotFiles(t *testing.T) {

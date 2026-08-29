@@ -175,6 +175,8 @@ type XFile struct {
 	MaxFiles int
 	// MaxRatio is the maximum bytesWritten / archiveFileSize. 0 means unlimited.
 	MaxRatio float64
+	// AllowSymlinks allows FilePath to be a symbolic link to an archive.
+	AllowSymlinks bool
 	// Progress is called periodically during file extraction.
 	// Contains info about the progress of the extraction.
 	// This is not called if an Updates channel is also provided.
@@ -211,6 +213,9 @@ type Filter struct {
 	MinDepth int
 	// MaxArchives stops the walk after this many archives are found. 0 is unlimited.
 	MaxArchives int
+	// AllowSymlinks includes symlink-named archive files in the listing.
+	// Default false. Symlink directories are never walked.
+	AllowSymlinks bool
 }
 
 // Exclude represents an exclusion list.
@@ -322,10 +327,7 @@ func findCompressedFiles(path string, filter *Filter, depth int) ArchiveList {
 	}
 
 	if !info.IsDir() && IsArchiveFile(path) {
-		// os.Open/Stat follow a final-component symlink; do not treat that path
-		// as an archive or ExtractFile will fail with ErrArchiveSymlink.
-		linkInfo, linkErr := os.Lstat(path)
-		if linkErr != nil || linkInfo.Mode()&os.ModeSymlink != 0 {
+		if skipSymlinkArchivePath(filter, path) {
 			return nil
 		}
 
@@ -402,8 +404,9 @@ func getCompressedFiles(path string, filter *Filter, fileList []os.FileInfo, dep
 		}
 
 		switch lowerName := strings.ToLower(file.Name()); {
-		case file.Mode()&os.ModeSymlink != 0:
-			continue // never treat a symlink as an archive, and do not walk symlink dirs.
+		case file.Mode()&os.ModeSymlink != 0 &&
+			(!filter.AllowSymlinks || symlinkTargetsDir(path, file.Name())):
+			continue // skip symlink archives unless allowed; never walk symlink dirs.
 		case !file.IsDir() &&
 			(filter.ExcludeSuffix.Has(lowerName) || depth < filter.MinDepth):
 			continue // file suffix is excluded or we are not deep enough.
@@ -482,7 +485,7 @@ func (x *XFile) Extract() (size uint64, filesList, archiveList []string, err err
 // ExtractFile calls the correct procedure for the type of file being extracted.
 // Returns size of extracted data, list of extracted files, list of archives processed, and/or error.
 func ExtractFile(xFile *XFile) (size uint64, filesList, archiveList []string, err error) {
-	err = refuseSymlinkArchive(xFile.FilePath)
+	err = refuseSymlinkArchiveUnlessAllowed(xFile)
 	if err != nil {
 		return 0, nil, nil, err
 	}
@@ -1297,6 +1300,30 @@ func (x *XFile) safeFileMode(current os.FileMode) os.FileMode {
 	const minimum = 0o400 // ensure owner has read access to the file.
 
 	return current | minimum
+}
+
+func skipSymlinkArchivePath(filter *Filter, path string) bool {
+	if filter != nil && filter.AllowSymlinks {
+		return false
+	}
+
+	linkInfo, linkErr := os.Lstat(path)
+
+	return linkErr != nil || linkInfo.Mode()&os.ModeSymlink != 0
+}
+
+func refuseSymlinkArchiveUnlessAllowed(xFile *XFile) error {
+	if xFile == nil || xFile.AllowSymlinks {
+		return nil
+	}
+
+	return refuseSymlinkArchive(xFile.FilePath)
+}
+
+func symlinkTargetsDir(dir, name string) bool {
+	info, err := os.Stat(filepath.Join(dir, name))
+
+	return err != nil || info.IsDir()
 }
 
 func refuseSymlinkArchive(path string) error {
