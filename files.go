@@ -344,8 +344,7 @@ func findCompressedFiles(path string, filter *Filter, depth int) ArchiveList {
 			return nil
 		}
 
-		linkInfo, _ := os.Lstat(path)
-		if !acceptArchive(filter, path, linkInfo) {
+		if linkInfo, _ := os.Lstat(path); !acceptArchive(filter, path, linkInfo) {
 			return nil
 		}
 
@@ -417,11 +416,9 @@ func getCompressedFiles(path string, filter *Filter, fileList []os.FileInfo, dep
 	files := ArchiveList{}
 
 	for _, file := range fileList {
-		if archivesAtCap(files, filter) {
-			return files
-		}
-
 		switch lowerName := strings.ToLower(file.Name()); {
+		case archivesAtCap(files, filter):
+			return files
 		case file.Mode()&os.ModeSymlink != 0 &&
 			(!filter.AllowSymlinks || symlinkTargetsDir(path, file.Name())):
 			continue // skip symlink archives unless allowed; never walk symlink dirs.
@@ -452,19 +449,13 @@ func getCompressedFiles(path string, filter *Filter, fileList []os.FileInfo, dep
 
 func addArchive(files ArchiveList, dir string, file os.FileInfo, filter *Filter) {
 	path := filepath.Join(dir, file.Name())
-	if !acceptArchive(filter, path, file) {
-		return
+	if acceptArchive(filter, path, file) {
+		files[dir] = append(files[dir], path)
 	}
-
-	files[dir] = append(files[dir], path)
 }
 
 func acceptArchive(filter *Filter, path string, info os.FileInfo) bool {
-	if filter == nil || filter.Accept == nil {
-		return true
-	}
-
-	return filter.Accept(ArchiveCandidate{Path: path, Info: info})
+	return filter == nil || filter.Accept == nil || filter.Accept(ArchiveCandidate{Path: path, Info: info})
 }
 
 func archivesAtCap(files ArchiveList, filter *Filter) bool {
