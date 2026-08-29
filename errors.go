@@ -36,6 +36,10 @@ var (
 	ErrMaxFiles = errors.New("extracted file count exceeds maximum")
 	// ErrMaxRatio is returned when bytesWritten / archiveFileSize exceeds MaxRatio (0 is unlimited).
 	ErrMaxRatio = errors.New("extracted size exceeds maximum compression ratio")
+	// ErrMaxNested is returned when archives found in extract output exceed MaxNested.
+	ErrMaxNested = errors.New("nested archive count exceeds maximum")
+	// ErrArchiveSymlink is returned when the archive path is a symbolic link.
+	ErrArchiveSymlink = errors.New("refusing to extract a symbolic link as an archive")
 
 	// CUE sheet.
 
@@ -54,7 +58,9 @@ var (
 )
 
 func isLimitError(err error) bool {
-	return errors.Is(err, ErrMaxBytes) || errors.Is(err, ErrMaxFiles) || errors.Is(err, ErrMaxRatio)
+	return errors.Is(err, ErrMaxBytes) || errors.Is(err, ErrMaxFiles) ||
+		errors.Is(err, ErrMaxRatio) || errors.Is(err, ErrMaxNested) ||
+		errors.Is(err, ErrArchiveSymlink)
 }
 
 // ExtractError is a rich error type that can carry multiple errors and warnings

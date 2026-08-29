@@ -61,6 +61,10 @@ type Xtract struct {
 	// MaxRatio is the maximum bytesWritten / archiveFileSize per archive.
 	// 0 means unlimited; when 0, Config.MaxRatio is used.
 	MaxRatio float64
+	// MaxNested is the maximum archives extracted from this job's output
+	// (the extras pass). 0 uses Config.MaxNested, then DefaultMaxNested.
+	// Negative means unlimited.
+	MaxNested int
 }
 
 // Response is sent to the call-back function. The first CBFunction call is just
@@ -225,6 +229,7 @@ func (x *Xtractr) decompressFolders(resp *Response) error {
 				MaxBytes:         resp.X.MaxBytes,
 				MaxFiles:         resp.X.MaxFiles,
 				MaxRatio:         resp.X.MaxRatio,
+				MaxNested:        resp.X.MaxNested,
 			},
 			Started:  resp.Started,
 			Output:   output,
@@ -346,14 +351,18 @@ func (x *Xtractr) decompressFiles(resp *Response) error {
 	}
 
 	// Now do it again with the output folder.
-	resp.Extras = FindCompressedFiles(Filter{
-		Path:          resp.Output,
-		ExcludeSuffix: resp.X.ExcludeSuffix,
-	})
+	resp.Extras = FindCompressedFiles(x.extrasFilter(resp))
 	// Do not try to extract files that an extractor copied into output (e.g. CUE sheet);
 	// re-extracting the copied CUE would fail and delete the output directory.
 	// Other archives in the output (e.g. CUE+FLAC from a RAR) are still extracted.
 	resp.Extras = excludePathsFromArchiveList(resp.Extras, resp.SkipOnRecursion)
+
+	err = x.checkExtrasLimit(resp)
+	if err != nil {
+		x.DeleteFiles(resp.Output)
+		return err
+	}
+
 	nre := &Response{
 		X: &Xtract{
 			Password:  resp.X.Password,
@@ -363,6 +372,7 @@ func (x *Xtractr) decompressFiles(resp *Response) error {
 			MaxBytes:  resp.X.MaxBytes,
 			MaxFiles:  resp.X.MaxFiles,
 			MaxRatio:  resp.X.MaxRatio,
+			MaxNested: resp.X.MaxNested,
 		},
 		Started:  resp.Started,
 		Output:   resp.Output,
@@ -465,6 +475,48 @@ func pick[T uint64 | int | float64](job, cfg T) T { //nolint:ireturn // numeric 
 	}
 
 	return cfg
+}
+
+// extrasCap is the extras-pass archive count limit. 0 from both job and config
+// uses DefaultMaxNested. A negative job or config value means unlimited (return 0).
+func extrasCap(job, cfg int) int {
+	if job < 0 || (job == 0 && cfg < 0) {
+		return 0
+	}
+
+	if job > 0 {
+		return job
+	}
+
+	if cfg > 0 {
+		return cfg
+	}
+
+	return DefaultMaxNested
+}
+
+func (x *Xtractr) extrasFilter(resp *Response) Filter {
+	filter := Filter{
+		Path:          resp.Output,
+		ExcludeSuffix: resp.X.ExcludeSuffix,
+		MaxDepth:      DefaultExtrasMaxDepth,
+	}
+
+	limit := extrasCap(resp.X.MaxNested, x.config.MaxNested)
+	if limit > 0 {
+		filter.MaxArchives = limit + 1
+	}
+
+	return filter
+}
+
+func (x *Xtractr) checkExtrasLimit(resp *Response) error {
+	limit := extrasCap(resp.X.MaxNested, x.config.MaxNested)
+	if limit <= 0 || resp.Extras.Count() <= limit {
+		return nil
+	}
+
+	return fmt.Errorf("%w: %d archives (max %d)", ErrMaxNested, resp.Extras.Count(), limit)
 }
 
 func (x *Xtractr) cleanupProcessedArchives(resp *Response) error {

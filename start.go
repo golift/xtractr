@@ -12,6 +12,12 @@ const (
 	// DefaultBufferSize is the size of the extraction buffer.
 	// ie. How many jobs can be queued before things get slow.
 	DefaultBufferSize = 1000
+	// DefaultMaxNested is the extras-pass archive cap when MaxNested is 0.
+	// A negative MaxNested means unlimited.
+	DefaultMaxNested = 64
+	// DefaultExtrasMaxDepth is how deep FindCompressedFiles walks extract output
+	// looking for nested archives. 0 is the search root; 2 is two subfolders.
+	DefaultExtrasMaxDepth = 2
 )
 
 // Config is the input data to configure the Xtract queue. Fill this out and
@@ -51,6 +57,9 @@ type Config struct {
 	// MaxRatio is the default maximum bytesWritten / archiveFileSize per archive.
 	// 0 means unlimited. Copied onto each XFile when Xtract.MaxRatio is 0.
 	MaxRatio float64
+	// MaxNested is the default maximum archives extracted from an archive's
+	// output (the extras pass). 0 uses DefaultMaxNested. Negative means unlimited.
+	MaxNested int
 }
 
 // Logger allows this library to write logs.
