@@ -313,37 +313,6 @@ func weExtractedAnISO(resp *Response) bool {
 	return false
 }
 
-// excludePathsFromArchiveList returns a copy of list with any archive path that
-// appears in exclude (e.g. resp.SkipOnRecursion) removed.
-func excludePathsFromArchiveList(list ArchiveList, exclude []string) ArchiveList {
-	if len(exclude) == 0 {
-		return list
-	}
-
-	skip := make(map[string]bool, len(exclude))
-	out := make(ArchiveList, len(list))
-
-	for _, p := range exclude {
-		skip[filepath.Clean(p)] = true
-	}
-
-	for dir, archives := range list {
-		keep := make([]string, 0, len(archives))
-
-		for _, p := range archives {
-			if !skip[filepath.Clean(p)] {
-				keep = append(keep, p)
-			}
-		}
-
-		if len(keep) > 0 {
-			out[dir] = keep
-		}
-	}
-
-	return out
-}
-
 // decompressFiles runs after we find and verify archives exist.
 // This extracts everything in the search path then (optionally)
 // checks the output path for more archives that were just decompressed.
@@ -357,12 +326,9 @@ func (x *Xtractr) decompressFiles(resp *Response) error {
 		return x.cleanupProcessedArchives(resp)
 	}
 
-	// Now do it again with the output folder.
+	// Now do it again with the output folder. extrasFilter.Accept skips
+	// extractor-copied paths (e.g. CUE sheets) so they do not consume MaxArchives.
 	resp.Extras = FindCompressedFiles(x.extrasFilter(resp))
-	// Do not try to extract files that an extractor copied into output (e.g. CUE sheet);
-	// re-extracting the copied CUE would fail and delete the output directory.
-	// Other archives in the output (e.g. CUE+FLAC from a RAR) are still extracted.
-	resp.Extras = excludePathsFromArchiveList(resp.Extras, resp.SkipOnRecursion)
 
 	err = x.checkExtrasLimit(resp)
 	if err != nil {
@@ -494,6 +460,7 @@ func (x *Xtractr) extrasFilter(resp *Response) Filter {
 		Path:          resp.Output,
 		ExcludeSuffix: resp.X.ExcludeSuffix,
 		MaxDepth:      pick(resp.X.ExtrasMaxDepth, x.config.ExtrasMaxDepth),
+		Accept:        skipRecursionPaths(resp.SkipOnRecursion),
 	}
 
 	if limit := pick(resp.X.MaxNested, x.config.MaxNested); limit > 0 {
@@ -501,6 +468,23 @@ func (x *Xtractr) extrasFilter(resp *Response) Filter {
 	}
 
 	return filter
+}
+
+// skipRecursionPaths returns an Accept func that rejects extractor-copied
+// paths (e.g. a CUE sheet). Nil when there is nothing to skip.
+func skipRecursionPaths(exclude []string) func(ArchiveCandidate) bool {
+	if len(exclude) == 0 {
+		return nil
+	}
+
+	skip := make(map[string]bool, len(exclude))
+	for _, p := range exclude {
+		skip[filepath.Clean(p)] = true
+	}
+
+	return func(candidate ArchiveCandidate) bool {
+		return !skip[filepath.Clean(candidate.Path)]
+	}
 }
 
 // checkExtrasLimit applies MaxNested to this extras list only (one source

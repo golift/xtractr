@@ -218,6 +218,17 @@ type Filter struct {
 	// followed; a symlink passed as Path is (operator-chosen search root).
 	// The extras/recursion pass always ignores this and never lists archive-member links.
 	AllowSymlinks bool
+	// Accept, if set, is called when Find is about to add an archive.
+	// Return false to skip it; skipped paths do not count toward MaxArchives.
+	Accept func(ArchiveCandidate) bool
+}
+
+// ArchiveCandidate is passed to Filter.Accept when Find is about to list a path.
+type ArchiveCandidate struct {
+	// Path is the archive file being considered.
+	Path string
+	// Info is the Lstat of Path. May be nil if the path could not be stated.
+	Info os.FileInfo
 }
 
 // Exclude represents an exclusion list.
@@ -308,7 +319,7 @@ func (e Exclude) Has(test string) bool {
 // so if the rar archive does not have "part" followed by a number in the name, then it will be
 // considered an independent archive. Some packagers seem to use different naming schemes,
 // so this may need to be updated as time progresses. Use the input to Filter to adjust the output.
-func FindCompressedFiles(filter Filter) ArchiveList {
+func FindCompressedFiles(filter Filter) ArchiveList { //nolint:gocritic // public API; Filter is a value.
 	return findCompressedFiles(filter.Path, &filter, 0)
 }
 
@@ -330,6 +341,10 @@ func findCompressedFiles(path string, filter *Filter, depth int) ArchiveList {
 
 	if !info.IsDir() && IsArchiveFile(path) {
 		if skipSymlinkArchivePath(filter, path) {
+			return nil
+		}
+
+		if linkInfo, _ := os.Lstat(path); !acceptArchive(filter, path, linkInfo) {
 			return nil
 		}
 
@@ -401,11 +416,9 @@ func getCompressedFiles(path string, filter *Filter, fileList []os.FileInfo, dep
 	files := ArchiveList{}
 
 	for _, file := range fileList {
-		if archivesAtCap(files, filter) {
-			return files
-		}
-
 		switch lowerName := strings.ToLower(file.Name()); {
+		case archivesAtCap(files, filter):
+			return files
 		case file.Mode()&os.ModeSymlink != 0 &&
 			(!filter.AllowSymlinks || symlinkTargetsDir(path, file.Name())):
 			continue // skip symlink archives unless allowed; never walk symlink dirs.
@@ -421,17 +434,28 @@ func getCompressedFiles(path string, filter *Filter, fileList []os.FileInfo, dep
 			partOne := regexp.MustCompile(`.*\.part0*1\.rar$`)
 			// Some archives are named poorly. Only return part01 or part001, not all.
 			if !hasParts.MatchString(lowerName) || partOne.MatchString(lowerName) {
-				files[path] = append(files[path], filepath.Join(path, file.Name()))
+				addArchive(files, path, file, filter)
 			}
 		case strings.HasSuffix(lowerName, ".r00") && !CheckR00ForRarFile(fileList, lowerName):
 			// Accept .r00 as the first archive file if no .rar files are present in the path.
-			files[path] = append(files[path], filepath.Join(path, file.Name()))
+			addArchive(files, path, file, filter)
 		case !strings.HasSuffix(lowerName, ".r00") && IsArchiveFile(lowerName):
-			files[path] = append(files[path], filepath.Join(path, file.Name()))
+			addArchive(files, path, file, filter)
 		}
 	}
 
 	return files
+}
+
+func addArchive(files ArchiveList, dir string, file os.FileInfo, filter *Filter) {
+	path := filepath.Join(dir, file.Name())
+	if acceptArchive(filter, path, file) {
+		files[dir] = append(files[dir], path)
+	}
+}
+
+func acceptArchive(filter *Filter, path string, info os.FileInfo) bool {
+	return filter == nil || filter.Accept == nil || filter.Accept(ArchiveCandidate{Path: path, Info: info})
 }
 
 func archivesAtCap(files ArchiveList, filter *Filter) bool {
