@@ -291,7 +291,7 @@ func ExtractFile(xFile *XFile) (size uint64, filesList, archiveList []string, er
 
 		// A resource cap aborts the extraction; do not re-extract via signature
 		// detection, which would reset the counters and could even report success.
-		if isLimitError(err) {
+		if IsLimitError(err) {
 			return size, filesList, archiveList, err
 		}
 

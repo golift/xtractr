@@ -35,7 +35,7 @@ func Extract7z(xFile *XFile) (size uint64, filesList, archiveList []string, err 
 		switch {
 		case err == nil:
 			return size, files, archives, nil
-		case isLimitError(err):
+		case IsLimitError(err):
 			return size, files, archives, err
 		case idx == len(passwords)-1:
 			return size, files, archives, fmt.Errorf("used password %d of %d: %w", idx+1, len(passwords), err)

@@ -130,7 +130,7 @@ func ExtractCUE(xFile *XFile) (size uint64, files, archives []string, err error)
 // errors abort the extract; other copy failures are logged and ignored.
 func copyCueSheetToOutput(xFile *XFile, cueDest string, files []string) ([]string, error) {
 	writeErr := copyCueToOutput(xFile, xFile.FilePath, cueDest, xFile.FileMode)
-	if isLimitError(writeErr) {
+	if IsLimitError(writeErr) {
 		return files, writeErr
 	}
 

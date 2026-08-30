@@ -25,7 +25,7 @@ func ExtractISO(xFile *XFile) (size uint64, filesList []string, err error) {
 		return size, filesList, nil
 	}
 
-	if isLimitError(udfErr) {
+	if IsLimitError(udfErr) {
 		if xFile.prog != nil {
 			xFile.prog.done()
 		}
