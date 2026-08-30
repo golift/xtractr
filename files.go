@@ -291,7 +291,7 @@ func Difference(slice1, slice2 []string) []string {
 		seen[item] = struct{}{}
 	}
 
-	diff := []string{}
+	diff := make([]string, 0, len(slice2))
 
 	for _, item := range slice2 {
 		if _, found := seen[item]; !found {
@@ -409,12 +409,17 @@ func CheckR00ForRarFile(fileList []os.FileInfo, r00file string) bool {
 	return false
 }
 
+// RAR multipart name matchers. Compiled once; reused for every directory in a Find walk.
+// `$` already anchors the end, so a leading `.*` is unnecessary.
+var (
+	rarHasParts = regexp.MustCompile(`\.part\d+\.rar$`)
+	rarPartOne  = regexp.MustCompile(`\.part0*1\.rar$`)
+)
+
 // getCompressedFiles checks file suffixes to find archives to decompress.
 // This pays special attention to the widely accepted variance of rar formats.
 func getCompressedFiles(path string, filter *Filter, fileList []os.FileInfo, depth int) ArchiveList { //nolint:cyclop
 	files := ArchiveList{}
-	hasParts := regexp.MustCompile(`.*\.part\d+\.rar$`)
-	partOne := regexp.MustCompile(`.*\.part0*1\.rar$`)
 
 	for _, file := range fileList {
 		switch lowerName := strings.ToLower(file.Name()); {
@@ -432,7 +437,7 @@ func getCompressedFiles(path string, filter *Filter, fileList []os.FileInfo, dep
 			maps.Copy(files, findCompressedFiles(filepath.Join(path, file.Name()), filter, depth+1))
 		case strings.HasSuffix(lowerName, ".rar"):
 			// Some archives are named poorly. Only return part01 or part001, not all.
-			if !hasParts.MatchString(lowerName) || partOne.MatchString(lowerName) {
+			if !rarHasParts.MatchString(lowerName) || rarPartOne.MatchString(lowerName) {
 				addArchive(files, path, file, filter)
 			}
 		case strings.HasSuffix(lowerName, ".r00") && !CheckR00ForRarFile(fileList, lowerName):
