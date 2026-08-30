@@ -286,17 +286,16 @@ func listFiles(paths ...string) ([]string, error) {
 // Used to find new files in a file list from a path. ie. those we extracted.
 // This is a helper method and only exposed for convenience. You do not have to call this.
 func Difference(slice1, slice2 []string) []string {
+	seen := make(map[string]struct{}, len(slice1))
+	for _, item := range slice1 {
+		seen[item] = struct{}{}
+	}
+
 	diff := []string{}
 
-	for _, s2p := range slice2 {
-		var found bool
-
-		if slices.Contains(slice1, s2p) {
-			found = true
-		}
-
-		if !found { // String not found, so it's a new string, add it to the diff.
-			diff = append(diff, s2p)
+	for _, item := range slice2 {
+		if _, found := seen[item]; !found {
+			diff = append(diff, item)
 		}
 	}
 
@@ -414,6 +413,8 @@ func CheckR00ForRarFile(fileList []os.FileInfo, r00file string) bool {
 // This pays special attention to the widely accepted variance of rar formats.
 func getCompressedFiles(path string, filter *Filter, fileList []os.FileInfo, depth int) ArchiveList { //nolint:cyclop
 	files := ArchiveList{}
+	hasParts := regexp.MustCompile(`.*\.part\d+\.rar$`)
+	partOne := regexp.MustCompile(`.*\.part0*1\.rar$`)
 
 	for _, file := range fileList {
 		switch lowerName := strings.ToLower(file.Name()); {
@@ -430,8 +431,6 @@ func getCompressedFiles(path string, filter *Filter, fileList []os.FileInfo, dep
 		case file.IsDir(): // Recurse.
 			maps.Copy(files, findCompressedFiles(filepath.Join(path, file.Name()), filter, depth+1))
 		case strings.HasSuffix(lowerName, ".rar"):
-			hasParts := regexp.MustCompile(`.*\.part\d+\.rar$`)
-			partOne := regexp.MustCompile(`.*\.part0*1\.rar$`)
 			// Some archives are named poorly. Only return part01 or part001, not all.
 			if !hasParts.MatchString(lowerName) || partOne.MatchString(lowerName) {
 				addArchive(files, path, file, filter)
@@ -1261,7 +1260,7 @@ func (x *XFile) SetLogger(logger Logger) {
 }
 
 // cleanup runs after a successful extract.
-// The intent it to move files into their final location.
+// The intent is to move files into their final location.
 func (x *XFile) cleanup(files []string) ([]string, error) {
 	files, err := x.squashRoot(files)
 	if err != nil {
