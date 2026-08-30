@@ -42,14 +42,16 @@ type Config struct {
 	// siblings as a known extra extension (e.g. movie.mkv.xtractr_partial).
 	// Empty uses DefaultSuffix.
 	Suffix string
-	// MaxBytes is the default maximum uncompressed bytes written per archive.
-	// 0 means unlimited. Copied onto each XFile when Xtract.MaxBytes is 0.
+	// MaxBytes is the default per top-level-archive uncompressed-byte cap.
+	// Extras share the tighter leftover in that folder. 0 means unlimited.
+	// Used when Xtract.MaxBytes is 0.
 	MaxBytes uint64
-	// MaxFiles is the default maximum files, directories, and symlinks created
-	// per archive. 0 means unlimited. Copied onto each XFile when Xtract.MaxFiles is 0.
+	// MaxFiles is the default per top-level-archive file/dir/symlink cap.
+	// Extras share the tighter leftover in that folder. 0 means unlimited.
+	// Used when Xtract.MaxFiles is 0.
 	MaxFiles int
-	// MaxRatio is the default maximum bytesWritten / archiveFileSize per archive.
-	// 0 means unlimited. Copied onto each XFile when Xtract.MaxRatio is 0.
+	// MaxRatio is the default per-archive totalWritten / archive compressed size.
+	// Extras keep the parent size. 0 means unlimited. Used when Xtract.MaxRatio is 0.
 	MaxRatio float64
 	// MaxNested is the default maximum archives extracted from one source folder's
 	// extras pass. 0 or negative means unlimited. Used when Xtract.MaxNested is 0.

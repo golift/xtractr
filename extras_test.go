@@ -131,6 +131,91 @@ func TestQueueExtrasMaxDepthSkipsDeepArchives(t *testing.T) {
 	require.FileExists(t, filepath.Join(out, "near.txt"))
 }
 
+func TestQueueSiblingArchivesGetOwnMaxFiles(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	writeOuterZip(t, filepath.Join(dir, "one.zip"), map[string][]byte{"one.txt": []byte("1")}, nil)
+	writeOuterZip(t, filepath.Join(dir, "two.zip"), map[string][]byte{"two.txt": []byte("2")}, nil)
+
+	queue := xtractr.NewQueue(&xtractr.Config{
+		Logger:   xtractr.NoLogger(),
+		FileMode: 0o600,
+		DirMode:  0o700,
+	})
+	defer queue.Stop()
+
+	job := &xtractr.Xtract{
+		Filter:           xtractr.Filter{Path: dir},
+		TempFolder:       true,
+		DisableRecursion: true,
+		MaxFiles:         1,
+		CBChannel:        make(chan *xtractr.Response, 2),
+	}
+	_, err := queue.Extract(job)
+	require.NoError(t, err)
+
+	resp := waitExtract(t, job.CBChannel)
+	require.NoError(t, resp.Error)
+
+	out := firstExisting(t, resp.Output, dir+xtractr.DefaultSuffix)
+	require.FileExists(t, filepath.Join(out, "one.txt"))
+	require.FileExists(t, filepath.Join(out, "two.txt"))
+}
+
+func TestQueueArchiveBudgetSharesFilesWithExtras(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	src := filepath.Join(dir, "outer.zip")
+	writeOuterZip(t, src, map[string][]byte{
+		"inner.zip": tinyZipBytes(t, "hello.txt", "from-inner"),
+	}, nil)
+
+	queue := xtractr.NewQueue(&xtractr.Config{
+		Logger:   xtractr.NoLogger(),
+		FileMode: 0o600,
+		DirMode:  0o700,
+	})
+	defer queue.Stop()
+
+	job := &xtractr.Xtract{
+		Filter:     xtractr.Filter{Path: dir},
+		TempFolder: true,
+		MaxFiles:   1,
+		CBChannel:  make(chan *xtractr.Response, 2),
+	}
+	_, err := queue.Extract(job)
+	require.NoError(t, err)
+	require.ErrorIs(t, waitExtract(t, job.CBChannel).Error, xtractr.ErrMaxFiles)
+}
+
+func TestQueueArchiveBudgetSharesBytesWithExtras(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	src := filepath.Join(dir, "outer.zip")
+	inner := tinyZipBytes(t, "big.txt", string(make([]byte, 4096)))
+	writeOuterZip(t, src, map[string][]byte{"inner.zip": inner}, nil)
+
+	queue := xtractr.NewQueue(&xtractr.Config{
+		Logger:   xtractr.NoLogger(),
+		FileMode: 0o600,
+		DirMode:  0o700,
+	})
+	defer queue.Stop()
+
+	job := &xtractr.Xtract{
+		Filter:     xtractr.Filter{Path: dir},
+		TempFolder: true,
+		MaxBytes:   uint64(len(inner) + 64),
+		CBChannel:  make(chan *xtractr.Response, 2),
+	}
+	_, err := queue.Extract(job)
+	require.NoError(t, err)
+	require.ErrorIs(t, waitExtract(t, job.CBChannel).Error, xtractr.ErrMaxBytes)
+}
+
 func TestQueueExtrasMaxDepthOverrideExtractsDeep(t *testing.T) {
 	t.Parallel()
 

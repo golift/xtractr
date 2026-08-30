@@ -52,14 +52,20 @@ type Xtract struct {
 	// Contains info about the progress of the extraction.
 	// Shared by all archive file extractions that occur with this Xtract.
 	Updates chan Progress
-	// MaxBytes is the maximum uncompressed bytes written per archive.
-	// 0 means unlimited; when 0, Config.MaxBytes is used.
+	// MaxBytes is the maximum uncompressed bytes written for one top-level
+	// archive. Extras in that folder share the tighter leftover among those
+	// archives. 0 means unlimited; when 0, Config.MaxBytes is used.
+	// Standalone XFile remains per-archive.
 	MaxBytes uint64
-	// MaxFiles is the maximum files, directories, and symlinks created per archive.
-	// 0 means unlimited; when 0, Config.MaxFiles is used.
+	// MaxFiles is the maximum files, directories, and symlinks created for
+	// one top-level archive (extras share the tighter leftover). 0 means
+	// unlimited; when 0, Config.MaxFiles is used. Standalone XFile remains
+	// per-archive.
 	MaxFiles int
-	// MaxRatio is the maximum bytesWritten / archiveFileSize per archive.
-	// 0 means unlimited; when 0, Config.MaxRatio is used.
+	// MaxRatio is totalWritten / that archive's compressed size. Extras keep
+	// the parent size (child sizes are not added) and share the tighter
+	// leftover. 0 means unlimited; when 0, Config.MaxRatio is used.
+	// Standalone XFile remains per-archive.
 	MaxRatio float64
 	// MaxNested is the maximum archives extracted from one source folder's
 	// output (one extras pass). 0 means unlimited; when 0, Config.MaxNested
@@ -127,6 +133,10 @@ type Response struct {
 	Error error
 	// Copied from input data.
 	X *Xtract
+	// budgets are per top-level archive trackers in this folder.
+	budgets []*progressTracker
+	// budget is the extras tracker: the tighter leftover among budgets.
+	budget *progressTracker
 }
 
 // Extract is how external code begins an extraction process against a path.
@@ -352,6 +362,7 @@ func (x *Xtractr) decompressFiles(resp *Response) error {
 		Started:  resp.Started,
 		Output:   resp.Output,
 		Archives: resp.Extras,
+		budget:   x.extrasBudget(resp),
 	}
 	err = x.decompressArchives(nre)
 	// Combine the new Response with the existing response.
@@ -425,9 +436,17 @@ func (x *Xtractr) processArchive(filename string, resp *Response) (uint64, []str
 		log:           x.config.Logger,
 		Updates:       resp.X.Updates,
 		Progress:      resp.X.Progress,
+		prog:          resp.budget,
 	}
 
-	bytes, files, archives, err := ExtractFile(xFile)
+	if xFile.prog == nil {
+		xFile.prog = newSharedBudget()
+		resp.budgets = append(resp.budgets, xFile.prog)
+	}
+
+	wroteBefore := xFile.prog.wrote()
+	_, files, archives, err := ExtractFile(xFile)
+	bytes := xFile.prog.wrote() - wroteBefore
 
 	if len(xFile.SkipOnRecursion) > 0 {
 		resp.SkipOnRecursion = append(resp.SkipOnRecursion, xFile.SkipOnRecursion...)
@@ -454,6 +473,15 @@ func pick[T uint64 | int | float64](vals ...T) T { //nolint:ireturn // numeric u
 	}
 
 	return zero
+}
+
+func (x *Xtractr) extrasBudget(resp *Response) *progressTracker {
+	return tighterBudget(
+		resp.budgets,
+		pick(resp.X.MaxBytes, x.config.MaxBytes),
+		pick(resp.X.MaxFiles, x.config.MaxFiles),
+		pick(resp.X.MaxRatio, x.config.MaxRatio),
+	)
 }
 
 func (x *Xtractr) extrasFilter(resp *Response) Filter {
