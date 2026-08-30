@@ -211,11 +211,13 @@ type XFile struct {
 
 ### Input Safety
 
-Per-archive caps on `XFile`, `Xtract`, and `Config` (`0` means unlimited):
+Extraction caps (`0` means unlimited):
 
-- `MaxBytes` — uncompressed bytes written for one archive
-- `MaxFiles` — files, directories, and symlinks created for one archive
+- `MaxBytes` — uncompressed bytes written
+- `MaxFiles` — files, directories, and symlinks created
 - `MaxRatio` — `bytesWritten / archiveFileSize`
+
+On a queue job (`Xtract`/`Config`) these apply **per top-level archive**. Two sibling rips in one folder each get a full cap. Extras from that folder share the **tighter leftover** (smallest remaining byte/ratio room, then files). `MaxRatio` keeps the parent archive size, not child compressed sizes. Standalone `XFile` stays per-archive.
 
 Queue extras caps on `Xtract` and `Config` (`0` inherits `Config`, then unlimited):
 
@@ -225,7 +227,7 @@ Queue extras caps on `Xtract` and `Config` (`0` inherits `Config`, then unlimite
 `AllowSymlinks` is on `Filter`/`Xtract` and `XFile` (default false). When set, the initial search may include
 symlink-named archives. The extras pass never follows archive-member links.
 
-Exceeding `MaxBytes`/`MaxFiles`/`MaxRatio` returns those errors and stops the extract.
+Exceeding `MaxBytes`/`MaxFiles`/`MaxRatio` returns those errors and stops the extract (and extras if the tighter leftover is already used).
 Exceeding `MaxNested` returns `ErrMaxNested` and deletes that folder's extract output.
 Queue jobs inherit `Config` values when the `Xtract` field is `0`.
 

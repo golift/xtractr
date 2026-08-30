@@ -102,6 +102,79 @@ func TestExceedsRatioFailsClosedWithoutCompressedSize(t *testing.T) {
 	require.True(t, exceedsRatio(1, 0, 2), "any write without a denominator exceeds")
 }
 
+func TestNewProgressSharedKeepsCompressedAndCounts(t *testing.T) {
+	t.Parallel()
+
+	xFile := &XFile{FilePath: "child.zip"}
+	xFile.prog = newSharedBudget()
+	xFile.prog.Compressed = 99
+	xFile.prog.Wrote = 7
+	xFile.prog.Files = 2
+
+	xFile.newProgress(50, 12345, 3)
+	require.Equal(t, uint64(99), xFile.prog.Compressed)
+	require.Equal(t, uint64(7), xFile.prog.Wrote)
+	require.Equal(t, 2, xFile.prog.Files)
+	require.Equal(t, uint64(50), xFile.prog.Total)
+	require.Equal(t, 3, xFile.prog.Count)
+}
+
+func TestCheckClaimedLimitsAddsExistingSharedCounts(t *testing.T) {
+	t.Parallel()
+
+	xFile := &XFile{MaxFiles: 5, MaxBytes: 100, MaxRatio: 2}
+	xFile.prog = newSharedBudget()
+	xFile.prog.Files = 4
+	xFile.prog.Wrote = 90
+
+	require.ErrorIs(t, xFile.checkClaimedLimits(0, 2, 10), ErrMaxFiles)
+	require.ErrorIs(t, xFile.checkClaimedLimits(20, 0, 10), ErrMaxBytes)
+	require.ErrorIs(t, xFile.checkClaimedLimits(1, 0, 10), ErrMaxRatio)
+}
+
+func TestTighterBudgetPicksSmallerRemainingBytes(t *testing.T) {
+	t.Parallel()
+
+	loose := &progressTracker{Progress: Progress{Wrote: 10, Compressed: 100}}
+	tight := &progressTracker{Progress: Progress{Wrote: 80, Compressed: 100}}
+
+	got := tighterBudget([]*progressTracker{loose, tight}, 100, 0, 0)
+	require.Equal(t, tight, got)
+}
+
+func TestTighterBudgetPicksSmallerRemainingFilesWhenBytesTie(t *testing.T) {
+	t.Parallel()
+
+	loose := &progressTracker{Progress: Progress{Wrote: 10, Files: 1}}
+	tight := &progressTracker{Progress: Progress{Wrote: 10, Files: 8}}
+
+	got := tighterBudget([]*progressTracker{loose, tight}, 100, 10, 0)
+	require.Equal(t, tight, got)
+}
+
+func TestTighterBudgetPicksSmallerRatioRoom(t *testing.T) {
+	t.Parallel()
+
+	// Same wrote; smaller Compressed leaves less MaxRatio room.
+	loose := &progressTracker{Progress: Progress{Wrote: 10, Compressed: 100}}
+	tight := &progressTracker{Progress: Progress{Wrote: 10, Compressed: 20}}
+
+	got := tighterBudget([]*progressTracker{loose, tight}, 0, 0, 2)
+	require.Equal(t, tight, got)
+}
+
+func TestNewProgressSharedFillsCompressedOnce(t *testing.T) {
+	t.Parallel()
+
+	xFile := &XFile{FilePath: "parent.zip"}
+	xFile.prog = newSharedBudget()
+	xFile.newProgress(50, 40, 1)
+	require.Equal(t, uint64(40), xFile.prog.Compressed)
+
+	xFile.newProgress(10, 999, 1)
+	require.Equal(t, uint64(40), xFile.prog.Compressed)
+}
+
 func TestArchiveProgressFailsClosedWithoutCompressedSize(t *testing.T) {
 	t.Parallel()
 

@@ -40,6 +40,9 @@ type progressTracker struct {
 
 	mu        sync.Mutex
 	headerErr error // optional fast-fail from claimed archive headers
+	// shared is set so a top-level archive and that folder's extras reuse
+	// Wrote/Files and the parent Compressed size used for MaxRatio.
+	shared bool
 }
 
 // Percent returns the percent of bytes read or written.
@@ -105,13 +108,44 @@ func ArchiveProgress(every float64, progress chan Progress, reset, exit bool) { 
 }
 
 func (x *XFile) newProgress(total, compressed uint64, count int) *progressTracker {
+	if x.prog != nil && x.prog.shared {
+		x.bindSharedProgress(total, compressed, count)
+		return x.prog
+	}
+
 	tracker := &progressTracker{}
 	tracker.Total = total
 	tracker.Compressed = compressed
 	tracker.Count = count
 	tracker.XFile = x
-	tracker.send = func() {}
 	x.prog = tracker
+	x.bindProgressSend(tracker)
+
+	return tracker
+}
+
+// bindSharedProgress rebinds a shared tracker to this XFile. Wrote, Files,
+// and Compressed stay (Compressed is filled once from the first archive);
+// Read/Done/headerErr reset.
+func (x *XFile) bindSharedProgress(total, compressed uint64, count int) {
+	x.prog.mu.Lock()
+	x.prog.Total = total
+	x.prog.Count = count
+	x.prog.XFile = x
+	x.prog.Read = 0
+	x.prog.Done = false
+	x.prog.headerErr = nil
+
+	if x.prog.Compressed == 0 {
+		x.prog.Compressed = compressed
+	}
+
+	x.prog.mu.Unlock()
+	x.bindProgressSend(x.prog)
+}
+
+func (x *XFile) bindProgressSend(tracker *progressTracker) {
+	tracker.send = func() {}
 
 	if x.Progress != nil {
 		tracker.send = func() {
@@ -124,8 +158,6 @@ func (x *XFile) newProgress(total, compressed uint64, count int) *progressTracke
 			x.Updates <- tracker.snapshot()
 		}
 	}
-
-	return tracker
 }
 
 // newArchiveProgress is newProgress with Compressed set to the archive file
@@ -140,11 +172,11 @@ func (x *XFile) newArchiveProgress(total, compressed uint64, count int) *progres
 	}
 
 	tracker := x.newProgress(total, compressed, count)
-	tracker.headerErr = x.checkClaimedLimits(total, count, compressed)
+	tracker.headerErr = x.checkClaimedLimits(total, count, tracker.Compressed)
 
 	// Fail closed: MaxRatio with no denominator would otherwise be treated as
 	// unlimited (exceedsRatio used to return false when compressed == 0).
-	if tracker.headerErr == nil && x.MaxRatio > 0 && compressed == 0 {
+	if tracker.headerErr == nil && x.MaxRatio > 0 && tracker.Compressed == 0 {
 		tracker.headerErr = fmt.Errorf("%w: compressed size unavailable", ErrMaxRatio)
 	}
 
@@ -164,6 +196,10 @@ func (x *XFile) archiveProgress(total, compressed uint64, count int) (*progressT
 // current tracker. Used when ISO9660 follows a partial UDF attempt so the same
 // MaxBytes/MaxFiles budget is not reset.
 func (x *XFile) continueArchiveProgress(total, compressed uint64, count int) *progressTracker {
+	if x.prog != nil && x.prog.shared {
+		return x.newArchiveProgress(total, compressed, count)
+	}
+
 	var wrote uint64
 
 	var files int
@@ -343,6 +379,101 @@ func archiveFileSize(path string) uint64 {
 	return uint64(info.Size())
 }
 
+func (p *progressTracker) wrote() uint64 {
+	if p == nil {
+		return 0
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	return p.Wrote
+}
+
+func newSharedBudget() *progressTracker {
+	return &progressTracker{shared: true}
+}
+
+const (
+	unlimitedBytes = ^uint64(0)
+	unlimitedFiles = int(^uint(0) >> 1)
+)
+
+func remainingBytes(wrote, compressed, maxBytes uint64, maxRatio float64) uint64 {
+	room := unlimitedBytes
+
+	if maxBytes > 0 {
+		if wrote >= maxBytes {
+			return 0
+		}
+
+		room = maxBytes - wrote
+	}
+
+	if maxRatio > 0 {
+		if compressed == 0 {
+			if wrote > 0 {
+				return 0
+			}
+
+			return room
+		}
+
+		allowed := uint64(float64(compressed) * maxRatio)
+		if wrote >= allowed {
+			return 0
+		}
+
+		if left := allowed - wrote; left < room {
+			room = left
+		}
+	}
+
+	return room
+}
+
+func remainingFiles(files, maxFiles int) int {
+	if maxFiles <= 0 {
+		return unlimitedFiles
+	}
+
+	if files >= maxFiles {
+		return 0
+	}
+
+	return maxFiles - files
+}
+
+// tighterBudget returns the tracker with the least leftover room. Byte/ratio
+// leftovers decide first; file leftovers break ties. Nil entries are skipped.
+func tighterBudget(trackers []*progressTracker, maxBytes uint64, maxFiles int, maxRatio float64) *progressTracker {
+	var best *progressTracker
+
+	bestBytes := unlimitedBytes
+	bestFiles := unlimitedFiles
+
+	for _, tracker := range trackers {
+		if tracker == nil {
+			continue
+		}
+
+		tracker.mu.Lock()
+		wrote, files, compressed := tracker.Wrote, tracker.Files, tracker.Compressed
+		tracker.mu.Unlock()
+
+		bytesLeft := remainingBytes(wrote, compressed, maxBytes, maxRatio)
+		filesLeft := remainingFiles(files, maxFiles)
+
+		if best == nil || bytesLeft < bestBytes || (bytesLeft == bestBytes && filesLeft < bestFiles) {
+			best = tracker
+			bestBytes = bytesLeft
+			bestFiles = filesLeft
+		}
+	}
+
+	return best
+}
+
 func archiveFileSizes(paths ...string) uint64 {
 	var total uint64
 
@@ -357,15 +488,26 @@ func archiveFileSizes(paths ...string) uint64 {
 // configured caps. Headers can understate, so this never replaces runtime
 // checks in Write / addFileLocked.
 func (x *XFile) checkClaimedLimits(claimedBytes uint64, claimedFiles int, compressed uint64) error {
-	if x.MaxBytes > 0 && claimedBytes > x.MaxBytes {
+	var (
+		wrote uint64
+		files int
+	)
+
+	if x.prog != nil {
+		x.prog.mu.Lock()
+		wrote, files = x.prog.Wrote, x.prog.Files
+		x.prog.mu.Unlock()
+	}
+
+	if x.MaxBytes > 0 && wrote+claimedBytes > x.MaxBytes {
 		return ErrMaxBytes
 	}
 
-	if x.MaxFiles > 0 && claimedFiles > x.MaxFiles {
+	if x.MaxFiles > 0 && files+claimedFiles > x.MaxFiles {
 		return ErrMaxFiles
 	}
 
-	if claimedBytes > 0 && exceedsRatio(claimedBytes, compressed, x.MaxRatio) {
+	if claimedBytes > 0 && exceedsRatio(wrote+claimedBytes, compressed, x.MaxRatio) {
 		return ErrMaxRatio
 	}
 
