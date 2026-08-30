@@ -62,7 +62,7 @@ func splitFLAC(xFile *XFile, audioPath string, cue *CueSheet, timestamps []cueTi
 	if len(pictures) > 0 {
 		picturePaths, pictureBytes, err = writePicturesToFiles(xFile, xFile.OutputDir, pictures, xFile.FileMode)
 		switch {
-		case isLimitError(err):
+		case IsLimitError(err):
 			return 0, nil, err
 		case err != nil:
 			xFile.Debugf("Error writing album art files: %s", err)

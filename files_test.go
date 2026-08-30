@@ -288,6 +288,19 @@ func TestAllExcept(t *testing.T) {
 	assert.NotContains(t, exceptCue, ".cue.txt")
 }
 
+func TestIsLimitError(t *testing.T) {
+	t.Parallel()
+
+	assert.False(t, xtractr.IsLimitError(nil))
+	assert.False(t, xtractr.IsLimitError(errors.New("other error")))
+	assert.True(t, xtractr.IsLimitError(xtractr.ErrMaxBytes))
+	assert.True(t, xtractr.IsLimitError(xtractr.ErrMaxFiles))
+	assert.True(t, xtractr.IsLimitError(xtractr.ErrMaxRatio))
+	assert.True(t, xtractr.IsLimitError(xtractr.ErrMaxNested))
+	assert.True(t, xtractr.IsLimitError(xtractr.ErrArchiveSymlink))
+	assert.True(t, xtractr.IsLimitError(fmt.Errorf("wrap: %w", xtractr.ErrMaxBytes)))
+}
+
 func TestIsErrNameTooLong(t *testing.T) {
 	t.Parallel()
 

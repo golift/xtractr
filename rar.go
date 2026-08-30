@@ -31,7 +31,7 @@ func ExtractRAR(xFile *XFile) (size uint64, filesList, archiveList []string, err
 		switch {
 		case err == nil:
 			return size, files, archives, nil
-		case isLimitError(err):
+		case IsLimitError(err):
 			return size, files, archives, err
 		case strings.Contains(err.Error(), "incorrect password"):
 			// https://github.com/nwaples/rardecode/issues/28

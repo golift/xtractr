@@ -57,7 +57,9 @@ var (
 	ErrUnsupportedRPMArchiveFmt  = errors.New("unsupported rpm archive format")
 )
 
-func isLimitError(err error) bool {
+// IsLimitError reports whether err is a configured extract cap: MaxBytes,
+// MaxFiles, MaxRatio, MaxNested, or a symlink used as an archive.
+func IsLimitError(err error) bool {
 	return errors.Is(err, ErrMaxBytes) || errors.Is(err, ErrMaxFiles) ||
 		errors.Is(err, ErrMaxRatio) || errors.Is(err, ErrMaxNested) ||
 		errors.Is(err, ErrArchiveSymlink)
