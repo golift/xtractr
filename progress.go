@@ -410,26 +410,32 @@ func remainingBytes(wrote, compressed, maxBytes uint64, maxRatio float64) uint64
 		room = maxBytes - wrote
 	}
 
-	if maxRatio > 0 {
-		if compressed == 0 {
-			if wrote > 0 {
-				return 0
-			}
-
-			return room
-		}
-
-		allowed := uint64(float64(compressed) * maxRatio)
-		if wrote >= allowed {
-			return 0
-		}
-
-		if left := allowed - wrote; left < room {
-			room = left
-		}
+	if left := remainingRatio(wrote, compressed, maxRatio); left < room {
+		return left
 	}
 
 	return room
+}
+
+func remainingRatio(wrote, compressed uint64, maxRatio float64) uint64 {
+	if maxRatio <= 0 {
+		return unlimitedBytes
+	}
+
+	if compressed == 0 {
+		if wrote > 0 {
+			return 0
+		}
+
+		return unlimitedBytes
+	}
+
+	allowed := uint64(float64(compressed) * maxRatio)
+	if wrote >= allowed {
+		return 0
+	}
+
+	return allowed - wrote
 }
 
 func remainingFiles(files, maxFiles int) int {
@@ -446,6 +452,7 @@ func remainingFiles(files, maxFiles int) int {
 
 // tighterBudget returns the tracker with the least leftover room. Byte/ratio
 // leftovers decide first; file leftovers break ties. Nil entries are skipped.
+// We get here when one folder has two or more archives with "extras" (child archives) in either or both of them.
 func tighterBudget(trackers []*progressTracker, maxBytes uint64, maxFiles int, maxRatio float64) *progressTracker {
 	var best *progressTracker
 

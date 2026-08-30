@@ -445,8 +445,8 @@ func (x *Xtractr) processArchive(filename string, resp *Response) (uint64, []str
 	}
 
 	wroteBefore := xFile.prog.wrote()
-	bytes, files, archives, err := ExtractFile(xFile)
-	bytes = xFile.prog.wrote() - wroteBefore
+	_, files, archives, err := ExtractFile(xFile)
+	bytes := xFile.prog.wrote() - wroteBefore
 
 	if len(xFile.SkipOnRecursion) > 0 {
 		resp.SkipOnRecursion = append(resp.SkipOnRecursion, xFile.SkipOnRecursion...)
