@@ -264,6 +264,15 @@ func TestFindCompressedFilesSkipsDotFiles(t *testing.T) {
 	}
 }
 
+func TestDifference(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, []string{"b", "c"}, xtractr.Difference([]string{"a", "d"}, []string{"a", "b", "c"}))
+	assert.Empty(t, xtractr.Difference([]string{"a", "b"}, []string{"a", "b"}))
+	assert.Equal(t, []string{"a", "a"}, xtractr.Difference(nil, []string{"a", "a"}))
+	assert.Empty(t, xtractr.Difference([]string{"a"}, nil))
+}
+
 func TestAllExcept(t *testing.T) {
 	t.Parallel()
 
