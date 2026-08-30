@@ -163,6 +163,32 @@ func TestTighterBudgetPicksSmallerRatioRoom(t *testing.T) {
 	require.Equal(t, tight, got)
 }
 
+func TestSharedSnapshotIsPerArchive(t *testing.T) {
+	t.Parallel()
+
+	xFile := &XFile{FilePath: "child.zip"}
+	xFile.prog = newSharedBudget()
+	xFile.prog.Compressed = 99
+	xFile.prog.Wrote = 700
+	xFile.prog.Files = 5
+
+	xFile.newProgress(50, 20, 3)
+	xFile.prog.Wrote += 10
+	xFile.prog.Files++
+	xFile.prog.Read = 4
+
+	snap := xFile.prog.snapshot()
+	require.Equal(t, uint64(10), snap.Wrote)
+	require.Equal(t, 1, snap.Files)
+	require.Equal(t, uint64(20), snap.Compressed)
+	require.Equal(t, uint64(50), snap.Total)
+	require.InDelta(t, 20, snap.Percent(), 0.01)
+
+	require.Equal(t, uint64(710), xFile.prog.Wrote, "cap Wrote stays cumulative")
+	require.Equal(t, 6, xFile.prog.Files)
+	require.Equal(t, uint64(99), xFile.prog.Compressed, "MaxRatio keeps parent size")
+}
+
 func TestNewProgressSharedFillsCompressedOnce(t *testing.T) {
 	t.Parallel()
 

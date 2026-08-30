@@ -43,6 +43,13 @@ type progressTracker struct {
 	// shared is set so a top-level archive and that folder's extras reuse
 	// Wrote/Files and the parent Compressed size used for MaxRatio.
 	shared bool
+	// snap* are this archive's progress baseline. Limits still use the
+	// cumulative Wrote/Files/Compressed on Progress; snapshot() subtracts
+	// these so callbacks stay per-archive (extras Percent must not be
+	// parent Wrote / child Total).
+	snapWrote      uint64
+	snapFiles      int
+	snapCompressed uint64
 }
 
 // Percent returns the percent of bytes read or written.
@@ -125,8 +132,9 @@ func (x *XFile) newProgress(total, compressed uint64, count int) *progressTracke
 }
 
 // bindSharedProgress rebinds a shared tracker to this XFile. Wrote, Files,
-// and Compressed stay (Compressed is filled once from the first archive);
-// Read/Done/headerErr reset.
+// and Compressed stay for the cap (Compressed is filled once from the first
+// archive). Read/Done/headerErr reset. snap* mark this archive so snapshot()
+// reports only its progress.
 func (x *XFile) bindSharedProgress(total, compressed uint64, count int) {
 	x.prog.mu.Lock()
 	x.prog.Total = total
@@ -135,6 +143,9 @@ func (x *XFile) bindSharedProgress(total, compressed uint64, count int) {
 	x.prog.Read = 0
 	x.prog.Done = false
 	x.prog.headerErr = nil
+	x.prog.snapWrote = x.prog.Wrote
+	x.prog.snapFiles = x.prog.Files
+	x.prog.snapCompressed = compressed
 
 	if x.prog.Compressed == 0 {
 		x.prog.Compressed = compressed
@@ -219,11 +230,33 @@ func (x *XFile) continueArchiveProgress(total, compressed uint64, count int) *pr
 }
 
 // snapshot returns a copy of the Progress data, safe to send to callbacks/channels.
+// Shared trackers report this archive only; cap counters stay cumulative.
 func (p *progressTracker) snapshot() Progress {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	return p.Progress
+	out := p.Progress
+	if !p.shared {
+		return out
+	}
+
+	if out.Wrote >= p.snapWrote {
+		out.Wrote -= p.snapWrote
+	} else {
+		out.Wrote = 0
+	}
+
+	if out.Files >= p.snapFiles {
+		out.Files -= p.snapFiles
+	} else {
+		out.Files = 0
+	}
+
+	if p.snapCompressed > 0 {
+		out.Compressed = p.snapCompressed
+	}
+
+	return out
 }
 
 // safeSend attempts to send a progress update without blocking.
