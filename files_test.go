@@ -120,6 +120,27 @@ func TestFindCompressedFiles(t *testing.T) {
 	assert.Equal(t, 8, total, "When skipping the four ISOs, we have 8 archives remaining.")
 }
 
+func TestFindCompressedFilesExcludesDirectArchivePath(t *testing.T) {
+	t.Parallel()
+
+	base := createTestPaths(t)
+	iso := filepath.Join(base, "path0", "file.iso")
+
+	// An archive handed in directly is still returned when nothing excludes it.
+	paths := xtractr.FindCompressedFiles(xtractr.Filter{Path: iso})
+	assert.Len(t, paths, 1, "An archive passed in directly shall be returned when it is not excluded.")
+
+	// ExcludeSuffix must hold whether the archive is walked to or passed in as the search root.
+	paths = xtractr.FindCompressedFiles(xtractr.Filter{Path: iso, ExcludeSuffix: []string{".iso"}})
+	assert.Empty(t, paths, "An excluded suffix shall be honored when the archive is passed in directly.")
+
+	// The subject is lowercased before the test, so the archive name's case does not matter.
+	upper := filepath.Join(base, "path0", "path1", "path2", "path3", "file2.RAR")
+
+	paths = xtractr.FindCompressedFiles(xtractr.Filter{Path: upper, ExcludeSuffix: []string{".rar"}})
+	assert.Empty(t, paths, "An excluded suffix shall be matched without regard to the archive name's case.")
+}
+
 func TestFindCompressedFilesSkipsSymlinks(t *testing.T) {
 	t.Parallel()
 
