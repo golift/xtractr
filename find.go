@@ -85,6 +85,10 @@ func findCompressedFiles(path string, filter *Filter, depth int) ArchiveList {
 	}
 
 	if !info.IsDir() && IsArchiveFile(path) {
+		if filter.ExcludeSuffix.Has(strings.ToLower(filepath.Base(path))) {
+			return nil // excluded suffix, even when the archive is passed in directly.
+		}
+
 		if skipSymlinkArchivePath(filter, path) {
 			return nil
 		}
