@@ -85,19 +85,7 @@ func findCompressedFiles(path string, filter *Filter, depth int) ArchiveList {
 	}
 
 	if !info.IsDir() && IsArchiveFile(path) {
-		if filter.ExcludeSuffix.Has(strings.ToLower(filepath.Base(path))) {
-			return nil // excluded suffix, even when the archive is passed in directly.
-		}
-
-		if skipSymlinkArchivePath(filter, path) {
-			return nil
-		}
-
-		if linkInfo, _ := os.Lstat(path); !acceptArchive(filter, path, linkInfo) {
-			return nil
-		}
-
-		return ArchiveList{path: {path}} // passed in an archive file; send it back out.
+		return findDirectArchive(path, filter)
 	}
 
 	fileList := getFilteredFileList(path, dir)
@@ -106,6 +94,23 @@ func findCompressedFiles(path string, filter *Filter, depth int) ArchiveList {
 	}
 
 	return getCompressedFiles(path, filter, fileList, depth)
+}
+
+// findDirectArchive applies the filter to an archive file passed in as the search path.
+func findDirectArchive(path string, filter *Filter) ArchiveList {
+	if filter.ExcludeSuffix.Has(strings.ToLower(filepath.Base(path))) {
+		return nil // excluded suffix, even when the archive is passed in directly.
+	}
+
+	if skipSymlinkArchivePath(filter, path) {
+		return nil
+	}
+
+	if linkInfo, _ := os.Lstat(path); !acceptArchive(filter, path, linkInfo) {
+		return nil
+	}
+
+	return ArchiveList{path: {path}} // passed in an archive file; send it back out.
 }
 
 // getFilteredFileList reads the directory and returns a list of readable files that are not dot files.
