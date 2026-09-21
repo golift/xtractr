@@ -208,10 +208,11 @@ func moveFiles( //nolint:cyclop,funlen
 		}
 	}
 
-	// Only remove the temp source when every file moved. On a move or Lstat
-	// error (keepErr != nil) the destination holds a partial result, so the
-	// source must survive for recovery. Refusals are not errors; those files
-	// stay in the temp dir but the destination is otherwise complete.
+	// Remove the temp source when the move completed without error. On a move
+	// or Lstat error (keepErr != nil) the destination holds a partial result,
+	// so the source must survive for recovery. Refusals are not errors: the
+	// occupying dest is kept, and the extracted copies are deleted with the
+	// temp dir (the destination is otherwise complete).
 	if keepErr == nil {
 		info, statErr := os.Stat(fromPath)
 		if statErr == nil && info.IsDir() {
