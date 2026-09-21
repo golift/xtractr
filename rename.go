@@ -315,6 +315,14 @@ func knownChildren(fromPath string, known []string) ([]string, int) {
 
 		_, err := os.Lstat(child)
 		if err != nil {
+			// An absolute path that already exists outside this directory is not
+			// a tar header. Tar headers are written under fromPath and are not
+			// present at the absolute name they spell. Leave that outside file
+			// alone. A header whose file is missing under fromPath still counts.
+			if foreignPath(fromPath, path) {
+				continue
+			}
+
 			missing++
 
 			continue
@@ -344,6 +352,20 @@ func knownChild(fromPath, path string) (string, bool) {
 	top, _, _ := strings.Cut(rel, string(filepath.Separator))
 
 	return filepath.Join(fromPath, top), true
+}
+
+// foreignPath reports whether path is an existing file outside fromPath.
+// A tar header with an absolute name is not present at that path; the bytes
+// were written under fromPath.
+func foreignPath(fromPath, path string) bool {
+	path = filepath.Clean(filepath.FromSlash(path))
+	if path == "" || !filepath.IsAbs(path) || pathWithin(fromPath, path) {
+		return false
+	}
+
+	_, err := os.Lstat(path)
+
+	return err == nil
 }
 
 // resolveExtractPaths makes every extract path absolute under base.
