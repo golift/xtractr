@@ -1,6 +1,8 @@
 package xtractr_test
 
 import (
+	"archive/zip"
+	"bytes"
 	"log"
 	"os"
 	"path/filepath"
@@ -336,10 +338,116 @@ func TestFinalDestsTempFolderMultiFolder(t *testing.T) {
 	assert.DirExists(t, done.FinalDests[dir])
 }
 
+// Nested archives extract into the same temp folder as the outer archive.
+// DeleteOrig removes the nested archive afterwards, so that path is still in
+// NewFiles when the folder is moved. An empty nested archive used to look
+// like a vanished extract and skip the cleanup.
+func TestDeleteOrigNestedArchiveSameOutput(t *testing.T) {
+	t.Parallel()
+
+	t.Run("empty nested", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		writeZip(t, filepath.Join(dir, "outer.zip"), map[string][]byte{
+			"empty.zip": zipBytes(t, nil),
+		})
+
+		done := extractDir(t, dir, true)
+		require.NoError(t, done.Error)
+		require.NoDirExists(t, dir+xtractr.DefaultSuffix)
+		require.NoFileExists(t, filepath.Join(dir, "empty.zip"))
+		require.NoFileExists(t, filepath.Join(dir, "outer.zip"))
+	})
+
+	t.Run("nested payload beside outer payload", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		writeZip(t, filepath.Join(dir, "outer.zip"), map[string][]byte{
+			"payload.txt": []byte("outer"),
+			"inner.zip": zipBytes(t, map[string][]byte{
+				"extra.txt": []byte("inner"),
+			}),
+		})
+
+		done := extractDir(t, dir, true)
+		require.NoError(t, done.Error)
+		require.NoDirExists(t, dir+xtractr.DefaultSuffix)
+
+		outer, err := os.ReadFile(filepath.Join(dir, "payload.txt"))
+		require.NoError(t, err)
+		assert.Equal(t, "outer", string(outer))
+
+		inner, err := os.ReadFile(filepath.Join(dir, "extra.txt"))
+		require.NoError(t, err)
+		assert.Equal(t, "inner", string(inner))
+		require.NoFileExists(t, filepath.Join(dir, "inner.zip"))
+		require.NoFileExists(t, filepath.Join(dir, "outer.zip"))
+	})
+}
+
+func extractDir(t *testing.T, dir string, deleteOrig bool) *xtractr.Response {
+	t.Helper()
+
+	queue := xtractr.NewQueue(&xtractr.Config{Logger: &testLogger{t: t}})
+	defer queue.Stop()
+
+	item := &xtractr.Xtract{
+		Name:       "nested",
+		Filter:     xtractr.Filter{Path: dir},
+		TempFolder: false,
+		DeleteOrig: deleteOrig,
+		CBChannel:  make(chan *xtractr.Response),
+	}
+
+	_, err := queue.Extract(item)
+	require.NoError(t, err)
+
+	return waitFinalResponse(t, item.CBChannel)
+}
+
+func writeZip(t *testing.T, path string, files map[string][]byte) {
+	t.Helper()
+
+	file, err := os.Create(path)
+	require.NoError(t, err)
+
+	writer := zip.NewWriter(file)
+
+	for name, body := range files {
+		entry, entryErr := writer.Create(name)
+		require.NoError(t, entryErr)
+		_, entryErr = entry.Write(body)
+		require.NoError(t, entryErr)
+	}
+
+	require.NoError(t, writer.Close())
+	require.NoError(t, file.Close())
+}
+
+func zipBytes(t *testing.T, files map[string][]byte) []byte {
+	t.Helper()
+
+	var buf bytes.Buffer
+
+	writer := zip.NewWriter(&buf)
+
+	for name, body := range files {
+		entry, err := writer.Create(name)
+		require.NoError(t, err)
+		_, err = entry.Write(body)
+		require.NoError(t, err)
+	}
+
+	require.NoError(t, writer.Close())
+
+	return buf.Bytes()
+}
+
 func waitFinalResponse(t *testing.T, chResponse chan *xtractr.Response) *xtractr.Response {
 	t.Helper()
 
-	// Multi-folder move-back sleeps fsSyncDelay (10s) per folder.
 	timeout := time.NewTimer(60 * time.Second)
 	defer timeout.Stop()
 

@@ -106,7 +106,14 @@ func (x *Xtractr) MoveFiles(fromPath, toPath string, overwrite bool) ([]string, 
 // Unlike MoveFiles, the result includes destinations that were already occupied.
 // This is a helper method and only exposed for convenience. You do not have to call this.
 func (x *Xtractr) RenameFiles(fromPath, toPath string, overwrite bool) (Renamed, error) {
-	return moveFiles(x.config, x.config.DirMode, fromPath, toPath, overwrite, x.config.Suffix)
+	return x.renameExtracted(fromPath, toPath, overwrite, nil)
+}
+
+// renameExtracted is RenameFiles plus the extract write list. FUSE filesystems
+// (e.g. Unraid shfs) can return an empty ReadDir after a successful write;
+// Lstat of those known paths still works, so the move does not depend on listing.
+func (x *Xtractr) renameExtracted(fromPath, toPath string, overwrite bool, known []string) (Renamed, error) {
+	return moveFilesKnown(x.config, x.config.DirMode, fromPath, toPath, overwrite, x.config.Suffix, known)
 }
 
 // bindMoveFiles wires ExtractFile to this job's logger and DirMode.
@@ -119,19 +126,30 @@ func (x *XFile) bindMoveFiles() {
 	}
 
 	x.moveFiles = func(fromPath, toPath string, overwrite bool) ([]string, error) {
-		renamed, err := moveFiles(x.log, x.DirMode, fromPath, toPath, overwrite, x.Suffix)
+		renamed, err := moveFilesKnown(x.log, x.DirMode, fromPath, toPath, overwrite, x.Suffix, x.moveKnown)
 		x.refused = append(x.refused, renamed.Refused...)
 
 		return renamed.NewFiles, err
 	}
 }
 
-func moveFiles( //nolint:cyclop,funlen
+func moveFiles(
 	log Logger,
 	dirMode os.FileMode,
 	fromPath, toPath string,
 	overwrite bool,
 	suffix string,
+) (Renamed, error) {
+	return moveFilesKnown(log, dirMode, fromPath, toPath, overwrite, suffix, nil)
+}
+
+func moveFilesKnown( //nolint:cyclop,funlen
+	log Logger,
+	dirMode os.FileMode,
+	fromPath, toPath string,
+	overwrite bool,
+	suffix string,
+	known []string,
 ) (Renamed, error) {
 	if log == nil {
 		log = NoLogger()
@@ -147,9 +165,20 @@ func moveFiles( //nolint:cyclop,funlen
 		keepErr  error
 	)
 
-	files, err := listFiles(fromPath)
+	listed, err := listFiles(fromPath)
 	if err != nil {
 		return Renamed{}, err
+	}
+
+	files, err := moveSources(fromPath, listed, known)
+	if err != nil {
+		log.Printf("Error: Moving Temp Files: %v; leaving %s in place", err, fromPath)
+
+		return Renamed{}, err
+	}
+
+	if added := len(files) - len(listed); added > 0 {
+		log.Printf("Warning: Moving Temp Files: %s listing missed %d extract path(s)", fromPath, added)
 	}
 
 	// If the "to path" is an existing archive file, remove the suffix to make a directory.
@@ -213,6 +242,9 @@ func moveFiles( //nolint:cyclop,funlen
 	// so the source must survive for recovery. Refusals are not errors: the
 	// occupying dest is kept, and the extracted copies are deleted with the
 	// temp dir (the destination is otherwise complete).
+	//
+	// If we wrote files but neither ReadDir nor Lstat could see them (err from
+	// moveSources), we never reach here: the temp dir is left in place.
 	if keepErr == nil {
 		info, statErr := os.Stat(fromPath)
 		if statErr == nil && info.IsDir() {
@@ -233,6 +265,189 @@ func moveFiles( //nolint:cyclop,funlen
 	}
 
 	return Renamed{NewFiles: newFiles, Refused: refused, Dest: dest}, keepErr
+}
+
+// moveSources unions a ReadDir listing with immediate children derived from
+// the extract write list. FUSE layers can omit entries from ReadDir while
+// Lstat of a known path still succeeds. Nested archives extract into this
+// same folder, so the write list is every level's files. If any of those
+// paths should still be here and Lstat cannot see it, return
+// errExtractListingEmpty so the caller leaves the temp dir in place instead
+// of moving the visible sibling and deleting the rest.
+//
+// Directory-only members are absent from most write lists (rar skips them).
+// An empty listing of a folder that contains only those directories still
+// deletes the tree; the guard covers tracked files.
+func moveSources(fromPath string, listed, known []string) ([]string, error) {
+	extra, missing := knownChildren(fromPath, known)
+	if missing > 0 {
+		return nil, fmt.Errorf("%w: %s", errExtractListingEmpty, fromPath)
+	}
+
+	return mergeUnique(listed, extra), nil
+}
+
+// knownChildren returns unique immediate children of fromPath that appear in
+// known extract paths and currently exist (Lstat). Nested extract paths
+// collapse to their top-level child, matching listFiles. missing counts
+// children that were named and are not on disk. Relative names and absolute
+// tar header names are resolved against fromPath the same way XFile.clean
+// writes them. Callers that extracted into a different directory (squash's
+// child, or a nested folder under a parent temp dir) must pass paths already
+// resolved against that directory.
+func knownChildren(fromPath string, known []string) ([]string, int) {
+	fromPath = filepath.Clean(fromPath)
+	seen := make(map[string]struct{}, len(known))
+	out := make([]string, 0, len(known))
+	missing := 0
+
+	for _, path := range known {
+		child, ok := knownChild(fromPath, path)
+		if !ok {
+			continue
+		}
+
+		if _, dup := seen[child]; dup {
+			continue
+		}
+
+		seen[child] = struct{}{}
+
+		_, err := os.Lstat(child)
+		if err != nil {
+			// An absolute path that already exists outside this directory is not
+			// a tar header. Tar headers are written under fromPath and are not
+			// present at the absolute name they spell. Leave that outside file
+			// alone. A header whose file is missing under fromPath still counts.
+			if foreignPath(fromPath, path) {
+				continue
+			}
+
+			missing++
+
+			continue
+		}
+
+		out = append(out, child)
+	}
+
+	return out, missing
+}
+
+func knownChild(fromPath, path string) (string, bool) {
+	if path == "" {
+		return "", false
+	}
+
+	path = resolveExtractPath(fromPath, path)
+	if !pathWithin(fromPath, path) || path == fromPath {
+		return "", false
+	}
+
+	rel, err := filepath.Rel(fromPath, path)
+	if err != nil {
+		return "", false
+	}
+
+	top, _, _ := strings.Cut(rel, string(filepath.Separator))
+
+	return filepath.Join(fromPath, top), true
+}
+
+// foreignPath reports whether path is an existing file outside fromPath.
+// A tar header with an absolute name is not present at that path; the bytes
+// were written under fromPath.
+func foreignPath(fromPath, path string) bool {
+	path = filepath.Clean(filepath.FromSlash(path))
+	if path == "" || !filepath.IsAbs(path) || pathWithin(fromPath, path) {
+		return false
+	}
+
+	_, err := os.Lstat(path)
+
+	return err == nil
+}
+
+// resolveExtractPaths makes every extract path absolute under base.
+func resolveExtractPaths(base string, paths []string) []string {
+	if len(paths) == 0 {
+		return paths
+	}
+
+	out := make([]string, len(paths))
+	for idx, path := range paths {
+		out[idx] = resolveExtractPath(base, path)
+	}
+
+	return out
+}
+
+// resolveExtractPath matches XFile.clean. An absolute path already inside base
+// is the on-disk path (zip, rar, 7z). Any other absolute path is a tar header
+// name: the file was written under base, and the write list still holds the
+// original name. Joining that name onto base is what clean does.
+func resolveExtractPath(base, path string) string {
+	if path == "" {
+		return ""
+	}
+
+	path = filepath.Clean(filepath.FromSlash(path))
+	if filepath.IsAbs(path) && pathWithin(base, path) {
+		return path
+	}
+
+	return filepath.Clean(filepath.Join(base, path))
+}
+
+// withoutPaths returns known without any cleaned path that appears in skip.
+func withoutPaths(known, skip []string) []string {
+	if len(known) == 0 || len(skip) == 0 {
+		return known
+	}
+
+	drop := make(map[string]struct{}, len(skip))
+	for _, path := range skip {
+		if path == "" {
+			continue
+		}
+
+		drop[filepath.Clean(path)] = struct{}{}
+	}
+
+	out := make([]string, 0, len(known))
+
+	for _, path := range known {
+		if _, ok := drop[filepath.Clean(path)]; ok {
+			continue
+		}
+
+		out = append(out, path)
+	}
+
+	return out
+}
+
+func mergeUnique(listed, extra []string) []string {
+	if len(extra) == 0 {
+		return listed
+	}
+
+	seen := make(map[string]struct{}, len(listed)+len(extra))
+	out := make([]string, 0, len(listed)+len(extra))
+
+	for _, group := range [][]string{listed, extra} {
+		for _, path := range group {
+			path = filepath.Clean(path)
+			if _, dup := seen[path]; dup {
+				continue
+			}
+
+			seen[path] = struct{}{}
+			out = append(out, path)
+		}
+	}
+
+	return out
 }
 
 // DeleteFiles obliterates things and logs. Use with caution.
