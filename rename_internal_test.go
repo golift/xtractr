@@ -1,6 +1,7 @@
 package xtractr
 
 import (
+	"archive/tar"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -562,6 +563,101 @@ func TestMoveFilesKnownMovesWriteList(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []byte("payload"), content)
 	require.NoDirExists(t, fromDir)
+}
+
+func TestMoveSourcesRelativeName(t *testing.T) {
+	t.Parallel()
+
+	fromDir := t.TempDir()
+	hidden := filepath.Join(fromDir, "movie.mkv")
+	require.NoError(t, os.WriteFile(hidden, []byte("payload"), 0o600))
+
+	got, err := moveSources(fromDir, nil, []string{"movie.mkv"})
+	require.NoError(t, err)
+	assert.Equal(t, []string{hidden}, got)
+}
+
+func TestMoveSourcesPartialMissErrors(t *testing.T) {
+	t.Parallel()
+
+	fromDir := t.TempDir()
+	present := filepath.Join(fromDir, "movie.mkv")
+	require.NoError(t, os.WriteFile(present, []byte("payload"), 0o600))
+
+	_, err := moveSources(fromDir, []string{present}, []string{present, filepath.Join(fromDir, "gone.mkv")})
+	require.ErrorIs(t, err, errExtractListingEmpty)
+}
+
+func TestMoveFilesKnownPartialMissLeavesTemp(t *testing.T) {
+	t.Parallel()
+
+	fromDir := t.TempDir()
+	toDir := t.TempDir()
+	src := filepath.Join(fromDir, "movie.mkv")
+	require.NoError(t, os.WriteFile(src, []byte("payload"), 0o600))
+
+	_, err := moveFilesKnown(NoLogger(), 0o755, fromDir, toDir, false, DefaultSuffix,
+		[]string{src, filepath.Join(fromDir, "other.mkv")})
+	require.ErrorIs(t, err, errExtractListingEmpty)
+	require.DirExists(t, fromDir)
+	require.FileExists(t, src)
+	require.NoFileExists(t, filepath.Join(toDir, "movie.mkv"))
+}
+
+func TestWithoutPathsDropsDeletedNestedArchive(t *testing.T) {
+	t.Parallel()
+
+	fromDir := t.TempDir()
+	payload := filepath.Join(fromDir, "payload.txt")
+	nested := filepath.Join(fromDir, "inner.zip")
+
+	require.NoError(t, os.WriteFile(payload, []byte("kept"), 0o600))
+
+	toDir := t.TempDir()
+	known := withoutPaths(resolveExtractPaths(fromDir, []string{payload, "inner.zip"}), []string{nested})
+	got, err := moveFilesKnown(NoLogger(), 0o755, fromDir, toDir, false, DefaultSuffix, known)
+	require.NoError(t, err)
+	require.Equal(t, []string{filepath.Join(toDir, "payload.txt")}, got.NewFiles)
+	require.NoDirExists(t, fromDir)
+}
+
+func TestTarWriteListSurvivesEmptyListing(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	tarPath := filepath.Join(dir, "movie.tar")
+	writeTarFile(t, tarPath, "dir/movie.mkv", []byte("payload"))
+
+	out := filepath.Join(dir, "out")
+	_, files, err := ExtractTar(&XFile{
+		FilePath:  tarPath,
+		OutputDir: out,
+		FileMode:  0o600,
+		DirMode:   0o750,
+	})
+	require.NoError(t, err)
+
+	got, err := moveSources(out, nil, files)
+	require.NoError(t, err)
+	assert.Equal(t, []string{filepath.Join(out, "dir")}, got)
+}
+
+func writeTarFile(t *testing.T, path, name string, body []byte) {
+	t.Helper()
+
+	file, err := os.Create(path)
+	require.NoError(t, err)
+
+	writer := tar.NewWriter(file)
+	require.NoError(t, writer.WriteHeader(&tar.Header{
+		Name: name,
+		Mode: 0o600,
+		Size: int64(len(body)),
+	}))
+	_, err = writer.Write(body)
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+	require.NoError(t, file.Close())
 }
 
 func TestMoveFilesEmptySourceStillDeletes(t *testing.T) {

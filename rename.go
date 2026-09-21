@@ -269,12 +269,18 @@ func moveFilesKnown( //nolint:cyclop,funlen
 
 // moveSources unions a ReadDir listing with immediate children derived from
 // the extract write list. FUSE layers can omit entries from ReadDir while
-// Lstat of a known path still succeeds. If we were given a write list and
-// still cannot see any of those paths, return errExtractListingEmpty so the
-// caller leaves the temp dir in place instead of deleting it.
+// Lstat of a known path still succeeds. Nested archives extract into this
+// same folder, so the write list is every level's files. If any of those
+// paths should still be here and Lstat cannot see it, return
+// errExtractListingEmpty so the caller leaves the temp dir in place instead
+// of moving the visible sibling and deleting the rest.
+//
+// Directory-only members are absent from most write lists (rar skips them).
+// An empty listing of a folder that contains only those directories still
+// deletes the tree; the guard covers tracked files.
 func moveSources(fromPath string, listed, known []string) ([]string, error) {
-	extra := knownChildren(fromPath, known)
-	if len(listed) == 0 && len(known) > 0 && len(extra) == 0 {
+	extra, missing := knownChildren(fromPath, known)
+	if missing > 0 {
 		return nil, fmt.Errorf("%w: %s", errExtractListingEmpty, fromPath)
 	}
 
@@ -283,41 +289,118 @@ func moveSources(fromPath string, listed, known []string) ([]string, error) {
 
 // knownChildren returns unique immediate children of fromPath that appear in
 // known extract paths and currently exist (Lstat). Nested extract paths
-// collapse to their top-level child, matching listFiles.
-func knownChildren(fromPath string, known []string) []string {
+// collapse to their top-level child, matching listFiles. missing counts
+// children that were named and are not on disk. Relative known paths are
+// joined to fromPath; callers that extracted into a different directory
+// (squash's child, or a nested folder under a parent temp dir) must pass
+// paths already resolved against that directory.
+func knownChildren(fromPath string, known []string) ([]string, int) {
 	fromPath = filepath.Clean(fromPath)
 	seen := make(map[string]struct{}, len(known))
 	out := make([]string, 0, len(known))
+	missing := 0
 
 	for _, path := range known {
-		if path == "" {
+		child, ok := knownChild(fromPath, path)
+		if !ok {
 			continue
 		}
-
-		path = filepath.Clean(path)
-		if !pathWithin(fromPath, path) || path == fromPath {
-			continue
-		}
-
-		rel, err := filepath.Rel(fromPath, path)
-		if err != nil {
-			continue
-		}
-
-		top, _, _ := strings.Cut(rel, string(filepath.Separator))
-		child := filepath.Join(fromPath, top)
 
 		if _, dup := seen[child]; dup {
 			continue
 		}
 
-		_, err = os.Lstat(child)
+		seen[child] = struct{}{}
+
+		_, err := os.Lstat(child)
 		if err != nil {
+			missing++
+
 			continue
 		}
 
-		seen[child] = struct{}{}
 		out = append(out, child)
+	}
+
+	return out, missing
+}
+
+func knownChild(fromPath, path string) (string, bool) {
+	if path == "" {
+		return "", false
+	}
+
+	path = filepath.Clean(filepath.FromSlash(path))
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(fromPath, path)
+	}
+
+	if !pathWithin(fromPath, path) || path == fromPath {
+		return "", false
+	}
+
+	rel, err := filepath.Rel(fromPath, path)
+	if err != nil {
+		return "", false
+	}
+
+	top, _, _ := strings.Cut(rel, string(filepath.Separator))
+
+	return filepath.Join(fromPath, top), true
+}
+
+// resolveExtractPaths makes every extract path absolute under base. Absolute
+// paths are cleaned and left alone so a path written outside base is not
+// silently rewritten.
+func resolveExtractPaths(base string, paths []string) []string {
+	if len(paths) == 0 {
+		return paths
+	}
+
+	out := make([]string, len(paths))
+	for idx, path := range paths {
+		out[idx] = resolveExtractPath(base, path)
+	}
+
+	return out
+}
+
+func resolveExtractPath(base, path string) string {
+	if path == "" {
+		return ""
+	}
+
+	path = filepath.Clean(filepath.FromSlash(path))
+	if filepath.IsAbs(path) {
+		return path
+	}
+
+	return filepath.Clean(filepath.Join(base, path))
+}
+
+// withoutPaths returns known without any cleaned path that appears in skip.
+func withoutPaths(known, skip []string) []string {
+	if len(known) == 0 || len(skip) == 0 {
+		return known
+	}
+
+	drop := make(map[string]struct{}, len(skip))
+	for _, path := range skip {
+		if path == "" {
+			continue
+		}
+
+		drop[filepath.Clean(path)] = struct{}{}
+	}
+
+	out := make([]string, 0, len(known))
+
+	for _, path := range known {
+		if _, ok := drop[filepath.Clean(path)]; ok {
+			continue
+		}
+
+		out = append(out, path)
 	}
 
 	return out

@@ -28,7 +28,10 @@ type file struct {
 // cleanup runs after a successful extract.
 // The intent is to move files into their final location.
 func (x *XFile) cleanup(files []string) ([]string, error) {
-	x.moveKnown = files
+	// Tar records header names; every other extractor records paths under
+	// OutputDir. Squash moves from a child of OutputDir, so resolve against
+	// OutputDir here. The returned list stays as the extractor built it.
+	x.moveKnown = resolveExtractPaths(x.OutputDir, files)
 
 	files, err := x.squashRoot(files)
 	if err != nil {

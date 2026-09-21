@@ -387,7 +387,11 @@ func (x *Xtractr) decompressArchives(resp *Response) error {
 			bytes, files, archives, err := x.processArchive(archive, resp)
 			// Make sure these get added even with an error.
 			if resp.Size += bytes; files != nil {
-				resp.NewFiles = append(resp.NewFiles, files...)
+				// Store paths under this output folder. Tar's list is header
+				// names; nested extracts share resp.Output, and a later move of
+				// a parent temp folder cannot guess which child those names
+				// belong to unless they are already absolute.
+				resp.NewFiles = append(resp.NewFiles, resolveExtractPaths(resp.Output, files)...)
 			}
 
 			if len(archives) != 0 {
@@ -541,7 +545,7 @@ func (x *Xtractr) cleanupProcessedArchives(resp *Response) error {
 		// If TempFolder is false then move the files back to the original location.
 		var renamed Renamed
 
-		renamed, err = x.renameExtracted(resp.Output, resp.X.Path, false, resp.NewFiles)
+		renamed, err = x.renameExtracted(resp.Output, resp.X.Path, false, moveKnownPaths(resp))
 		resp.NewFiles = renamed.NewFiles
 		resp.Refused = append(resp.Refused, renamed.Refused...)
 		recordFinalDest(resp, resp.X.Path, renamed.Dest)
@@ -575,8 +579,41 @@ func (x *Xtractr) createLogFile(resp *Response) {
 
 	err := os.WriteFile(tmpFile, msg, x.config.FileMode)
 	if err != nil {
+		resp.NewFiles = resp.NewFiles[:len(resp.NewFiles)-1]
+
 		x.config.Printf("Error: Creating Temporary Tracking File: %v", err)
 	}
+}
+
+// moveKnownPaths is the extract write list the final move should trust.
+// Nested archives are extracted into the same output folder, so NewFiles holds
+// both levels. DeleteOrig removes the nested archive members afterwards; those
+// paths stay in NewFiles and must not count as files the move failed to see.
+func moveKnownPaths(resp *Response) []string {
+	if resp == nil {
+		return nil
+	}
+
+	known := resolveExtractPaths(resp.Output, resp.NewFiles)
+	if resp.X == nil || !resp.X.DeleteOrig {
+		return known
+	}
+
+	return withoutPaths(known, deletedOriginalPaths(resp))
+}
+
+func deletedOriginalPaths(resp *Response) []string {
+	paths := make([]string, 0, resp.Archives.Count()+resp.Extras.Count())
+
+	for _, archives := range resp.Archives {
+		paths = append(paths, archives...)
+	}
+
+	for _, archives := range resp.Extras {
+		paths = append(paths, archives...)
+	}
+
+	return paths
 }
 
 func (x *Xtractr) deleteOriginals(resp *Response) {
@@ -637,7 +674,7 @@ func (x *Xtractr) cleanTempFolder(resp *Response) {
 		return
 	}
 
-	renamed, err := x.renameExtracted(resp.Output, newName, false, resp.NewFiles)
+	renamed, err := x.renameExtracted(resp.Output, newName, false, moveKnownPaths(resp))
 	resp.Refused = append(resp.Refused, renamed.Refused...)
 
 	if err != nil {
