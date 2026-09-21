@@ -478,6 +478,104 @@ func TestMoveFilesConcurrentSameDest(t *testing.T) {
 	}
 }
 
+// FUSE (e.g. Unraid shfs) can return an empty ReadDir after a successful write
+// while Lstat of those same paths still works. The extract write list is the
+// source of truth for what to move.
+func TestMoveSourcesUnionsKnownWhenListingEmpty(t *testing.T) {
+	t.Parallel()
+
+	fromDir := t.TempDir()
+	hidden := filepath.Join(fromDir, "movie.mkv")
+	nestedDir := filepath.Join(fromDir, "dir")
+	nested := filepath.Join(nestedDir, "inner.bin")
+	outside := filepath.Join(t.TempDir(), "evil.bin")
+
+	require.NoError(t, os.WriteFile(hidden, []byte("payload"), 0o600))
+	require.NoError(t, os.Mkdir(nestedDir, 0o750))
+	require.NoError(t, os.WriteFile(nested, []byte("inner"), 0o600))
+	require.NoError(t, os.WriteFile(outside, []byte("nope"), 0o600))
+
+	got, err := moveSources(fromDir, nil, []string{hidden, nested, nested, outside, "", fromDir})
+	require.NoError(t, err)
+	assert.Equal(t, []string{hidden, nestedDir}, got)
+}
+
+func TestMoveSourcesUnionsListingWithKnown(t *testing.T) {
+	t.Parallel()
+
+	fromDir := t.TempDir()
+	listed := filepath.Join(fromDir, "sample")
+	missed := filepath.Join(fromDir, "movie.mkv")
+
+	require.NoError(t, os.Mkdir(listed, 0o750))
+	require.NoError(t, os.WriteFile(missed, []byte("payload"), 0o600))
+
+	got, err := moveSources(fromDir, []string{listed}, []string{missed, listed})
+	require.NoError(t, err)
+	assert.Equal(t, []string{listed, missed}, got)
+}
+
+func TestMoveSourcesEmptyListingWithoutKnownIsOK(t *testing.T) {
+	t.Parallel()
+
+	got, err := moveSources(t.TempDir(), nil, nil)
+	require.NoError(t, err)
+	assert.Empty(t, got)
+}
+
+func TestMoveSourcesEmptyListingKnownMissingErrors(t *testing.T) {
+	t.Parallel()
+
+	fromDir := t.TempDir()
+	_, err := moveSources(fromDir, nil, []string{filepath.Join(fromDir, "movie.mkv")})
+	require.ErrorIs(t, err, errExtractListingEmpty)
+}
+
+func TestMoveFilesKnownEmptyListingLeavesTemp(t *testing.T) {
+	t.Parallel()
+
+	fromDir := t.TempDir()
+	toDir := t.TempDir()
+	known := filepath.Join(fromDir, "movie.mkv")
+
+	_, err := moveFilesKnown(NoLogger(), 0o755, fromDir, toDir, false, DefaultSuffix, []string{known})
+	require.ErrorIs(t, err, errExtractListingEmpty)
+	require.DirExists(t, fromDir, "temp dir must survive when the write list is not visible")
+	require.NoFileExists(t, filepath.Join(toDir, "movie.mkv"))
+}
+
+func TestMoveFilesKnownMovesWriteList(t *testing.T) {
+	t.Parallel()
+
+	fromDir := t.TempDir()
+	toDir := t.TempDir()
+	src := filepath.Join(fromDir, "movie.mkv")
+	dest := filepath.Join(toDir, "movie.mkv")
+
+	require.NoError(t, os.WriteFile(src, []byte("payload"), 0o600))
+
+	got, err := moveFilesKnown(NoLogger(), 0o755, fromDir, toDir, false, DefaultSuffix, []string{src})
+	require.NoError(t, err)
+	require.Equal(t, []string{dest}, got.NewFiles)
+
+	content, err := os.ReadFile(dest)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("payload"), content)
+	require.NoDirExists(t, fromDir)
+}
+
+func TestMoveFilesEmptySourceStillDeletes(t *testing.T) {
+	t.Parallel()
+
+	fromDir := t.TempDir()
+	toDir := t.TempDir()
+
+	got, err := moveFiles(NoLogger(), 0o755, fromDir, toDir, false, DefaultSuffix)
+	require.NoError(t, err)
+	assert.Empty(t, got.NewFiles)
+	require.NoDirExists(t, fromDir, "empty extract with no write list still removes the temp dir")
+}
+
 func assertNoPartials(t *testing.T, dest string) {
 	t.Helper()
 

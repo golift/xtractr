@@ -28,6 +28,8 @@ type file struct {
 // cleanup runs after a successful extract.
 // The intent is to move files into their final location.
 func (x *XFile) cleanup(files []string) ([]string, error) {
+	x.moveKnown = files
+
 	files, err := x.squashRoot(files)
 	if err != nil {
 		return files, err

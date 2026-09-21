@@ -184,6 +184,9 @@ type XFile struct {
 	// Logger allows printing debug messages.
 	log       Logger
 	moveFiles func(fromPath, toPath string, overwrite bool) ([]string, error)
+	// moveKnown is the extract write list. Used when ReadDir of the temp
+	// folder lags (FUSE) so the final move can Lstat paths we already wrote.
+	moveKnown []string
 	prog      *progressTracker
 	// refused collects files not moved into place during Extract; it is
 	// copied into Response.Refused by processArchive.

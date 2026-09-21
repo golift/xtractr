@@ -544,7 +544,7 @@ func (x *Xtractr) cleanupProcessedArchives(resp *Response) error {
 		// If TempFolder is false then move the files back to the original location.
 		var renamed Renamed
 
-		renamed, err = x.RenameFiles(resp.Output, resp.X.Path, false)
+		renamed, err = x.renameExtracted(resp.Output, resp.X.Path, false, resp.NewFiles)
 		resp.NewFiles = renamed.NewFiles
 		resp.Refused = append(resp.Refused, renamed.Refused...)
 		recordFinalDest(resp, resp.X.Path, renamed.Dest)
@@ -640,7 +640,7 @@ func (x *Xtractr) cleanTempFolder(resp *Response) {
 		return
 	}
 
-	renamed, err := x.RenameFiles(resp.Output, newName, false)
+	renamed, err := x.renameExtracted(resp.Output, newName, false, resp.NewFiles)
 	resp.Refused = append(resp.Refused, renamed.Refused...)
 
 	if err != nil {

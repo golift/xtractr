@@ -106,7 +106,14 @@ func (x *Xtractr) MoveFiles(fromPath, toPath string, overwrite bool) ([]string, 
 // Unlike MoveFiles, the result includes destinations that were already occupied.
 // This is a helper method and only exposed for convenience. You do not have to call this.
 func (x *Xtractr) RenameFiles(fromPath, toPath string, overwrite bool) (Renamed, error) {
-	return moveFiles(x.config, x.config.DirMode, fromPath, toPath, overwrite, x.config.Suffix)
+	return x.renameExtracted(fromPath, toPath, overwrite, nil)
+}
+
+// renameExtracted is RenameFiles plus the extract write list. FUSE filesystems
+// (e.g. Unraid shfs) can return an empty ReadDir after a successful write;
+// Lstat of those known paths still works, so the move does not depend on listing.
+func (x *Xtractr) renameExtracted(fromPath, toPath string, overwrite bool, known []string) (Renamed, error) {
+	return moveFilesKnown(x.config, x.config.DirMode, fromPath, toPath, overwrite, x.config.Suffix, known)
 }
 
 // bindMoveFiles wires ExtractFile to this job's logger and DirMode.
@@ -119,19 +126,30 @@ func (x *XFile) bindMoveFiles() {
 	}
 
 	x.moveFiles = func(fromPath, toPath string, overwrite bool) ([]string, error) {
-		renamed, err := moveFiles(x.log, x.DirMode, fromPath, toPath, overwrite, x.Suffix)
+		renamed, err := moveFilesKnown(x.log, x.DirMode, fromPath, toPath, overwrite, x.Suffix, x.moveKnown)
 		x.refused = append(x.refused, renamed.Refused...)
 
 		return renamed.NewFiles, err
 	}
 }
 
-func moveFiles( //nolint:cyclop,funlen
+func moveFiles(
 	log Logger,
 	dirMode os.FileMode,
 	fromPath, toPath string,
 	overwrite bool,
 	suffix string,
+) (Renamed, error) {
+	return moveFilesKnown(log, dirMode, fromPath, toPath, overwrite, suffix, nil)
+}
+
+func moveFilesKnown( //nolint:cyclop,funlen
+	log Logger,
+	dirMode os.FileMode,
+	fromPath, toPath string,
+	overwrite bool,
+	suffix string,
+	known []string,
 ) (Renamed, error) {
 	if log == nil {
 		log = NoLogger()
@@ -147,9 +165,20 @@ func moveFiles( //nolint:cyclop,funlen
 		keepErr  error
 	)
 
-	files, err := listFiles(fromPath)
+	listed, err := listFiles(fromPath)
 	if err != nil {
 		return Renamed{}, err
+	}
+
+	files, err := moveSources(fromPath, listed, known)
+	if err != nil {
+		log.Printf("Error: Moving Temp Files: %v; leaving %s in place", err, fromPath)
+
+		return Renamed{}, err
+	}
+
+	if added := len(files) - len(listed); added > 0 {
+		log.Printf("Warning: Moving Temp Files: %s listing missed %d extract path(s)", fromPath, added)
 	}
 
 	// If the "to path" is an existing archive file, remove the suffix to make a directory.
@@ -213,6 +242,9 @@ func moveFiles( //nolint:cyclop,funlen
 	// so the source must survive for recovery. Refusals are not errors: the
 	// occupying dest is kept, and the extracted copies are deleted with the
 	// temp dir (the destination is otherwise complete).
+	//
+	// If we wrote files but neither ReadDir nor Lstat could see them (err from
+	// moveSources), we never reach here: the temp dir is left in place.
 	if keepErr == nil {
 		info, statErr := os.Stat(fromPath)
 		if statErr == nil && info.IsDir() {
@@ -233,6 +265,85 @@ func moveFiles( //nolint:cyclop,funlen
 	}
 
 	return Renamed{NewFiles: newFiles, Refused: refused, Dest: dest}, keepErr
+}
+
+// moveSources unions a ReadDir listing with immediate children derived from
+// the extract write list. FUSE layers can omit entries from ReadDir while
+// Lstat of a known path still succeeds. If we were given a write list and
+// still cannot see any of those paths, return errExtractListingEmpty so the
+// caller leaves the temp dir in place instead of deleting it.
+func moveSources(fromPath string, listed, known []string) ([]string, error) {
+	extra := knownChildren(fromPath, known)
+	if len(listed) == 0 && len(known) > 0 && len(extra) == 0 {
+		return nil, fmt.Errorf("%w: %s", errExtractListingEmpty, fromPath)
+	}
+
+	return mergeUnique(listed, extra), nil
+}
+
+// knownChildren returns unique immediate children of fromPath that appear in
+// known extract paths and currently exist (Lstat). Nested extract paths
+// collapse to their top-level child, matching listFiles.
+func knownChildren(fromPath string, known []string) []string {
+	fromPath = filepath.Clean(fromPath)
+	seen := make(map[string]struct{}, len(known))
+	out := make([]string, 0, len(known))
+
+	for _, path := range known {
+		if path == "" {
+			continue
+		}
+
+		path = filepath.Clean(path)
+		if !pathWithin(fromPath, path) || path == fromPath {
+			continue
+		}
+
+		rel, err := filepath.Rel(fromPath, path)
+		if err != nil {
+			continue
+		}
+
+		top, _, _ := strings.Cut(rel, string(filepath.Separator))
+		child := filepath.Join(fromPath, top)
+
+		if _, dup := seen[child]; dup {
+			continue
+		}
+
+		_, err = os.Lstat(child)
+		if err != nil {
+			continue
+		}
+
+		seen[child] = struct{}{}
+		out = append(out, child)
+	}
+
+	return out
+}
+
+func mergeUnique(listed, extra []string) []string {
+	if len(extra) == 0 {
+		return listed
+	}
+
+	seen := make(map[string]struct{}, len(listed)+len(extra))
+	out := make([]string, 0, len(listed)+len(extra))
+
+	for _, group := range [][]string{listed, extra} {
+		for _, path := range group {
+			path = filepath.Clean(path)
+			if _, dup := seen[path]; dup {
+				continue
+			}
+
+			seen[path] = struct{}{}
+			out = append(out, path)
+		}
+	}
+
+	return out
 }
 
 // DeleteFiles obliterates things and logs. Use with caution.
