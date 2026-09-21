@@ -339,7 +339,6 @@ func TestFinalDestsTempFolderMultiFolder(t *testing.T) {
 func waitFinalResponse(t *testing.T, chResponse chan *xtractr.Response) *xtractr.Response {
 	t.Helper()
 
-	// Multi-folder move-back sleeps fsSyncDelay (10s) per folder.
 	timeout := time.NewTimer(60 * time.Second)
 	defer timeout.Stop()
 
