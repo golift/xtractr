@@ -621,6 +621,46 @@ func TestWithoutPathsDropsDeletedNestedArchive(t *testing.T) {
 	require.NoDirExists(t, fromDir)
 }
 
+func TestResolveExtractPathAbsoluteTarName(t *testing.T) {
+	t.Parallel()
+
+	base := filepath.Join(t.TempDir(), "out")
+	assert.Equal(t, filepath.Join(base, "movie.mkv"), resolveExtractPath(base, "/movie.mkv"))
+	assert.Equal(t, filepath.Join(base, "dir", "movie.mkv"), resolveExtractPath(base, "/dir/movie.mkv"))
+	assert.Equal(t, filepath.Join(base, "movie.mkv"), resolveExtractPath(base, filepath.Join(base, "movie.mkv")))
+}
+
+func TestTarAbsoluteNameSurvivesEmptyListing(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	tarPath := filepath.Join(dir, "movie.tar")
+	writeTarFile(t, tarPath, "/movie.mkv", []byte("payload"))
+
+	out := filepath.Join(dir, "out")
+	_, files, err := ExtractTar(&XFile{
+		FilePath:  tarPath,
+		OutputDir: out,
+		FileMode:  0o600,
+		DirMode:   0o750,
+	})
+	require.NoError(t, err)
+	require.Equal(t, []string{"/movie.mkv"}, files)
+
+	written := filepath.Join(out, "movie.mkv")
+	require.FileExists(t, written)
+
+	got, err := moveSources(out, nil, files)
+	require.NoError(t, err)
+	assert.Equal(t, []string{written}, got)
+
+	destDir := filepath.Join(dir, "dest")
+	moved, err := moveFilesKnown(NoLogger(), 0o750, out, destDir, false, DefaultSuffix, files)
+	require.NoError(t, err)
+	require.Equal(t, []string{filepath.Join(destDir, "movie.mkv")}, moved.NewFiles)
+	require.NoDirExists(t, out)
+}
+
 func TestTarWriteListSurvivesEmptyListing(t *testing.T) {
 	t.Parallel()
 

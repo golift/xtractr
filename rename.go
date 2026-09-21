@@ -290,10 +290,11 @@ func moveSources(fromPath string, listed, known []string) ([]string, error) {
 // knownChildren returns unique immediate children of fromPath that appear in
 // known extract paths and currently exist (Lstat). Nested extract paths
 // collapse to their top-level child, matching listFiles. missing counts
-// children that were named and are not on disk. Relative known paths are
-// joined to fromPath; callers that extracted into a different directory
-// (squash's child, or a nested folder under a parent temp dir) must pass
-// paths already resolved against that directory.
+// children that were named and are not on disk. Relative names and absolute
+// tar header names are resolved against fromPath the same way XFile.clean
+// writes them. Callers that extracted into a different directory (squash's
+// child, or a nested folder under a parent temp dir) must pass paths already
+// resolved against that directory.
 func knownChildren(fromPath string, known []string) ([]string, int) {
 	fromPath = filepath.Clean(fromPath)
 	seen := make(map[string]struct{}, len(known))
@@ -330,11 +331,7 @@ func knownChild(fromPath, path string) (string, bool) {
 		return "", false
 	}
 
-	path = filepath.Clean(filepath.FromSlash(path))
-	if !filepath.IsAbs(path) {
-		path = filepath.Join(fromPath, path)
-	}
-
+	path = resolveExtractPath(fromPath, path)
 	if !pathWithin(fromPath, path) || path == fromPath {
 		return "", false
 	}
@@ -349,9 +346,7 @@ func knownChild(fromPath, path string) (string, bool) {
 	return filepath.Join(fromPath, top), true
 }
 
-// resolveExtractPaths makes every extract path absolute under base. Absolute
-// paths are cleaned and left alone so a path written outside base is not
-// silently rewritten.
+// resolveExtractPaths makes every extract path absolute under base.
 func resolveExtractPaths(base string, paths []string) []string {
 	if len(paths) == 0 {
 		return paths
@@ -365,13 +360,17 @@ func resolveExtractPaths(base string, paths []string) []string {
 	return out
 }
 
+// resolveExtractPath matches XFile.clean. An absolute path already inside base
+// is the on-disk path (zip, rar, 7z). Any other absolute path is a tar header
+// name: the file was written under base, and the write list still holds the
+// original name. Joining that name onto base is what clean does.
 func resolveExtractPath(base, path string) string {
 	if path == "" {
 		return ""
 	}
 
 	path = filepath.Clean(filepath.FromSlash(path))
-	if filepath.IsAbs(path) {
+	if filepath.IsAbs(path) && pathWithin(base, path) {
 		return path
 	}
 
