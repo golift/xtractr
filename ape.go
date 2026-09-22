@@ -2,10 +2,11 @@ package xtractr
 
 // APE (Monkey's Audio) binary-level splitting.
 //
-// Parses the APE container format (reverse-engineered from the Monkey's Audio
-// source code: MAC/Source/MACLib/MACLib.h and APEHeader.cpp) and splits a
-// single APE image file into individual per-track APE files by copying
-// compressed frames verbatim — no audio decoding or re-encoding needed.
+// Parses the APE container (MAC/Source/MACLib/MACLib.h and APEHeader.cpp) and splits a
+// single APE image into per-track APE files by copying compressed frames verbatim.
+// Both container layouts are supported: the descriptor used since 3.98, and the
+// 32-byte header used from 3.81 through 3.97. The codec version is preserved, so a
+// 3.97 image stays 3.97. No audio decoding or re-encoding.
 
 import (
 	"bytes"
@@ -13,6 +14,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"os"
 	"path/filepath"
@@ -20,13 +22,26 @@ import (
 
 // APE format constants from MAC/Source/MACLib/MACLib.h.
 const (
-	apeMinVersion          = 3980 // Only the "new" format (>= 3.98) is supported.
-	apeDescriptorSize      = 52   // sizeof(APE_DESCRIPTOR)
-	apeHeaderSize          = 24   // sizeof(APE_HEADER)
-	apeFileMD5Size         = 16   // sizeof(APE_DESCRIPTOR.cFileMD5)
-	apeFormatFlagCreateWAV = 1 << 5
-	apeMaxMagicScan        = 1 << 20 // Scan up to 1 MB for the magic bytes.
-	apeCopyBuf             = 1 << 20 // 1 MB copy buffer.
+	apeNewFormatVersion          = 3980 // Descriptor + header layout (Monkey's Audio >= 3.98).
+	apeOldMinVersion             = 3810 // Oldest legacy header whose frames are byte-aligned (3.81).
+	apeOldHeaderSize             = 32   // sizeof(APE_HEADER_OLD).
+	apeVersion3900               = 3900 // Blocks-per-frame changed again at 3.90 and 3.95.
+	apeVersion3950               = 3950
+	apeBlocksV3950               = 73728 * 4
+	apeBlocksV3900               = 73728
+	apeBlocksV3800               = 9216
+	apeCompressionExtraHigh      = 4000 // COMPRESSION_LEVEL_EXTRA_HIGH (larger 3.8x frames).
+	apeDescriptorSize            = 52   // sizeof(APE_DESCRIPTOR)
+	apeHeaderSize                = 24   // sizeof(APE_HEADER)
+	apeFileMD5Size               = 16   // sizeof(APE_DESCRIPTOR.cFileMD5)
+	apeFormatFlag8Bit            = 1 << 0
+	apeFormatFlagCRC             = 1 << 1
+	apeFormatFlagHasPeakLevel    = 1 << 2
+	apeFormatFlag24Bit           = 1 << 3
+	apeFormatFlagHasSeekElements = 1 << 4
+	apeFormatFlagCreateWAV       = 1 << 5
+	apeMaxMagicScan              = 1 << 20 // Scan up to 1 MB for the magic bytes.
+	apeCopyBuf                   = 1 << 20 // 1 MB copy buffer.
 
 	bytesPerUint32 = 4          // APE seek-table entries and the bitstream word size.
 	highDWordShift = 32         // Shift to combine the high/low halves of the 64-bit frame-data size.
@@ -84,13 +99,13 @@ type apeInfo struct {
 // Errors specific to APE parsing.
 var (
 	ErrAPENotFound   = errors.New("could not find APE descriptor (MAC magic) within 1 MB")
-	ErrAPEOldVersion = errors.New("APE versions before 3.98 are not supported")
+	ErrAPEOldVersion = errors.New("APE versions before 3.81 are not supported")
 	ErrAPENoFrames   = errors.New("APE file contains no frames")
 	ErrAPESeekTable  = errors.New("APE seek table is missing entries for all frames")
 )
 
 // parseAPE opens an APE file and parses its descriptor, header, and seek table.
-// Only the "new" format (version >= 3.98 / 3980) is supported.
+// Versions since 3.98 use the descriptor layout; 3.81 through 3.97 use the legacy header.
 // Reverse-engineered from MAC/Source/MACLib/APEHeader.cpp.
 func parseAPE(path string) (*apeInfo, error) {
 	file, err := os.Open(path)
@@ -104,10 +119,48 @@ func parseAPE(path string) (*apeInfo, error) {
 		return nil, err
 	}
 
+	version, err := readAPEVersion(file, junk)
+	if err != nil {
+		return nil, err
+	}
+
+	if version < apeNewFormatVersion {
+		return parseAPEOld(file, junk, version)
+	}
+
+	return parseAPECurrent(file, junk)
+}
+
+// readAPEVersion reads the uint16 version that follows the MAC magic.
+func readAPEVersion(file *os.File, junk int64) (uint16, error) {
+	_, err := file.Seek(junk, io.SeekStart)
+	if err != nil {
+		return 0, fmt.Errorf("seeking to ape descriptor: %w", err)
+	}
+
+	var hdr struct {
+		ID      [4]byte
+		Version uint16
+	}
+
+	err = binary.Read(file, binary.LittleEndian, &hdr)
+	if err != nil {
+		return 0, fmt.Errorf("reading ape version: %w", err)
+	}
+
+	if !isAPEMagic(hdr.ID) {
+		return 0, ErrAPENotFound
+	}
+
+	return hdr.Version, nil
+}
+
+// parseAPECurrent reads the descriptor layout used by Monkey's Audio >= 3.98.
+func parseAPECurrent(file *os.File, junk int64) (*apeInfo, error) {
 	info := &apeInfo{JunkBytes: junk}
 
 	// Read APE_DESCRIPTOR (52 bytes) at junk offset.
-	_, err = file.Seek(junk, io.SeekStart)
+	_, err := file.Seek(junk, io.SeekStart)
 	if err != nil {
 		return nil, fmt.Errorf("seeking to ape descriptor: %w", err)
 	}
@@ -115,10 +168,6 @@ func parseAPE(path string) (*apeInfo, error) {
 	err = binary.Read(file, binary.LittleEndian, &info.Descriptor)
 	if err != nil {
 		return nil, fmt.Errorf("reading ape descriptor: %w", err)
-	}
-
-	if info.Descriptor.Version < apeMinVersion {
-		return nil, fmt.Errorf("%w: version %d", ErrAPEOldVersion, info.Descriptor.Version)
 	}
 
 	// Read APE_HEADER (24 bytes) at junk + descriptor_bytes.
@@ -553,32 +602,38 @@ func writeTrackAPE(
 }
 
 // apeTrackContainer holds the serialized, ready-to-write container pieces for one split
-// track: the descriptor, plus the header and seek-table bytes (kept so they can be both
-// written to disk and fed to the MD5, which the format hashes after the frame data).
+// track. New-format files keep the descriptor separate from the header and seek table so
+// those two can be hashed for cFileMD5. Legacy files store the whole prefix in prefix and
+// set skipMD5, because that layout has no checksum field.
 type apeTrackContainer struct {
 	descriptor     apeDescriptor
+	prefix         []byte // Legacy header + seek table. Empty for the new format.
 	headerBytes    []byte
 	seekTableBytes []byte
 	trackDataSize  int64
-	framePadding   int // zero bytes appended after the frame data (uint32 alignment + read-ahead)
+	framePadding   int  // zero bytes appended after the frame data (uint32 alignment + read-ahead)
+	skipMD5        bool // Legacy format has no cFileMD5 field.
 }
 
-// buildAPETrackContainer computes the descriptor, header and seek table for a new APE file
-// containing source frames startFrame..endFrame (inclusive).
-func buildAPETrackContainer(info *apeInfo, startFrame, endFrame int) (*apeTrackContainer, error) {
+// apeTrackFrameLayout is the per-track frame geometry shared by both container layouts.
+type apeTrackFrameLayout struct {
+	seekTable     []uint32
+	trackDataSize int64
+	framePadding  int
+	finalBlocks   uint32
+}
+
+// layoutAPETrackFrames maps source frames startFrame..endFrame onto a new file whose
+// compressed audio begins at dataOffset. Seek entries are absolute file offsets.
+func layoutAPETrackFrames(info *apeInfo, startFrame, endFrame int, dataOffset int64) apeTrackFrameLayout {
 	numFrames := endFrame - startFrame + 1
 
 	// The final frame of the source keeps its (short) block count; interior frames are full.
-	ffb := info.Header.BlocksPerFrame
+	finalBlocks := info.Header.BlocksPerFrame
 	if endFrame == int(info.Header.TotalFrames)-1 {
-		ffb = info.Header.FinalFrameBlocks
+		finalBlocks = info.Header.FinalFrameBlocks
 	}
 
-	// New file layout: [DESCRIPTOR 52] [HEADER 24] [SEEK TABLE 4*N] [FRAME DATA].
-	seekTableSize := uint32(numFrames) * bytesPerUint32
-	dataOffset := int64(apeDescriptorSize) + int64(apeHeaderSize) + int64(seekTableSize)
-
-	// Seek table: absolute offsets from file start (= descriptor start, no junk).
 	seekTable := make([]uint32, numFrames)
 
 	var trackDataSize int64
@@ -588,29 +643,52 @@ func buildAPETrackContainer(info *apeInfo, startFrame, endFrame int) (*apeTrackC
 		trackDataSize += apeFrameDataSize(info, startFrame+i)
 	}
 
-	// FFmpeg's APE demuxer sizes the final frame as floor4(fileSize - lastFramePos) — it rounds
-	// the last frame DOWN to a uint32 boundary (libavformat/ape.c). A verbatim frame copy can
-	// leave the final frame ending mid-word, so FFmpeg drops the last 1-3 compressed bytes and
-	// then starves the range coder on the frame's final block ("Error decoding frame"). Real
-	// encoders always pad the frame-data region to a uint32 boundary; match that and add one
-	// extra uint32 of read-ahead slack the range decoder consumes past a frame's logical end.
+	return apeTrackFrameLayout{
+		seekTable:     seekTable,
+		trackDataSize: trackDataSize,
+		framePadding:  apeFramePadding(info, endFrame),
+		finalBlocks:   finalBlocks,
+	}
+}
+
+// apeFramePadding is the zero bytes appended after the last frame so FFmpeg keeps every
+// compressed byte. Its demuxer sizes the final frame as floor4(fileSize-lastFramePos)
+// (libavformat/ape.c). A verbatim copy can end mid-word, FFmpeg then drops the last 1-3
+// bytes, and the range coder fails with "Error decoding frame". Encoders pad to a uint32
+// boundary; match that and add one extra word of read-ahead the decoder consumes past the
+// frame's logical end.
+func apeFramePadding(info *apeInfo, endFrame int) int {
 	lastFrameSize := apeFrameDataSize(info, endFrame)
 	alignPad := (bytesPerUint32 - int(lastFrameSize%bytesPerUint32)) % bytesPerUint32
-	framePadding := alignPad + apeTailPadding
-	paddedDataSize := trackDataSize + int64(framePadding)
+
+	return alignPad + apeTailPadding
+}
+
+// buildAPETrackContainer computes the descriptor, header and seek table for a new APE file
+// containing source frames startFrame..endFrame (inclusive).
+func buildAPETrackContainer(info *apeInfo, startFrame, endFrame int) (*apeTrackContainer, error) {
+	if isOldAPE(info) {
+		return buildOldAPETrackContainer(info, startFrame, endFrame)
+	}
+
+	numFrames := endFrame - startFrame + 1
+	seekTableSize := uint32(numFrames) * bytesPerUint32
+	dataOffset := int64(apeDescriptorSize) + int64(apeHeaderSize) + int64(seekTableSize)
+	layout := layoutAPETrackFrames(info, startFrame, endFrame, dataOffset)
+	paddedDataSize := layout.trackDataSize + int64(layout.framePadding)
 
 	hdr := apeHeader{
 		CompressionLevel: info.Header.CompressionLevel,
 		FormatFlags:      info.Header.FormatFlags | apeFormatFlagCreateWAV,
 		BlocksPerFrame:   info.Header.BlocksPerFrame,
-		FinalFrameBlocks: ffb,
+		FinalFrameBlocks: layout.finalBlocks,
 		TotalFrames:      uint32(numFrames),
 		BitsPerSample:    info.Header.BitsPerSample,
 		Channels:         info.Header.Channels,
 		SampleRate:       info.Header.SampleRate,
 	}
 
-	headerBytes, seekTableBytes, err := marshalAPEHeaderAndSeekTable(&hdr, seekTable)
+	headerBytes, seekTableBytes, err := marshalAPEHeaderAndSeekTable(&hdr, layout.seekTable)
 	if err != nil {
 		return nil, err
 	}
@@ -630,14 +708,14 @@ func buildAPETrackContainer(info *apeInfo, startFrame, endFrame int) (*apeTrackC
 		},
 		headerBytes:    headerBytes,
 		seekTableBytes: seekTableBytes,
-		trackDataSize:  trackDataSize,
-		framePadding:   framePadding,
+		trackDataSize:  layout.trackDataSize,
+		framePadding:   layout.framePadding,
 	}, nil
 }
 
-// writeTrackAPEContents writes the descriptor, header, seek table and frame data for a
-// single split track into outFile and returns the total bytes written. The whole-file MD5
-// is computed and patched into the descriptor so the output passes full MAC verification.
+// writeTrackAPEContents writes the container prefix and frame data for a single split track
+// into outFile and returns the total bytes written. New-format files also get their MD5
+// patched into the descriptor so the output passes full MAC verification.
 func writeTrackAPEContents(
 	outFile *os.File,
 	counted io.Writer,
@@ -650,47 +728,24 @@ func writeTrackAPEContents(
 		return 0, err
 	}
 
-	err = binary.Write(counted, binary.LittleEndian, &con.descriptor)
+	err = writeAPEContainerPrefix(counted, con)
 	if err != nil {
-		return 0, fmt.Errorf("writing ape descriptor: %w", err)
+		return 0, err
 	}
 
-	_, err = counted.Write(con.headerBytes)
-	if err != nil {
-		return 0, fmt.Errorf("writing ape header: %w", err)
-	}
-
-	_, err = counted.Write(con.seekTableBytes)
-	if err != nil {
-		return 0, fmt.Errorf("writing ape seek table: %w", err)
-	}
-
-	// Tee the frame data into the MD5 as it's written so we never buffer a whole track.
-	hash := md5.New() //nolint:gosec // MD5 is the APE file integrity hash, not security.
-	dst := io.MultiWriter(counted, hash)
+	dst, sum := apeFrameWriter(counted, con.skipMD5)
 
 	err = writeAPEFrameData(dst, srcFile, info, startFrame, endFrame, con.trackDataSize)
 	if err != nil {
 		return 0, err
 	}
 
-	// Pad the frame-data region to a uint32 boundary (+ read-ahead) so FFmpeg's last-frame size
-	// calc keeps every compressed byte. These bytes are part of the frame-data region the format
-	// hashes, so they go to the file (via dst) and into the MD5. MAC ignores them: the final
-	// frame decodes FinalFrameBlocks samples and stops.
-	if con.framePadding > 0 {
-		_, err = dst.Write(make([]byte, con.framePadding))
-		if err != nil {
-			return 0, fmt.Errorf("writing ape frame padding: %w", err)
-		}
+	err = writeAPEFramePadding(dst, con.framePadding)
+	if err != nil {
+		return 0, err
 	}
 
-	// The format hashes (header data) + frame data + (terminating data) + header + seek table.
-	// This file has no header/terminating data, so: frame data + header + seek table.
-	_, _ = hash.Write(con.headerBytes)
-	_, _ = hash.Write(con.seekTableBytes)
-
-	err = patchAPEFileMD5(outFile, hash.Sum(nil))
+	err = finishAPEFileMD5(outFile, sum, con)
 	if err != nil {
 		return 0, err
 	}
@@ -701,6 +756,77 @@ func writeTrackAPEContents(
 	}
 
 	return uint64(stat.Size()), nil
+}
+
+// writeAPEContainerPrefix writes either the legacy header prefix or the new-format
+// descriptor, header, and seek table.
+func writeAPEContainerPrefix(dst io.Writer, con *apeTrackContainer) error {
+	if len(con.prefix) > 0 {
+		_, err := dst.Write(con.prefix)
+		if err != nil {
+			return fmt.Errorf("writing ape header: %w", err)
+		}
+
+		return nil
+	}
+
+	err := binary.Write(dst, binary.LittleEndian, &con.descriptor)
+	if err != nil {
+		return fmt.Errorf("writing ape descriptor: %w", err)
+	}
+
+	_, err = dst.Write(con.headerBytes)
+	if err != nil {
+		return fmt.Errorf("writing ape header: %w", err)
+	}
+
+	_, err = dst.Write(con.seekTableBytes)
+	if err != nil {
+		return fmt.Errorf("writing ape seek table: %w", err)
+	}
+
+	return nil
+}
+
+// apeFrameWriter returns the writer frame bytes go to. New-format files tee into an MD5
+// so the checksum can be patched without buffering the track. Legacy files have no checksum.
+func apeFrameWriter(dst io.Writer, skipMD5 bool) (io.Writer, hash.Hash) {
+	if skipMD5 {
+		return dst, nil
+	}
+
+	sum := md5.New() //nolint:gosec // MD5 is the APE file integrity hash, not security.
+
+	return io.MultiWriter(dst, sum), sum
+}
+
+// writeAPEFramePadding appends the uint32 alignment and read-ahead zeros. They belong to
+// the frame-data region, so new-format files hash them with the audio. MAC stops after
+// FinalFrameBlocks samples and ignores the slack.
+func writeAPEFramePadding(dst io.Writer, padding int) error {
+	if padding <= 0 {
+		return nil
+	}
+
+	_, err := dst.Write(make([]byte, padding))
+	if err != nil {
+		return fmt.Errorf("writing ape frame padding: %w", err)
+	}
+
+	return nil
+}
+
+// finishAPEFileMD5 completes the new-format checksum and patches it into the descriptor.
+// The format hashes frame data (already written into sum) plus the header and seek table.
+func finishAPEFileMD5(outFile *os.File, sum hash.Hash, con *apeTrackContainer) error {
+	if sum == nil {
+		return nil
+	}
+
+	_, _ = sum.Write(con.headerBytes)
+	_, _ = sum.Write(con.seekTableBytes)
+
+	return patchAPEFileMD5(outFile, sum.Sum(nil))
 }
 
 // marshalAPEHeaderAndSeekTable serializes the APE header and seek table to little-endian bytes.
