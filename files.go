@@ -38,7 +38,7 @@ var extension2function = []archive{
 	// The ones with double extensions that match a single (below) need to come first.
 	{Type: "7zip", Ext: ".7z", Fn: Extract7z},
 	{Type: "7zip", Ext: ".7z.001", Fn: Extract7z},
-	{Type: "asar", Ext: ".asar", Fn: ChngInt(ExtractASAR)},
+	{Type: "asar", Ext: ".asar", Fn: ExtractASAR},
 	{Type: "ar", Ext: ".ar", Fn: ChngInt(ExtractAr)},
 	{Type: "brotli", Ext: ".br", Fn: ChngInt(ExtractBrotli)},
 	{Type: "brotli", Ext: ".brotli", Fn: ChngInt(ExtractBrotli)},

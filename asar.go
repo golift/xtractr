@@ -1,6 +1,7 @@
 package xtractr
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -10,11 +11,13 @@ import (
 	"golift.io/asar"
 )
 
-// ExtractASAR extracts an Electron ASAR archive.
-func ExtractASAR(xFile *XFile) (size uint64, filesList []string, err error) {
+// ExtractASAR extracts an Electron ASAR archive. archiveList is the archive
+// plus {archive}.unpacked when the index consumed files from that sibling.
+// DeleteOrig removes every path in that list.
+func ExtractASAR(xFile *XFile) (size uint64, filesList, archiveList []string, err error) {
 	reader, err := asar.Open(xFile.FilePath)
 	if err != nil {
-		return 0, nil, fmt.Errorf("%s: asar.Open: %w", xFile.FilePath, err)
+		return 0, nil, nil, fmt.Errorf("%s: asar.Open: %w", xFile.FilePath, err)
 	}
 	defer closeNamed(reader, &err)
 
@@ -22,22 +25,38 @@ func ExtractASAR(xFile *XFile) (size uint64, filesList []string, err error) {
 	defer tracker.done()
 
 	if headerErr != nil {
-		return 0, nil, headerErr
+		return 0, nil, nil, headerErr
 	}
+
+	archiveList = asarArchiveList(xFile.FilePath, reader.Files)
 
 	entries, files, err := xFile.asarPrepareEntries(reader)
 	if err != nil {
-		return xFile.prog.Wrote, files, fmt.Errorf("%s: %w", xFile.FilePath, err)
+		return xFile.prog.Wrote, files, archiveList, fmt.Errorf("%s: %w", xFile.FilePath, err)
 	}
 
 	err = xFile.extractASARFiles(entries)
 	if err != nil {
-		return xFile.prog.Wrote, files, fmt.Errorf("%s: %w", xFile.FilePath, err)
+		return xFile.prog.Wrote, files, archiveList, fmt.Errorf("%s: %w", xFile.FilePath, err)
 	}
 
 	files, err = xFile.cleanup(files)
 
-	return xFile.prog.Wrote, files, err
+	return xFile.prog.Wrote, files, archiveList, err
+}
+
+// asarArchiveList is the paths DeleteOrig should remove. The unpacked sibling
+// is included only when a file entry was read from it.
+func asarArchiveList(filePath string, files []*asar.File) []string {
+	list := []string{filePath}
+
+	for _, file := range files {
+		if file != nil && file.Unpacked && !file.IsDir() && !file.IsLink() {
+			return append(list, filePath+".unpacked")
+		}
+	}
+
+	return list
 }
 
 func asarProgress(reader *asar.Reader, filePath string) (total, compressed uint64, count int) {
@@ -173,20 +192,77 @@ func (x *XFile) openASARFile(asarFile *asar.File) (io.ReadCloser, error) {
 	return io.NopCloser(src), nil
 }
 
+// unpackedRootFile closes the member and the confined root it was opened from.
+type unpackedRootFile struct {
+	*os.File
+
+	root *os.Root
+}
+
+func (f *unpackedRootFile) Close() error {
+	return errors.Join(f.File.Close(), f.root.Close())
+}
+
+// openUnpackedASAR reads one member from {archive}.unpacked. os.OpenRoot keeps
+// the open inside that directory, including through symlinks. A symlink, FIFO,
+// or other non-regular file is refused before any bytes are copied.
 func (x *XFile) openUnpackedASAR(name string) (io.ReadCloser, error) {
-	root := x.FilePath + ".unpacked"
-	srcPath := filepath.Join(root, filepath.FromSlash(name))
-
-	if !pathWithin(root, srcPath) {
-		return nil, fmt.Errorf("%s: %w: %s", name, ErrInvalidPath, srcPath)
-	}
-
-	src, err := os.Open(srcPath)
+	root, err := os.OpenRoot(x.FilePath + ".unpacked")
 	if err != nil {
 		return nil, fmt.Errorf("unpacked entry %s: %w", name, err)
 	}
 
+	src, err := openRegularUnpacked(root, name)
+	if err != nil {
+		_ = root.Close()
+
+		return nil, err
+	}
+
+	return &unpackedRootFile{File: src, root: root}, nil
+}
+
+func openRegularUnpacked(root *os.Root, name string) (*os.File, error) {
+	info, err := root.Lstat(name)
+	if err != nil {
+		return nil, fmt.Errorf("unpacked entry %s: %w", name, err)
+	}
+
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("unpacked entry %s: %w", name, ErrInvalidPath)
+	}
+
+	src, err := root.Open(name)
+	if err != nil {
+		return nil, fmt.Errorf("unpacked entry %s: %w", name, err)
+	}
+
+	err = requireUnpackedRegular(src)
+	if err != nil {
+		_ = src.Close()
+
+		return nil, fmt.Errorf("unpacked entry %s: %w", name, err)
+	}
+
 	return src, nil
+}
+
+func requireUnpackedRegular(src *os.File) error {
+	info, err := src.Stat()
+	if err != nil {
+		return fmt.Errorf("stat: %w", err)
+	}
+
+	if !info.Mode().IsRegular() {
+		return ErrInvalidPath
+	}
+
+	err = requireDiskFile(src)
+	if err != nil {
+		return ErrInvalidPath
+	}
+
+	return nil
 }
 
 func (x *XFile) asarFileMode(asarFile *asar.File) os.FileMode {

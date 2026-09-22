@@ -353,7 +353,7 @@ func TestDeleteOrigNestedArchiveSameOutput(t *testing.T) {
 			"empty.zip": zipBytes(t, nil),
 		})
 
-		done := extractDir(t, dir, true)
+		done := extractDir(t, dir)
 		require.NoError(t, done.Error)
 		require.NoDirExists(t, dir+xtractr.DefaultSuffix)
 		require.NoFileExists(t, filepath.Join(dir, "empty.zip"))
@@ -371,7 +371,7 @@ func TestDeleteOrigNestedArchiveSameOutput(t *testing.T) {
 			}),
 		})
 
-		done := extractDir(t, dir, true)
+		done := extractDir(t, dir)
 		require.NoError(t, done.Error)
 		require.NoDirExists(t, dir+xtractr.DefaultSuffix)
 
@@ -387,7 +387,7 @@ func TestDeleteOrigNestedArchiveSameOutput(t *testing.T) {
 	})
 }
 
-func extractDir(t *testing.T, dir string, deleteOrig bool) *xtractr.Response {
+func extractDir(t *testing.T, dir string) *xtractr.Response {
 	t.Helper()
 
 	queue := xtractr.NewQueue(&xtractr.Config{Logger: &testLogger{t: t}})
@@ -397,7 +397,7 @@ func extractDir(t *testing.T, dir string, deleteOrig bool) *xtractr.Response {
 		Name:       "nested",
 		Filter:     xtractr.Filter{Path: dir},
 		TempFolder: false,
-		DeleteOrig: deleteOrig,
+		DeleteOrig: true,
 		CBChannel:  make(chan *xtractr.Response),
 	}
 
