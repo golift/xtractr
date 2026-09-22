@@ -69,12 +69,12 @@ func extractISO9660(xFile *XFile, openISO *os.File, udfErr error) (uint64, []str
 
 	root, err := iso.RootDir()
 	if err != nil {
-		return 0, nil, fmt.Errorf("failed to open iso root: %s: %w", xFile.FilePath, err)
+		return 0, nil, fmt.Errorf("failed to open iso root: %w", err)
 	}
 
 	size, files, err := xFile.uniso(root, "")
 	if err != nil {
-		return size, files, fmt.Errorf("%s: %w", xFile.FilePath, err)
+		return size, files, err
 	}
 
 	return size, files, nil

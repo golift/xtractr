@@ -22,7 +22,7 @@ func extractUDF(xFile *XFile, ra io.ReaderAt) (uint64, []string, error) {
 
 	size, files, err := xFile.unUDF(udfImage, nil, "")
 	if err != nil {
-		return size, files, fmt.Errorf("%s: %w", xFile.FilePath, err)
+		return size, files, err
 	}
 
 	tracker.done()

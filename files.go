@@ -315,7 +315,7 @@ func ExtractFile(xFile *XFile) (size uint64, filesList, archiveList []string, er
 }
 
 // extractBySignature runs magic-number detection after an extension miss or failure.
-// When the signature names the same format the extension already tried, that error
+// When the signature selects the extractor the extension already ran, that error
 // is returned as-is so a second pass does not repeat it.
 func extractBySignature(
 	xFile *XFile,
@@ -329,7 +329,7 @@ func extractBySignature(
 		return 0, nil, nil, signatureMismatchError(xFile, extensionType, extErr, sigErr)
 	}
 
-	if extErr != nil && archiveType == extensionType {
+	if extErr != nil && sameExtractor(extensionType, archiveType) {
 		return size, filesList, archiveList, WrapExtractError(extErr, xFile, size, archiveType)
 	}
 
@@ -339,6 +339,24 @@ func extractBySignature(
 	}
 
 	return size, filesList, archiveList, nil
+}
+
+// sameExtractor reports whether two type labels run the same extractor.
+// A .deb is labeled "deb" and an AR signature is labeled "ar"; both call ExtractAr.
+func sameExtractor(extensionType, signatureType string) bool {
+	if extensionType == "" || signatureType == "" {
+		return false
+	}
+
+	return canonicalExtractor(extensionType) == canonicalExtractor(signatureType)
+}
+
+func canonicalExtractor(archiveType string) string {
+	if archiveType == "deb" {
+		return "ar"
+	}
+
+	return archiveType
 }
 
 func signatureMismatchError(xFile *XFile, extensionType string, extErr, sigErr error) error {

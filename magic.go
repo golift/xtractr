@@ -105,7 +105,7 @@ func detectBySignature(filePath string) (Interface, string, error) {
 		}
 	}
 
-	return nil, "", fmt.Errorf("%w: %s", ErrUnknownArchiveType, filePath)
+	return nil, "", ErrUnknownArchiveType
 }
 
 // IsArchiveFileByContent returns true if the provided file path contains
