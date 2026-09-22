@@ -311,28 +311,67 @@ func ExtractFile(xFile *XFile) (size uint64, filesList, archiveList []string, er
 		xFile.Debugf("no extension match for %s, falling back to signature detection", xFile.FilePath)
 	}
 
+	return extractBySignature(xFile, extensionType, size, filesList, archiveList, err)
+}
+
+// extractBySignature runs magic-number detection after an extension miss or failure.
+// When the signature selects the extractor the extension already ran, that error
+// is returned as-is so a second pass does not repeat it.
+func extractBySignature(
+	xFile *XFile,
+	extensionType string,
+	size uint64,
+	filesList, archiveList []string,
+	extErr error,
+) (uint64, []string, []string, error) {
 	extractFn, archiveType, sigErr := detectBySignature(xFile.FilePath)
 	if sigErr != nil {
-		extErr := &ExtractError{
-			FilePath:    xFile.FilePath,
-			OutputDir:   xFile.OutputDir,
-			ArchiveType: extensionType,
-		}
-		if err != nil {
-			extErr.Errs = append(extErr.Errs, err)
-		}
-
-		extErr.Errs = append(extErr.Errs, sigErr)
-
-		return 0, nil, nil, extErr
+		return 0, nil, nil, signatureMismatchError(xFile, extensionType, extErr, sigErr)
 	}
 
-	size, filesList, archiveList, err = extractFn(xFile)
+	if extErr != nil && sameExtractor(extensionType, archiveType) {
+		return size, filesList, archiveList, WrapExtractError(extErr, xFile, size, archiveType)
+	}
+
+	size, filesList, archiveList, err := extractFn(xFile)
 	if err != nil {
 		return size, filesList, archiveList, WrapExtractError(err, xFile, size, archiveType)
 	}
 
 	return size, filesList, archiveList, nil
+}
+
+// sameExtractor reports whether two type labels run the same extractor.
+// A .deb is labeled "deb" and an AR signature is labeled "ar"; both call ExtractAr.
+func sameExtractor(extensionType, signatureType string) bool {
+	if extensionType == "" || signatureType == "" {
+		return false
+	}
+
+	return canonicalExtractor(extensionType) == canonicalExtractor(signatureType)
+}
+
+func canonicalExtractor(archiveType string) string {
+	if archiveType == "deb" {
+		return "ar"
+	}
+
+	return archiveType
+}
+
+func signatureMismatchError(xFile *XFile, extensionType string, extErr, sigErr error) error {
+	joined := &ExtractError{
+		FilePath:    xFile.FilePath,
+		OutputDir:   xFile.OutputDir,
+		ArchiveType: extensionType,
+	}
+	if extErr != nil {
+		joined.Errs = append(joined.Errs, extErr)
+	}
+
+	joined.Errs = append(joined.Errs, sigErr)
+
+	return joined
 }
 
 // nameMax is the typical filesystem limit for a single path component (POSIX NAME_MAX).

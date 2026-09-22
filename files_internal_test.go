@@ -672,3 +672,58 @@ func TestCreateHardLinkRemovesWhenMaxFilesExceeded(t *testing.T) {
 	_, statErr := os.Lstat(link)
 	require.ErrorIs(t, statErr, os.ErrNotExist)
 }
+
+func TestDebDoesNotReextractAsAr(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	debPath := filepath.Join(dir, "pkg.deb")
+	require.NoError(t, os.WriteFile(debPath, []byte("!<arch>\nnot-a-header"), 0o600))
+
+	reads := func(run func(*XFile) error) int {
+		t.Helper()
+
+		var calls int
+
+		xFile := &XFile{
+			FilePath:  debPath,
+			OutputDir: t.TempDir(),
+			FileMode:  DefaultFileMode,
+			DirMode:   DefaultDirMode,
+			Progress:  func(Progress) { calls++ },
+		}
+		require.Error(t, run(xFile))
+
+		return calls
+	}
+
+	once := reads(func(xFile *XFile) error {
+		_, _, err := ExtractAr(xFile)
+		return err
+	})
+	require.Positive(t, once)
+
+	again := reads(func(xFile *XFile) error {
+		_, _, _, err := ExtractFile(xFile)
+		return err
+	})
+	require.Equal(t, once, again)
+}
+
+func TestUnknownArchiveTypeMentionsPathOnce(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nope.dat")
+	require.NoError(t, os.WriteFile(path, []byte("not an archive"), 0o600))
+
+	_, _, _, err := ExtractFile(&XFile{ //nolint:dogsled // only the error matters here.
+		FilePath:  path,
+		OutputDir: filepath.Join(dir, "out"),
+		FileMode:  DefaultFileMode,
+		DirMode:   DefaultDirMode,
+	})
+	require.Error(t, err)
+	require.ErrorIs(t, err, ErrUnknownArchiveType)
+	require.Equal(t, 1, strings.Count(err.Error(), path))
+}
