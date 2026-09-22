@@ -1,6 +1,7 @@
 package xtractr
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -35,17 +36,23 @@ func ExtractISO(xFile *XFile) (size uint64, filesList []string, err error) {
 
 	xFile.Debugf("UDF extraction failed for %s, falling back to ISO9660: %v", xFile.FilePath, udfErr)
 
-	return extractISO9660(xFile, openISO)
+	return extractISO9660(xFile, openISO, udfErr)
 }
 
-func extractISO9660(xFile *XFile, openISO *os.File) (uint64, []string, error) {
+func extractISO9660(xFile *XFile, openISO *os.File, udfErr error) (uint64, []string, error) {
 	image, isoErr := iso9660.OpenImage(openISO)
 	if isoErr != nil {
 		if xFile.prog != nil {
 			xFile.prog.done()
 		}
 
-		return 0, nil, fmt.Errorf("failed to open iso image: %s: %w", xFile.FilePath, isoErr)
+		// ISO9660 reports BEA01 as "UDF volumes are not supported". The UDF reader
+		// already ran, so its error is the one that describes this file.
+		if errors.Is(isoErr, iso9660.ErrUDFNotSupported) {
+			return 0, nil, udfErr
+		}
+
+		return 0, nil, fmt.Errorf("failed to open iso image: %w", isoErr)
 	}
 
 	tracker, headerErr := xFile.archiveProgress(getUncompressedIsoSize(image))
@@ -57,7 +64,7 @@ func extractISO9660(xFile *XFile, openISO *os.File) (uint64, []string, error) {
 
 	iso, err := iso9660.OpenImage(xFile.prog.readAter(openISO))
 	if err != nil {
-		return 0, nil, fmt.Errorf("failed to open iso image: %s: %w", xFile.FilePath, err)
+		return 0, nil, fmt.Errorf("failed to open iso image: %w", err)
 	}
 
 	root, err := iso.RootDir()

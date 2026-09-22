@@ -311,28 +311,49 @@ func ExtractFile(xFile *XFile) (size uint64, filesList, archiveList []string, er
 		xFile.Debugf("no extension match for %s, falling back to signature detection", xFile.FilePath)
 	}
 
+	return extractBySignature(xFile, extensionType, size, filesList, archiveList, err)
+}
+
+// extractBySignature runs magic-number detection after an extension miss or failure.
+// When the signature names the same format the extension already tried, that error
+// is returned as-is so a second pass does not repeat it.
+func extractBySignature(
+	xFile *XFile,
+	extensionType string,
+	size uint64,
+	filesList, archiveList []string,
+	extErr error,
+) (uint64, []string, []string, error) {
 	extractFn, archiveType, sigErr := detectBySignature(xFile.FilePath)
 	if sigErr != nil {
-		extErr := &ExtractError{
-			FilePath:    xFile.FilePath,
-			OutputDir:   xFile.OutputDir,
-			ArchiveType: extensionType,
-		}
-		if err != nil {
-			extErr.Errs = append(extErr.Errs, err)
-		}
-
-		extErr.Errs = append(extErr.Errs, sigErr)
-
-		return 0, nil, nil, extErr
+		return 0, nil, nil, signatureMismatchError(xFile, extensionType, extErr, sigErr)
 	}
 
-	size, filesList, archiveList, err = extractFn(xFile)
+	if extErr != nil && archiveType == extensionType {
+		return size, filesList, archiveList, WrapExtractError(extErr, xFile, size, archiveType)
+	}
+
+	size, filesList, archiveList, err := extractFn(xFile)
 	if err != nil {
 		return size, filesList, archiveList, WrapExtractError(err, xFile, size, archiveType)
 	}
 
 	return size, filesList, archiveList, nil
+}
+
+func signatureMismatchError(xFile *XFile, extensionType string, extErr, sigErr error) error {
+	joined := &ExtractError{
+		FilePath:    xFile.FilePath,
+		OutputDir:   xFile.OutputDir,
+		ArchiveType: extensionType,
+	}
+	if extErr != nil {
+		joined.Errs = append(joined.Errs, extErr)
+	}
+
+	joined.Errs = append(joined.Errs, sigErr)
+
+	return joined
 }
 
 // nameMax is the typical filesystem limit for a single path component (POSIX NAME_MAX).

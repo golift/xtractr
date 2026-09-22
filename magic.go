@@ -56,8 +56,9 @@ var signatureTable = []signature{
 	{Offset: 0, Magic: []byte{0x21, 0x3C, 0x61, 0x72, 0x63, 0x68, 0x3E, 0x0A}, Fn: ChngInt(ExtractAr), Type: "ar"},
 	// RPM.
 	{Offset: 0, Magic: []byte{0xED, 0xAB, 0xEE, 0xDB}, Fn: ChngInt(ExtractRPM), Type: "rpm"},
-	// ISO9660 at offset 0x8001.
+	// ISO9660 ("CD001") and UDF ("BEA01") both live at sector 16, byte 1.
 	{Offset: 0x8001, Magic: []byte{0x43, 0x44, 0x30, 0x30, 0x31}, Fn: ChngInt(ExtractISO), Type: "iso"}, //nolint:mnd
+	{Offset: 0x8001, Magic: []byte{0x42, 0x45, 0x41, 0x30, 0x31}, Fn: ChngInt(ExtractISO), Type: "iso"}, //nolint:mnd
 	// ISO9660 at offset 0x8801.
 	{Offset: 0x8801, Magic: []byte{0x43, 0x44, 0x30, 0x30, 0x31}, Fn: ChngInt(ExtractISO), Type: "iso"}, //nolint:mnd
 	// ISO9660 at offset 0x9001.

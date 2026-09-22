@@ -12,7 +12,7 @@ import (
 func extractUDF(xFile *XFile, ra io.ReaderAt) (uint64, []string, error) {
 	udfImage, err := udf.NewUdfFromReader(ra)
 	if err != nil {
-		return 0, nil, fmt.Errorf("failed to open UDF image: %s: %w", xFile.FilePath, err)
+		return 0, nil, fmt.Errorf("failed to open UDF image: %w", err)
 	}
 
 	tracker, headerErr := xFile.archiveProgress(getUncompressedUDFSize(udfImage))
