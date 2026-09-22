@@ -38,6 +38,7 @@ var extension2function = []archive{
 	// The ones with double extensions that match a single (below) need to come first.
 	{Type: "7zip", Ext: ".7z", Fn: Extract7z},
 	{Type: "7zip", Ext: ".7z.001", Fn: Extract7z},
+	{Type: "asar", Ext: ".asar", Fn: ChngInt(ExtractASAR)},
 	{Type: "ar", Ext: ".ar", Fn: ChngInt(ExtractAr)},
 	{Type: "brotli", Ext: ".br", Fn: ChngInt(ExtractBrotli)},
 	{Type: "brotli", Ext: ".brotli", Fn: ChngInt(ExtractBrotli)},
@@ -90,7 +91,7 @@ func ChngInt(smallFn func(*XFile) (uint64, []string, error)) Interface {
 // dispatchWorkers runs work for each entry using a bounded worker pool.
 // Dispatch stops when a worker reports an error, in-flight entries finish,
 // and the first error encountered is returned. Used by the random-access
-// extractors (ZIP, 7z) when XFile.FileWorkers > 1.
+// extractors (ZIP, 7z, ASAR) when XFile.FileWorkers > 1.
 func dispatchWorkers[T any](count int, entries []T, work func(T) error) error {
 	var (
 		waitGroup sync.WaitGroup
@@ -153,7 +154,7 @@ type XFile struct {
 	// (RAR/7z) Archive passwords (to try multiple).
 	Passwords []string
 	// FileWorkers controls how many files within a single archive are extracted
-	// concurrently. Only effective for random-access formats (ZIP, 7z).
+	// concurrently. Only effective for random-access formats (ZIP, 7z, ASAR).
 	// Streaming formats ignore this. 0 or 1 = sequential (current behavior).
 	// Total concurrent I/O when using the queue = Config.Parallel * FileWorkers.
 	FileWorkers int

@@ -26,7 +26,7 @@ type Config struct {
 	// Number of concurrent extractions allowed.
 	Parallel int
 	// FileWorkers controls how many files within a single archive are extracted
-	// concurrently. Only effective for random-access formats (ZIP, 7z).
+	// concurrently. Only effective for random-access formats (ZIP, 7z, ASAR).
 	// Streaming formats ignore this. 0 or 1 = sequential (current behavior).
 	// Total concurrent I/O = Parallel * FileWorkers.
 	FileWorkers int
