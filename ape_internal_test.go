@@ -421,11 +421,11 @@ func TestParseAPESeekTable4GBOverflow(t *testing.T) {
 func TestParseAPEErrors(t *testing.T) {
 	t.Parallel()
 
-	t.Run("old version", func(t *testing.T) {
+	t.Run("version before 3.81", func(t *testing.T) {
 		t.Parallel()
 
 		builder := defaultSyntheticAPE(equalFrames(2))
-		builder.version = 3970
+		builder.version = 3800
 
 		_, err := parseAPE(builder.writeTo(t))
 		require.ErrorIs(t, err, ErrAPEOldVersion)
@@ -777,4 +777,334 @@ func TestReadAPESeekTableRejectsHugeTotalFrames(t *testing.T) {
 
 	_, err := parseAPE(path)
 	require.ErrorIs(t, err, ErrAPESeekTable)
+}
+
+// syntheticOldAPE builds a legacy (< 3.98) APE file. Frame payloads are arbitrary bytes;
+// the container layout matches APE_HEADER_OLD, including the optional peak, seek-count,
+// and stored WAV header that 3.97 rips carry.
+type syntheticOldAPE struct {
+	version          uint16
+	compression      uint16
+	flags            uint16
+	channels         uint16
+	sampleRate       uint32
+	finalFrameBlocks uint32
+	frames           [][]byte
+	junk             []byte
+	wav              []byte
+	seekElements     uint32 // Non-zero overrides the seek-element count when that flag is set.
+	terminating      []byte
+	tag              []byte
+}
+
+// withDefaults fills zero fields the way a 3.97 high-compression stereo file looks.
+func (s *syntheticOldAPE) withDefaults() {
+	if s.version == 0 {
+		s.version = 3970
+	}
+
+	if s.compression == 0 {
+		s.compression = 3000
+	}
+
+	if s.flags == 0 {
+		s.flags = apeFormatFlagCRC | apeFormatFlagHasPeakLevel | apeFormatFlagHasSeekElements
+	}
+
+	if s.channels == 0 {
+		s.channels = testAPEChannels
+	}
+
+	if s.finalFrameBlocks == 0 {
+		s.finalFrameBlocks = testAPEFinalFrameBlocks
+	}
+
+	if s.sampleRate == 0 {
+		s.sampleRate = apeOldBlocksPerFrame(s.version, s.compression)
+	}
+
+	if s.wav == nil && s.flags&apeFormatFlagCreateWAV == 0 {
+		s.wav = make([]byte, 44)
+	}
+}
+
+// layout returns the MAC-relative offset of the first frame and the seek-entry count.
+func (s *syntheticOldAPE) layout() (int, int) {
+	s.withDefaults()
+
+	seekCount := len(s.frames)
+	if s.flags&apeFormatFlagHasSeekElements != 0 && s.seekElements != 0 {
+		seekCount = int(s.seekElements)
+	}
+
+	extra := 0
+	if s.flags&apeFormatFlagHasPeakLevel != 0 {
+		extra += bytesPerUint32
+	}
+
+	if s.flags&apeFormatFlagHasSeekElements != 0 {
+		extra += bytesPerUint32
+	}
+
+	wav := 0
+	if s.flags&apeFormatFlagCreateWAV == 0 {
+		wav = len(s.wav)
+	}
+
+	return apeOldHeaderSize + extra + wav + seekCount*bytesPerUint32, seekCount
+}
+
+// bytes serializes the legacy APE file.
+func (s *syntheticOldAPE) bytes() []byte {
+	s.withDefaults()
+	frame0, count := s.layout()
+
+	hdr := apeHeaderOld{
+		ID:               [4]byte{'M', 'A', 'C', ' '},
+		Version:          s.version,
+		CompressionLevel: s.compression,
+		FormatFlags:      s.flags,
+		Channels:         s.channels,
+		SampleRate:       s.sampleRate,
+		TerminatingBytes: uint32(len(s.terminating)),
+		TotalFrames:      uint32(len(s.frames)),
+		FinalFrameBlocks: s.finalFrameBlocks,
+	}
+
+	var storedWav []byte
+	if s.flags&apeFormatFlagCreateWAV == 0 {
+		storedWav = s.wav
+		hdr.HeaderBytes = uint32(len(storedWav))
+	}
+
+	var buf bytes.Buffer
+
+	buf.Write(s.junk)
+	_ = binary.Write(&buf, binary.LittleEndian, &hdr)
+
+	if s.flags&apeFormatFlagHasPeakLevel != 0 {
+		_ = binary.Write(&buf, binary.LittleEndian, uint32(0x7F24))
+	}
+
+	if s.flags&apeFormatFlagHasSeekElements != 0 {
+		_ = binary.Write(&buf, binary.LittleEndian, uint32(count))
+	}
+
+	buf.Write(storedWav)
+
+	if count > 0 {
+		seek := make([]uint32, count)
+		off := frame0
+
+		for i := 0; i < len(s.frames) && i < count; i++ {
+			seek[i] = uint32(off)
+			off += len(s.frames[i])
+		}
+
+		_ = binary.Write(&buf, binary.LittleEndian, seek)
+	}
+
+	for _, frame := range s.frames {
+		buf.Write(frame)
+	}
+
+	buf.Write(s.terminating)
+	buf.Write(s.tag)
+
+	return buf.Bytes()
+}
+
+// writeTo writes the legacy APE to a temp file and returns its path.
+func (s *syntheticOldAPE) writeTo(t *testing.T) string {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), "album.ape")
+	require.NoError(t, os.WriteFile(path, s.bytes(), 0o600))
+
+	return path
+}
+
+func TestAPEOldHeaderIs32Bytes(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, apeOldHeaderSize, binary.Size(apeHeaderOld{}))
+}
+
+func TestParseAPEOldBasic(t *testing.T) {
+	t.Parallel()
+
+	frames := equalFrames(4)
+	builder := syntheticOldAPE{frames: frames, junk: []byte("junk")}
+	frame0, _ := builder.layout()
+
+	info, err := parseAPE(builder.writeTo(t))
+	require.NoError(t, err)
+
+	assert.Equal(t, int64(len(builder.junk)), info.JunkBytes)
+	assert.Equal(t, uint16(3970), info.Descriptor.Version)
+	assert.Equal(t, uint16(3000), info.Header.CompressionLevel)
+	assert.Equal(t, uint16(testAPEChannels), info.Header.Channels)
+	assert.Equal(t, uint16(apeBits16), info.Header.BitsPerSample)
+	assert.Equal(t, uint32(apeBlocksV3950), info.Header.BlocksPerFrame)
+	assert.Equal(t, uint32(testAPEFinalFrameBlocks), info.Header.FinalFrameBlocks)
+	assert.Equal(t, uint32(4), info.Header.TotalFrames)
+	assert.Equal(t, int64(frame0), info.SeekTable[0])
+	assert.Equal(t, int64(frame0+testAPEFrameLen), info.SeekTable[1])
+	assert.Equal(t, uint64(4*testAPEFrameLen), info.FrameData)
+	assert.Equal(t, uint64(3*apeBlocksV3950+testAPEFinalFrameBlocks), info.TotalBlocks)
+}
+
+func TestParseAPEOldBlocksPerFrame(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		version     uint16
+		compression uint16
+		want        uint32
+	}{
+		{name: "3.97", version: 3970, compression: 3000, want: apeBlocksV3950},
+		{name: "3.90", version: 3900, compression: 2000, want: apeBlocksV3900},
+		{name: "3.85 extra high", version: 3850, compression: apeCompressionExtraHigh, want: apeBlocksV3900},
+		{name: "3.85 normal", version: 3850, compression: 2000, want: apeBlocksV3800},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			builder := syntheticOldAPE{
+				version:     test.version,
+				compression: test.compression,
+				frames:      equalFrames(2),
+			}
+
+			info, err := parseAPE(builder.writeTo(t))
+			require.NoError(t, err)
+			assert.Equal(t, test.want, info.Header.BlocksPerFrame)
+			assert.Equal(t, test.version, info.Descriptor.Version)
+		})
+	}
+}
+
+func TestParseAPEOldCreateWAVHeader(t *testing.T) {
+	t.Parallel()
+
+	builder := syntheticOldAPE{
+		flags:  apeFormatFlagCreateWAV,
+		frames: equalFrames(2),
+	}
+	frame0, _ := builder.layout()
+
+	info, err := parseAPE(builder.writeTo(t))
+	require.NoError(t, err)
+
+	assert.Equal(t, int64(frame0), info.SeekTable[0])
+	assert.Equal(t, apeOldHeaderSize+2*bytesPerUint32, frame0)
+	assert.Equal(t, uint64(2*testAPEFrameLen), info.FrameData)
+}
+
+func TestParseAPEOldSkipsTagAndTerminating(t *testing.T) {
+	t.Parallel()
+
+	tag := testAPETag(true)
+	id3 := make([]byte, id3v1TagLen)
+	copy(id3, "TAG")
+
+	builder := syntheticOldAPE{
+		frames:      equalFrames(2),
+		terminating: []byte{1, 2, 3, 4},
+		tag:         append(tag, id3...),
+	}
+
+	info, err := parseAPE(builder.writeTo(t))
+	require.NoError(t, err)
+	assert.Equal(t, uint64(2*testAPEFrameLen), info.FrameData)
+}
+
+func TestParseAPEOldErrors(t *testing.T) {
+	t.Parallel()
+
+	t.Run("no frames", func(t *testing.T) {
+		t.Parallel()
+
+		builder := syntheticOldAPE{}
+
+		_, err := parseAPE(builder.writeTo(t))
+		require.ErrorIs(t, err, ErrAPENoFrames)
+	})
+
+	t.Run("short seek table", func(t *testing.T) {
+		t.Parallel()
+
+		builder := syntheticOldAPE{frames: equalFrames(4), seekElements: 1}
+
+		_, err := parseAPE(builder.writeTo(t))
+		require.ErrorIs(t, err, ErrAPESeekTable)
+	})
+}
+
+func TestSplitAPEOldEndToEnd(t *testing.T) {
+	t.Parallel()
+
+	frames := equalFrames(4)
+	builder := syntheticOldAPE{
+		flags:  apeFormatFlag8Bit | apeFormatFlagCRC | apeFormatFlagHasPeakLevel | apeFormatFlagHasSeekElements,
+		frames: frames,
+	}
+
+	xFile := &XFile{OutputDir: t.TempDir(), FileMode: 0o600, DirMode: 0o700}
+	cue := &CueSheet{Tracks: []CueTrack{
+		{Number: 1, Title: "First"},
+		{Number: 2, Title: "Second"},
+	}}
+
+	// Sample rate equals blocks-per-frame, so one second is one frame. Track 2 starts at frame 2.
+	_, files, err := splitAPE(xFile, builder.writeTo(t), cue, []cueTimestamp{{}, {seconds: 2}})
+	require.NoError(t, err)
+	require.Len(t, files, 2)
+
+	track1, err := parseAPE(files[0])
+	require.NoError(t, err)
+	assert.Equal(t, uint16(3970), track1.Descriptor.Version)
+	assert.Equal(t, uint16(3000), track1.Header.CompressionLevel)
+	assert.Equal(t, uint16(apeBits8), track1.Header.BitsPerSample)
+	assert.Equal(t, uint32(2), track1.Header.TotalFrames)
+	assert.Equal(t, uint32(apeBlocksV3950), track1.Header.FinalFrameBlocks)
+	assert.NotZero(t, track1.Header.FormatFlags&apeFormatFlagCreateWAV)
+	assert.NotZero(t, track1.Header.FormatFlags&apeFormatFlag8Bit)
+	assert.Zero(t, track1.Header.FormatFlags&(apeFormatFlagHasPeakLevel|apeFormatFlagHasSeekElements))
+
+	raw, err := os.ReadFile(files[0])
+	require.NoError(t, err)
+
+	want := append(append([]byte{}, frames[0]...), frames[1]...)
+	got := raw[track1.SeekTable[0] : track1.SeekTable[0]+int64(len(want))]
+	assert.Equal(t, want, got, "aligned legacy track frame data should be copied verbatim")
+
+	track2, err := parseAPE(files[1])
+	require.NoError(t, err)
+	assert.Equal(t, uint32(2), track2.Header.TotalFrames)
+	assert.Equal(t, uint32(testAPEFinalFrameBlocks), track2.Header.FinalFrameBlocks)
+	assert.Equal(t, uint16(3970), track2.Descriptor.Version)
+}
+
+// testAPETag builds an APEv2 footer, plus a header of the same size when hasHeader is set.
+func testAPETag(hasHeader bool) []byte {
+	flags := uint32(0)
+	total := apeTagFooterLen
+
+	if hasHeader {
+		flags = apeTagFlagHasHeader
+		total += apeTagFooterLen
+	}
+
+	body := make([]byte, total)
+	footer := body[len(body)-apeTagFooterLen:]
+	copy(footer, "APETAGEX")
+	binary.LittleEndian.PutUint32(footer[8:], apeTagVersion2)
+	binary.LittleEndian.PutUint32(footer[12:], uint32(apeTagFooterLen))
+	binary.LittleEndian.PutUint32(footer[20:], flags)
+
+	return body
 }
