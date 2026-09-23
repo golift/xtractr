@@ -6,6 +6,14 @@ on:
 permissions:
   contents: read
 jobs:
+  codespell:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: codespell-project/actions-codespell@e3258cca84ce02b0bb36a3d41f2c18f719a0cc1a # v2.4.3
+        with:
+          skip: .git,go.sum
+          ignore_words_list: caf
   # Runs `go test` against 3 operating systems.
   gotest:
     strategy:
