@@ -20,7 +20,7 @@ require (
 	github.com/sshaman1101/dcompress v0.0.0-20200109162717-50436a6332de
 	github.com/stretchr/testify v1.12.1
 	github.com/therootcompany/xz v1.0.1
-	github.com/ulikunitz/xz v0.5.16
+	github.com/ulikunitz/xz v0.5.17
 	golang.org/x/text v0.42.0
 	golift.io/udf v0.1.0
 )
