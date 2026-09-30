@@ -76,6 +76,8 @@ type Xtract struct {
 	// 0 means unlimited; when 0, Config.ExtrasMaxDepth is used. Negative
 	// also means unlimited. Distinct from Filter.MaxDepth (initial search).
 	ExtrasMaxDepth int
+	// APEOpts selects the container and compression for an APE CUE split.
+	APEOpts APEOpts
 }
 
 // Response is sent to the call-back function. The first CBFunction call is just
@@ -245,6 +247,7 @@ func (x *Xtractr) decompressFolders(resp *Response) error {
 				MaxRatio:         resp.X.MaxRatio,
 				MaxNested:        resp.X.MaxNested,
 				ExtrasMaxDepth:   resp.X.ExtrasMaxDepth,
+				APEOpts:          resp.X.APEOpts,
 			},
 			Started:  resp.Started,
 			Output:   output,
@@ -356,6 +359,7 @@ func (x *Xtractr) decompressFiles(resp *Response) error {
 			MaxRatio:       resp.X.MaxRatio,
 			MaxNested:      resp.X.MaxNested,
 			ExtrasMaxDepth: resp.X.ExtrasMaxDepth,
+			APEOpts:        resp.X.APEOpts,
 		},
 		Started:  resp.Started,
 		Output:   resp.Output,
@@ -423,6 +427,7 @@ func (x *Xtractr) processArchive(filename string, resp *Response) (uint64, []str
 	x.config.Debugf("Extracting File: %v to %v", filename, resp.Output)
 
 	xFile := &XFile{
+		APEOpts:       resp.X.APEOpts,
 		FilePath:      filename,
 		OutputDir:     resp.Output,
 		FileMode:      x.config.FileMode,

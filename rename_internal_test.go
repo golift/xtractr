@@ -461,7 +461,7 @@ func TestMoveFilesConcurrentSameDest(t *testing.T) {
 	for idx := range workers {
 		fromDir := t.TempDir()
 		name := fmt.Sprintf("file%d.bin", idx)
-		require.NoError(t, os.WriteFile(filepath.Join(fromDir, name), []byte(fmt.Sprintf("data%d", idx)), 0o600))
+		require.NoError(t, os.WriteFile(filepath.Join(fromDir, name), fmt.Appendf(nil, "data%d", idx), 0o600))
 
 		waitGrp.Go(func() {
 			_, errs[idx] = moveFiles(NoLogger(), 0o755, fromDir, toDir, false, "")
