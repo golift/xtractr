@@ -373,10 +373,12 @@ func apeOldOutputFlags(flags uint16) uint16 {
 }
 
 // buildOldAPETrackContainer serializes a legacy header and seek table for one split track.
-func buildOldAPETrackContainer(info *apeInfo, startFrame, endFrame int) (*apeTrackContainer, error) {
+func buildOldAPETrackContainer(
+	info *apeInfo, startFrame, endFrame int, finalBlocks uint32,
+) (*apeTrackContainer, error) {
 	numFrames := endFrame - startFrame + 1
 	dataOffset := int64(apeOldHeaderSize) + int64(numFrames)*bytesPerUint32
-	layout := layoutAPETrackFrames(info, startFrame, endFrame, dataOffset)
+	layout := layoutAPETrackFrames(info, startFrame, endFrame, dataOffset, finalBlocks)
 
 	hdr := apeHeaderOld{
 		ID:               info.Descriptor.ID,
