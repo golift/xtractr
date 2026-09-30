@@ -69,7 +69,7 @@ func (t cueTimestamp) toSamples(sampleRate uint32) uint64 {
 	return samples
 }
 
-// ExtractCUE extracts individual tracks from a FLAC file referenced by a CUE sheet.
+// ExtractCUE extracts individual tracks from a FLAC or APE file referenced by a CUE sheet.
 // The xFile.FilePath should point to the .cue file (or .cue.txt).
 func ExtractCUE(xFile *XFile) (size uint64, files, archives []string, err error) {
 	cue, timestamps, err := parseCueSheetFile(xFile.FilePath)
@@ -95,7 +95,7 @@ func ExtractCUE(xFile *XFile) (size uint64, files, archives []string, err error)
 	case ".flac":
 		size, files, err = splitFLAC(xFile, audioPath, cue, timestamps)
 	case ".ape":
-		size, files, err = splitAPE(xFile, audioPath, cue, timestamps)
+		size, files, err = splitAPEPlayable(xFile, audioPath, cue, timestamps)
 	default:
 		return 0, nil, nil, fmt.Errorf("%w: %s", ErrUnsupportedAudio, ext)
 	}

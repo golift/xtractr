@@ -138,6 +138,10 @@ func SupportedExtensions() []string {
 
 // XFile defines the data needed to extract an archive.
 type XFile struct {
+	// APEOpts selects the container and APE compression for ConvertAPE and for
+	// CUE splits of APE images. The zero value re-encodes APE at normal (2000).
+	APEOpts
+
 	// Path to archive being extracted.
 	FilePath string
 	// Folder to extract archive into.

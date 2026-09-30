@@ -51,6 +51,8 @@ var (
 	// ErrTrackTooShort is returned when a CUE track holds fewer samples than the
 	// FLAC minimum block size; encoding it would record an invalid STREAMINFO.
 	ErrTrackTooShort = errors.New("cue track is shorter than the minimum FLAC block size")
+	// ErrUnsupportedAPEOutput is returned when APEOpts.Output is not ape, wav, or flac.
+	ErrUnsupportedAPEOutput = errors.New("unsupported ape output format")
 
 	// RPM.
 

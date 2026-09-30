@@ -104,6 +104,31 @@ var (
 	ErrAPESeekTable  = errors.New("APE seek table is missing entries for all frames")
 )
 
+// AudioFormat is the container written when APE audio is decoded.
+type AudioFormat string
+
+const (
+	// AudioFormatAPE re-encodes Monkey's Audio. Empty Output means this too.
+	AudioFormatAPE AudioFormat = "ape"
+	// AudioFormatWAV writes interleaved PCM in a RIFF WAVE file.
+	AudioFormatWAV AudioFormat = "wav"
+	// AudioFormatFLAC writes a FLAC file. 32-bit and float PCM cannot be stored.
+	AudioFormatFLAC AudioFormat = "flac"
+)
+
+// APEOpts controls decoded APE output. XFile embeds it, so ExtractCUE and
+// ConvertAPE share one set of fields.
+type APEOpts struct {
+	// Compression is the Monkey's Audio level used when Output is APE.
+	// 0 selects normal (2000). Other values are 1000 fast, 3000 high,
+	// 4000 extra high, and 5000 insane. WAV and FLAC ignore it.
+	Compression int
+	// Output is the container for a decoded APE file or an APE CUE split.
+	// Empty and "ape" stay APE. "wav" and "flac" are accepted.
+	// The match is case-insensitive.
+	Output AudioFormat
+}
+
 // parseAPE opens an APE file and parses its descriptor, header, and seek table.
 // Versions since 3.98 use the descriptor layout; 3.81 through 3.97 use the legacy header.
 // Reverse-engineered from MAC/Source/MACLib/APEHeader.cpp.
@@ -465,11 +490,14 @@ func apeFrameDataSize(info *apeInfo, frameIdx int) int64 {
 }
 
 // apeFrameRange is the inclusive range of APE frames that make up one CUE track.
-// APE can only be split on whole-frame boundaries (no decode), so track boundaries are
-// snapped to the frame containing the CUE timestamp.
+// The last frame is the one that contains the next cue. finalBlocks tells the decoder
+// to stop at that cue, so the track keeps the tail of the song. The next track still
+// starts at the beginning of that same frame, which leaves up to one frame of the
+// previous track at the front.
 type apeFrameRange struct {
-	start int // inclusive
-	end   int // inclusive
+	start       int    // inclusive
+	end         int    // inclusive
+	finalBlocks uint32 // samples to play from the last frame
 }
 
 // apeTrackFrameRanges maps each CUE track to the inclusive APE frame range it occupies.
@@ -491,23 +519,47 @@ func apeTrackFrameRanges(cue *CueSheet, timestamps []cueTimestamp, info *apeInfo
 			startFrame = 0 // The first track always includes any lead-in/pregap frames.
 		}
 
-		endFrame := lastFrame
+		endSample := info.TotalBlocks
 		if idx+1 < len(cue.Tracks) {
-			endFrame = int(trackStarts[idx+1]/bpf) - 1
+			endSample = trackStarts[idx+1]
 		}
 
-		if startFrame > lastFrame {
-			startFrame = lastFrame
-		}
-
-		if endFrame < startFrame {
-			endFrame = startFrame
-		}
-
-		ranges[idx] = apeFrameRange{start: startFrame, end: endFrame}
+		ranges[idx] = apeTrackSpan(info, bpf, lastFrame, startFrame, endSample)
 	}
 
 	return ranges
+}
+
+// apeTrackSpan is one track's frames. endSample is the first sample that belongs
+// to the next track. The last included frame is played only up to that sample.
+func apeTrackSpan(info *apeInfo, bpf uint64, lastFrame, startFrame int, endSample uint64) apeFrameRange {
+	if endSample == 0 {
+		endSample = 1
+	}
+
+	lastSample := endSample - 1
+	endFrame := int(lastSample / bpf)
+	finalBlocks := uint32(lastSample%bpf) + 1
+
+	if startFrame > lastFrame {
+		startFrame = lastFrame
+	}
+
+	if endFrame > lastFrame {
+		endFrame = lastFrame
+	}
+
+	if endFrame < startFrame {
+		endFrame = startFrame
+	}
+
+	// The source's last frame is shorter than a full frame. Do not claim more
+	// samples than that frame was encoded with.
+	if endFrame == lastFrame && finalBlocks > info.Header.FinalFrameBlocks {
+		finalBlocks = info.Header.FinalFrameBlocks
+	}
+
+	return apeFrameRange{start: startFrame, end: endFrame, finalBlocks: finalBlocks}
 }
 
 // splitAPE splits an APE file into individual tracks based on CUE sheet data.
@@ -543,12 +595,12 @@ func splitAPE(
 
 	for i := range cue.Tracks {
 		track := &cue.Tracks[i]
-		fr := ranges[i]
+		trackSpan := ranges[i]
 
 		outputName := formatTrackFilename(track, ".ape")
 		outputPath := filepath.Join(xFile.OutputDir, outputName)
 
-		size, usedPath, writeErr := writeTrackAPE(xFile, outputPath, info, srcFile, fr.start, fr.end, xFile.FileMode)
+		size, usedPath, writeErr := writeTrackAPE(xFile, outputPath, info, srcFile, trackSpan, xFile.FileMode)
 		if writeErr != nil {
 			return totalSize, files, fmt.Errorf("writing ape track %d: %w", track.Number, writeErr)
 		}
@@ -570,7 +622,7 @@ func writeTrackAPE(
 	outputPath string,
 	info *apeInfo,
 	srcFile *os.File,
-	startFrame, endFrame int,
+	trackSpan apeFrameRange,
 	fileMode os.FileMode,
 ) (uint64, string, error) {
 	outFile, usedPath, err := openExtractFile(outputPath, fileMode)
@@ -586,7 +638,7 @@ func writeTrackAPE(
 		return 0, usedPath, err
 	}
 
-	size, err := writeTrackAPEContents(outFile, counted, info, srcFile, startFrame, endFrame)
+	size, err := writeTrackAPEContents(outFile, counted, info, srcFile, trackSpan)
 
 	closeErr := outFile.Close()
 	if err == nil && closeErr != nil {
@@ -625,14 +677,15 @@ type apeTrackFrameLayout struct {
 
 // layoutAPETrackFrames maps source frames startFrame..endFrame onto a new file whose
 // compressed audio begins at dataOffset. Seek entries are absolute file offsets.
-func layoutAPETrackFrames(info *apeInfo, startFrame, endFrame int, dataOffset int64) apeTrackFrameLayout {
+// finalBlocks is how many samples of the last frame the decoder should play. The
+// compressed bytes of that frame are still copied in full.
+func layoutAPETrackFrames(
+	info *apeInfo,
+	startFrame, endFrame int,
+	dataOffset int64,
+	finalBlocks uint32,
+) apeTrackFrameLayout {
 	numFrames := endFrame - startFrame + 1
-
-	// The final frame of the source keeps its (short) block count; interior frames are full.
-	finalBlocks := info.Header.BlocksPerFrame
-	if endFrame == int(info.Header.TotalFrames)-1 {
-		finalBlocks = info.Header.FinalFrameBlocks
-	}
 
 	seekTable := make([]uint32, numFrames)
 
@@ -666,15 +719,15 @@ func apeFramePadding(info *apeInfo, endFrame int) int {
 
 // buildAPETrackContainer computes the descriptor, header and seek table for a new APE file
 // containing source frames startFrame..endFrame (inclusive).
-func buildAPETrackContainer(info *apeInfo, startFrame, endFrame int) (*apeTrackContainer, error) {
+func buildAPETrackContainer(info *apeInfo, startFrame, endFrame int, finalBlocks uint32) (*apeTrackContainer, error) {
 	if isOldAPE(info) {
-		return buildOldAPETrackContainer(info, startFrame, endFrame)
+		return buildOldAPETrackContainer(info, startFrame, endFrame, finalBlocks)
 	}
 
 	numFrames := endFrame - startFrame + 1
 	seekTableSize := uint32(numFrames) * bytesPerUint32
 	dataOffset := int64(apeDescriptorSize) + int64(apeHeaderSize) + int64(seekTableSize)
-	layout := layoutAPETrackFrames(info, startFrame, endFrame, dataOffset)
+	layout := layoutAPETrackFrames(info, startFrame, endFrame, dataOffset, finalBlocks)
 	paddedDataSize := layout.trackDataSize + int64(layout.framePadding)
 
 	hdr := apeHeader{
@@ -721,9 +774,9 @@ func writeTrackAPEContents(
 	counted io.Writer,
 	info *apeInfo,
 	srcFile *os.File,
-	startFrame, endFrame int,
+	trackSpan apeFrameRange,
 ) (uint64, error) {
-	con, err := buildAPETrackContainer(info, startFrame, endFrame)
+	con, err := buildAPETrackContainer(info, trackSpan.start, trackSpan.end, trackSpan.finalBlocks)
 	if err != nil {
 		return 0, err
 	}
@@ -735,7 +788,7 @@ func writeTrackAPEContents(
 
 	dst, sum := apeFrameWriter(counted, con.skipMD5)
 
-	err = writeAPEFrameData(dst, srcFile, info, startFrame, endFrame, con.trackDataSize)
+	err = writeAPEFrameData(dst, srcFile, info, trackSpan.start, trackSpan.end, con.trackDataSize)
 	if err != nil {
 		return 0, err
 	}

@@ -486,7 +486,7 @@ func TestBuildAPETrackContainer(t *testing.T) {
 	require.NoError(t, err)
 
 	// A container for frames 1..2 (interior frames; not the source's final frame).
-	con, err := buildAPETrackContainer(info, 1, 2)
+	con, err := buildAPETrackContainer(info, 1, 2, testAPEBlocksPerFrame)
 	require.NoError(t, err)
 
 	assert.Equal(t, uint32(2), con.descriptor.SeekTableBytes/bytesPerUint32)
@@ -524,7 +524,7 @@ func TestBuildAPETrackContainerFinalFrame(t *testing.T) {
 	require.NoError(t, err)
 
 	// A track ending on the source's final frame must carry the short final-frame block count.
-	con, err := buildAPETrackContainer(info, 2, 3)
+	con, err := buildAPETrackContainer(info, 2, 3, testAPEFinalFrameBlocks)
 	require.NoError(t, err)
 
 	finalFrameBlocks := binary.LittleEndian.Uint32(con.headerBytes[8:])
@@ -612,6 +612,35 @@ func TestSplitAPEEndToEnd(t *testing.T) {
 	assert.Equal(t, wantFrameData, gotFrameData[:len(wantFrameData)], "aligned track frame data should be copied verbatim")
 	padding := gotFrameData[len(wantFrameData):]
 	assert.Equal(t, make([]byte, len(padding)), padding, "trailing padding must be zero")
+}
+
+// TestSplitAPEKeepsCueTail includes the frame that contains the next cue and sets
+// FinalFrameBlocks to the cue sample, so the track does not end a frame early.
+func TestSplitAPEKeepsCueTail(t *testing.T) {
+	t.Parallel()
+
+	frames := equalFrames(4)
+	srcPath := defaultSyntheticAPE(frames).writeTo(t)
+	xFile := &XFile{OutputDir: t.TempDir(), FileMode: 0o600, DirMode: 0o700}
+	cue := &CueSheet{Tracks: []CueTrack{
+		{Number: 1, Title: "First"},
+		{Number: 2, Title: "Second"},
+	}}
+
+	// 2 seconds is frame 2 exactly (sample rate == blocks per frame). One CD frame
+	// past that is sample 201, inside frame 2.
+	_, files, err := splitAPE(xFile, srcPath, cue, []cueTimestamp{{}, {seconds: 2, frames: 1}})
+	require.NoError(t, err)
+
+	track1, err := parseAPE(files[0])
+	require.NoError(t, err)
+	assert.Equal(t, uint32(3), track1.Header.TotalFrames, "track must include the cue frame")
+	assert.Equal(t, uint32(1), track1.Header.FinalFrameBlocks)
+
+	track2, err := parseAPE(files[1])
+	require.NoError(t, err)
+	assert.Equal(t, uint32(2), track2.Header.TotalFrames, "next track still starts on the cue frame")
+	assert.Equal(t, uint32(testAPEFinalFrameBlocks), track2.Header.FinalFrameBlocks)
 }
 
 func TestSplitAPESingleTrack(t *testing.T) {
