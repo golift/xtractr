@@ -215,12 +215,6 @@ func (s *apeStreamer) run() (uint64, []string, error) {
 		return 0, nil, fmt.Errorf("%w: decoded ape pcm", ErrUnsupportedAudio)
 	}
 
-	defer func() {
-		if s.cur != nil {
-			s.cur.abort()
-		}
-	}()
-
 	pos := uint64(0)
 
 	for {
@@ -230,23 +224,40 @@ func (s *apeStreamer) run() (uint64, []string, error) {
 		}
 
 		if err != nil {
-			return s.size, s.files, fmt.Errorf("decoding ape: %w", err)
+			return s.fail(fmt.Errorf("decoding ape: %w", err))
 		}
 
 		pos, err = s.writeFrame(frame, pos)
 		if err != nil {
-			return s.size, s.files, err
+			return s.fail(err)
 		}
 	}
 
 	if s.cur != nil {
 		err := s.finishTrack()
 		if err != nil {
-			return s.size, s.files, err
+			return s.fail(err)
 		}
 	}
 
 	return s.size, s.files, nil
+}
+
+// fail drops the open track and every track already written. ExtractCUE
+// discards the returned file list on error, so those files would otherwise stay.
+func (s *apeStreamer) fail(err error) (uint64, []string, error) {
+	if s.cur != nil {
+		s.cur.abort()
+		s.cur = nil
+	}
+
+	for _, path := range s.files {
+		s.xFile.uncountExtracted()
+
+		_ = os.Remove(path)
+	}
+
+	return 0, nil, err
 }
 
 func (s *apeStreamer) writeFrame(frame []byte, frameStart uint64) (uint64, error) {

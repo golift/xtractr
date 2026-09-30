@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"math"
 
 	"github.com/mewkiz/flac"
 	"github.com/mewkiz/flac/frame"
@@ -44,7 +45,12 @@ func writeWAV(dst io.Writer, pcm []byte, stream ape.Stream, tags map[string]stri
 		return fmt.Errorf("%w: wav exceeds 4 GiB", ErrUnsupportedAPEOutput)
 	}
 
-	_, err := dst.Write(wavHeader(stream, uint32(len(pcm)), uint32(len(info))))
+	header, err := wavHeader(stream, uint32(len(pcm)), uint32(len(info)))
+	if err != nil {
+		return err
+	}
+
+	_, err = dst.Write(header)
 	if err != nil {
 		return fmt.Errorf("writing wav header: %w", err)
 	}
@@ -91,16 +97,16 @@ func writeWAVData(dst io.Writer, pcm []byte) error {
 	return nil
 }
 
-func wavHeader(stream ape.Stream, dataLen, infoLen uint32) []byte {
+func wavHeader(stream ape.Stream, dataLen, infoLen uint32) ([]byte, error) {
 	format := uint16(wavFormatPCM)
 	if stream.Float {
 		format = wavFormatFloat
 	}
 
-	channels := uint16(stream.Channels)
-	bits := uint16(stream.Bits)
-	align := channels * bits / bitsPerByte
-	rate := uint32(stream.SampleRate)
+	align, byteRate, err := wavLayout(stream)
+	if err != nil {
+		return nil, err
+	}
 
 	header := make([]byte, wavFmtLen)
 	copy(header[0:], "RIFF")
@@ -110,13 +116,42 @@ func wavHeader(stream ape.Stream, dataLen, infoLen uint32) []byte {
 	copy(header[12:], "fmt ")
 	binary.LittleEndian.PutUint32(header[16:], wavFmtChunk)
 	binary.LittleEndian.PutUint16(header[20:], format)
-	binary.LittleEndian.PutUint16(header[22:], channels)
-	binary.LittleEndian.PutUint32(header[24:], rate)
-	binary.LittleEndian.PutUint32(header[28:], rate*uint32(align))
+	binary.LittleEndian.PutUint16(header[22:], uint16(stream.Channels))
+	binary.LittleEndian.PutUint32(header[24:], uint32(stream.SampleRate))
+	binary.LittleEndian.PutUint32(header[28:], byteRate)
 	binary.LittleEndian.PutUint16(header[32:], align)
-	binary.LittleEndian.PutUint16(header[34:], bits)
+	binary.LittleEndian.PutUint16(header[34:], uint16(stream.Bits))
 
-	return header
+	return header, nil
+}
+
+// wavLayout is the fmt block-align and byte-rate fields. Both are fixed-width,
+// so a rate the APE decoder accepts can still be too wide for WAV.
+func wavLayout(stream ape.Stream) (uint16, uint32, error) {
+	if !wavStreamFits(stream) {
+		return 0, 0, fmt.Errorf("%w: decoded ape pcm", ErrUnsupportedAudio)
+	}
+
+	align := stream.Channels * stream.Bits / bitsPerByte
+	byteRate := uint64(stream.SampleRate) * uint64(align)
+
+	if align <= 0 || align > math.MaxUint16 || byteRate > maxUint32 {
+		return 0, 0, fmt.Errorf("%w: wav byte rate", ErrUnsupportedAPEOutput)
+	}
+
+	return uint16(align), uint32(byteRate), nil
+}
+
+func wavStreamFits(stream ape.Stream) bool {
+	if stream.Channels <= 0 || stream.Channels > math.MaxUint16 || stream.Bits <= 0 || stream.Bits > math.MaxUint16 {
+		return false
+	}
+
+	if stream.Bits%bitsPerByte != 0 || stream.SampleRate <= 0 || uint64(stream.SampleRate) > maxUint32 {
+		return false
+	}
+
+	return true
 }
 
 func wavInfoChunk(tags map[string]string) []byte {
@@ -261,7 +296,12 @@ func newWAVSink(dst io.Writer, stream ape.Stream, tags map[string]string, sample
 		return nil, fmt.Errorf("%w: wav exceeds 4 GiB", ErrUnsupportedAPEOutput)
 	}
 
-	_, err := dst.Write(wavHeader(stream, uint32(dataLen), uint32(len(info))))
+	header, err := wavHeader(stream, uint32(dataLen), uint32(len(info)))
+	if err != nil {
+		return nil, err
+	}
+
+	_, err = dst.Write(header)
 	if err != nil {
 		return nil, fmt.Errorf("writing wav header: %w", err)
 	}

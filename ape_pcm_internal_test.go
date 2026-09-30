@@ -295,6 +295,18 @@ func TestSplitAPEPlayableHonorsMaxFiles(t *testing.T) {
 		APEOpts:   APEOpts{Output: AudioFormatWAV},
 	})
 	require.ErrorIs(t, err, ErrMaxFiles)
+
+	entries, readErr := os.ReadDir(filepath.Join(dir, "output"))
+	require.NoError(t, readErr)
+	assert.Empty(t, entries)
+}
+
+func TestWriteWAVRejectsByteRateOverflow(t *testing.T) {
+	t.Parallel()
+
+	stream := ape.Stream{SampleRate: 1 << 25, Channels: 32, Bits: 32}
+	err := writeWAV(io.Discard, []byte{0, 0, 0, 0}, stream, nil)
+	require.ErrorIs(t, err, ErrUnsupportedAPEOutput)
 }
 
 func TestWriteWAVPadsOddData(t *testing.T) {
