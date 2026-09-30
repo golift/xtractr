@@ -700,6 +700,40 @@ func (p *progressTracker) reader(reader io.Reader) io.Reader {
 	return &progressWrapper{Reader: reader, progressTracker: p}
 }
 
+// countingReadSeeker counts bytes read from src against this extract.
+// Seek does not count. A nil progress tracker returns src unchanged.
+func (x *XFile) countingReadSeeker(src io.ReadSeeker) io.ReadSeeker {
+	if x == nil || x.prog == nil || src == nil {
+		return src
+	}
+
+	return &countingReadSeeker{src: src, prog: x.prog}
+}
+
+// countingReadSeeker is an io.ReadSeeker that adds each Read to Progress.Read.
+type countingReadSeeker struct {
+	src  io.ReadSeeker
+	prog *progressTracker
+}
+
+func (c *countingReadSeeker) Read(data []byte) (int, error) {
+	size, err := c.src.Read(data)
+	if size > 0 && c.prog != nil {
+		c.prog.mu.Lock()
+		c.prog.Read += uint64(size)
+		c.prog.mu.Unlock()
+		c.prog.send()
+	}
+
+	return size, err //nolint:wrapcheck
+}
+
+func (c *countingReadSeeker) Seek(offset int64, whence int) (int64, error) {
+	pos, err := c.src.Seek(offset, whence)
+
+	return pos, err //nolint:wrapcheck
+}
+
 func (p *progressTracker) readAter(reader io.ReaderAt) io.ReaderAt {
 	return &progressWrapper{ReaderAt: reader, progressTracker: p}
 }

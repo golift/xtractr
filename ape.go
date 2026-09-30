@@ -461,7 +461,7 @@ func roundUpToUint32(n int) int {
 // copyFrameData copies compressed frame data from srcFile to dst for R=0 tracks. io.CopyN
 // copies exactly the requested size and returns a nil error even when the source's final
 // Read reports data together with io.EOF, so a frame that ends at EOF is not a failure.
-func copyFrameData(dst io.Writer, srcFile *os.File, info *apeInfo, startFrame, endFrame int) error {
+func copyFrameData(dst io.Writer, srcFile io.ReadSeeker, info *apeInfo, startFrame, endFrame int) error {
 	for frameIdx := startFrame; frameIdx <= endFrame; frameIdx++ {
 		srcOffset := info.SeekTable[frameIdx] + info.JunkBytes
 		size := apeFrameDataSize(info, frameIdx)
@@ -589,6 +589,8 @@ func splitAPE(
 	}
 	defer srcFile.Close()
 
+	src := xFile.countingReadSeeker(srcFile)
+
 	var (
 		totalSize uint64
 		files     = make([]string, 0, len(cue.Tracks))
@@ -601,7 +603,7 @@ func splitAPE(
 		outputName := formatTrackFilename(track, ".ape")
 		outputPath := filepath.Join(xFile.OutputDir, outputName)
 
-		size, usedPath, writeErr := writeTrackAPE(xFile, outputPath, info, srcFile, trackSpan, xFile.FileMode)
+		size, usedPath, writeErr := writeTrackAPE(xFile, outputPath, info, src, trackSpan, xFile.FileMode)
 		if writeErr != nil {
 			return totalSize, files, fmt.Errorf("writing ape track %d: %w", track.Number, writeErr)
 		}
@@ -622,7 +624,7 @@ func writeTrackAPE(
 	xFile *XFile,
 	outputPath string,
 	info *apeInfo,
-	srcFile *os.File,
+	srcFile io.ReadSeeker,
 	trackSpan apeFrameRange,
 	fileMode os.FileMode,
 ) (uint64, string, error) {
@@ -774,7 +776,7 @@ func writeTrackAPEContents(
 	outFile *os.File,
 	counted io.Writer,
 	info *apeInfo,
-	srcFile *os.File,
+	srcFile io.ReadSeeker,
 	trackSpan apeFrameRange,
 ) (uint64, error) {
 	con, err := buildAPETrackContainer(info, trackSpan.start, trackSpan.end, trackSpan.finalBlocks)
@@ -906,7 +908,7 @@ func marshalAPEHeaderAndSeekTable(hdr *apeHeader, seekTable []uint32) ([]byte, [
 // reversing the FixupFrame byte rearrangement when the first frame is not 4-byte aligned.
 func writeAPEFrameData(
 	dst io.Writer,
-	srcFile *os.File,
+	srcFile io.ReadSeeker,
 	info *apeInfo,
 	startFrame, endFrame int,
 	trackDataSize int64,

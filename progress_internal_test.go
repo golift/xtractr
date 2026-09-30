@@ -1,6 +1,7 @@
 package xtractr
 
 import (
+	"bytes"
 	"io"
 	"os"
 	"path/filepath"
@@ -207,4 +208,27 @@ func TestArchiveProgressFailsClosedWithoutCompressedSize(t *testing.T) {
 	xFile := &XFile{MaxRatio: 2, FilePath: filepath.Join(t.TempDir(), "missing.zip")}
 	_, err := xFile.archiveProgress(0, 0, 0)
 	require.ErrorIs(t, err, ErrMaxRatio)
+}
+
+func TestCountingReadSeekerCountsReads(t *testing.T) {
+	t.Parallel()
+
+	xFile := &XFile{}
+	xFile.newProgress(0, 10, 0)
+
+	src := bytes.NewReader([]byte("abcdefghij"))
+	reader := xFile.countingReadSeeker(src)
+
+	buf := make([]byte, 4)
+	_, err := io.ReadFull(reader, buf)
+	require.NoError(t, err)
+	require.Equal(t, uint64(4), xFile.prog.Read)
+
+	_, err = reader.Seek(2, io.SeekCurrent)
+	require.NoError(t, err)
+	require.Equal(t, uint64(4), xFile.prog.Read)
+
+	_, err = io.ReadFull(reader, buf)
+	require.NoError(t, err)
+	require.Equal(t, uint64(8), xFile.prog.Read)
 }
