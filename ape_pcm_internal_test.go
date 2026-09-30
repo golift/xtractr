@@ -8,7 +8,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/mewkiz/flac"
 	"github.com/mewkiz/flac/meta"
@@ -234,6 +236,95 @@ func TestConvertAPERejectsFLACWidth(t *testing.T) {
 		APEOpts:   APEOpts{Output: AudioFormatFLAC},
 	})
 	require.ErrorIs(t, err, ErrUnsupportedAPEOutput)
+}
+
+func TestQueueForwardsAPEOpts(t *testing.T) {
+	t.Parallel()
+
+	pcm, stream := stereoSeconds(2)
+
+	t.Run("flac", func(t *testing.T) {
+		t.Parallel()
+
+		resp := queueTestAPESplit(t, pcm, stream, APEOpts{Output: AudioFormatFLAC})
+		require.NoError(t, resp.Error)
+
+		var tracks int
+
+		for _, path := range resp.NewFiles {
+			if strings.HasSuffix(path, ".flac") {
+				tracks++
+			}
+		}
+
+		assert.Equal(t, 2, tracks)
+	})
+
+	t.Run("default compression", func(t *testing.T) {
+		t.Parallel()
+
+		resp := queueTestAPESplit(t, pcm, stream, APEOpts{})
+		require.NoError(t, resp.Error)
+
+		var tracks int
+
+		for _, path := range resp.NewFiles {
+			if !strings.HasSuffix(path, ".ape") {
+				continue
+			}
+
+			tracks++
+
+			info, err := parseAPE(path)
+			require.NoError(t, err)
+			assert.Equal(t, uint16(ape.CompressionNormal), info.Header.CompressionLevel)
+		}
+
+		assert.Equal(t, 2, tracks)
+	})
+}
+
+func queueTestAPESplit(t *testing.T, pcm []byte, stream ape.Stream, opt APEOpts) *Response {
+	t.Helper()
+
+	dir := t.TempDir()
+	writeTestAPE(t, filepath.Join(dir, "album.ape"), pcm, stream)
+	writeTestCUE(t, filepath.Join(dir, "album.cue"))
+
+	queue := NewQueue(&Config{Logger: NoLogger(), FileMode: 0o644, DirMode: 0o755})
+
+	t.Cleanup(func() { queue.Stop() })
+
+	job := &Xtract{
+		Filter:     Filter{Path: dir},
+		TempFolder: true,
+		APEOpts:    opt,
+		CBChannel:  make(chan *Response, 2),
+	}
+	_, err := queue.Extract(job)
+	require.NoError(t, err)
+
+	return waitQueueDone(t, job.CBChannel)
+}
+
+func waitQueueDone(t *testing.T, responses chan *Response) *Response {
+	t.Helper()
+
+	timer := time.NewTimer(30 * time.Second)
+	defer timer.Stop()
+
+	for {
+		select {
+		case resp := <-responses:
+			if resp.Done {
+				return resp
+			}
+		case <-timer.C:
+			t.Fatal("timed out waiting for extract")
+
+			return nil
+		}
+	}
 }
 
 func TestConvertAPEDefaultCompression(t *testing.T) {

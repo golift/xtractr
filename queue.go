@@ -77,7 +77,6 @@ type Xtract struct {
 	// also means unlimited. Distinct from Filter.MaxDepth (initial search).
 	ExtrasMaxDepth int
 	// APEOpts selects the container and compression for an APE CUE split.
-	// The zero value re-encodes APE at normal (2000).
 	APEOpts APEOpts
 }
 
@@ -248,6 +247,7 @@ func (x *Xtractr) decompressFolders(resp *Response) error {
 				MaxRatio:         resp.X.MaxRatio,
 				MaxNested:        resp.X.MaxNested,
 				ExtrasMaxDepth:   resp.X.ExtrasMaxDepth,
+				APEOpts:          resp.X.APEOpts,
 			},
 			Started:  resp.Started,
 			Output:   output,
@@ -359,6 +359,7 @@ func (x *Xtractr) decompressFiles(resp *Response) error {
 			MaxRatio:       resp.X.MaxRatio,
 			MaxNested:      resp.X.MaxNested,
 			ExtrasMaxDepth: resp.X.ExtrasMaxDepth,
+			APEOpts:        resp.X.APEOpts,
 		},
 		Started:  resp.Started,
 		Output:   resp.Output,
