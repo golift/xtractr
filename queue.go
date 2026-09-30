@@ -64,7 +64,9 @@ type Xtract struct {
 	MaxFiles int
 	// MaxRatio is totalWritten / that archive's compressed size. Extras keep
 	// the parent size (child sizes are not added) and share the tighter
-	// leftover. 0 means unlimited; when 0, Config.MaxRatio is used.
+	// leftover. An intermediate archive this tracker already wrote is left
+	// out of the numerator while it is extracted; MaxBytes still counts it.
+	// 0 means unlimited; when 0, Config.MaxRatio is used.
 	// Standalone XFile remains per-archive.
 	MaxRatio float64
 	// MaxNested is the maximum archives extracted from one source folder's

@@ -52,7 +52,7 @@ func extract7z(xFile *XFile) (uint64, []string, []string, error) {
 		return 0, nil, nil, fmt.Errorf("%s: os.Open: %w", xFile.FilePath, err)
 	}
 
-	tracker, headerErr := xFile.archiveProgress(getUncompressed7zSize(sevenZip, xFile.FilePath))
+	tracker, headerErr := xFile.archiveProgress(getUncompressed7zSize(sevenZip, xFile))
 	defer tracker.done() // getUncompressed7zSize closed sevenZip
 
 	if headerErr != nil {
@@ -90,7 +90,7 @@ func extract7z(xFile *XFile) (uint64, []string, []string, error) {
 	return xFile.prog.Wrote, files, normalizeVolumes(sevenZip.Volumes(), xFile.FilePath), err
 }
 
-func getUncompressed7zSize(reader *sevenzip.ReadCloser, filePath string) (total, compressed uint64, count int) {
+func getUncompressed7zSize(reader *sevenzip.ReadCloser, xFile *XFile) (total, compressed uint64, count int) {
 	defer reader.Close()
 
 	for _, zipFile := range reader.File {
@@ -98,7 +98,10 @@ func getUncompressed7zSize(reader *sevenzip.ReadCloser, filePath string) (total,
 		count++
 	}
 
-	compressed = archiveFileSizes(normalizeVolumes(reader.Volumes(), filePath)...)
+	volumes := normalizeVolumes(reader.Volumes(), xFile.FilePath)
+	// Before the header ratio check. Sibling volumes are not FilePath.
+	xFile.omitNoted(volumes...)
+	compressed = archiveFileSizes(volumes...)
 
 	return total, compressed, count
 }

@@ -190,6 +190,51 @@ func TestQueueArchiveBudgetSharesFilesWithExtras(t *testing.T) {
 	require.ErrorIs(t, waitExtract(t, job.CBChannel).Error, xtractr.ErrMaxFiles)
 }
 
+func TestQueueMaxRatioOmitsIntermediateArchive(t *testing.T) {
+	t.Parallel()
+
+	dir, passRatio, failRatio := nestedZipRatioFixture(t)
+	maxRatio := (passRatio + failRatio) / 2
+	require.Less(t, passRatio, maxRatio)
+	require.Greater(t, failRatio, maxRatio)
+
+	resp := extractQueueRatio(t, dir, maxRatio)
+	require.NoError(t, resp.Error)
+
+	out := firstExisting(t, resp.Output, dir+xtractr.DefaultSuffix)
+	require.FileExists(t, filepath.Join(out, "payload.bin"))
+}
+
+func TestQueueMaxRatioStillCapsNestedExpansion(t *testing.T) {
+	t.Parallel()
+
+	dir, passRatio, _ := nestedZipRatioFixture(t)
+
+	resp := extractQueueRatio(t, dir, passRatio/2)
+	require.ErrorIs(t, resp.Error, xtractr.ErrMaxRatio)
+}
+
+func TestQueueMaxRatioDoesNotBorrowSiblingBudget(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	payload := bytes.Repeat([]byte{1}, 32*1024)
+	inner := zipMember(t, zip.Store, "payload.bin", payload)
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dir, "big.zip"),
+		zipMember(t, zip.Store, "inner.zip", inner),
+		0o600,
+	))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dir, "small.zip"),
+		zipMember(t, zip.Store, "a.txt", []byte("tiny")),
+		0o600,
+	))
+
+	resp := extractQueueRatio(t, dir, 2)
+	require.ErrorIs(t, resp.Error, xtractr.ErrMaxRatio)
+}
+
 func TestQueueArchiveBudgetSharesBytesWithExtras(t *testing.T) {
 	t.Parallel()
 
@@ -257,6 +302,59 @@ func extractQueueJob(t *testing.T, dir string, maxNested, extrasMaxDepth int) *x
 	require.NoError(t, err)
 
 	return waitExtract(t, job.CBChannel)
+}
+
+func nestedZipRatioFixture(t *testing.T) (string, float64, float64) {
+	t.Helper()
+
+	dir := t.TempDir()
+	payload := make([]byte, 64*1024)
+	inner := zipMember(t, zip.Deflate, "payload.bin", payload)
+	outer := zipMember(t, zip.Store, "inner.zip", inner)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "outer.zip"), outer, 0o600))
+
+	passRatio := float64(len(payload)) / float64(len(outer))
+	failRatio := float64(len(inner)+len(payload)) / float64(len(outer))
+	require.Greater(t, failRatio, passRatio)
+
+	return dir, passRatio, failRatio
+}
+
+func extractQueueRatio(t *testing.T, dir string, maxRatio float64) *xtractr.Response {
+	t.Helper()
+
+	queue := xtractr.NewQueue(&xtractr.Config{
+		Logger:   xtractr.NoLogger(),
+		FileMode: 0o600,
+		DirMode:  0o700,
+	})
+	defer queue.Stop()
+
+	job := &xtractr.Xtract{
+		Filter:     xtractr.Filter{Path: dir},
+		TempFolder: true,
+		MaxRatio:   maxRatio,
+		CBChannel:  make(chan *xtractr.Response, 2),
+	}
+	_, err := queue.Extract(job)
+	require.NoError(t, err)
+
+	return waitExtract(t, job.CBChannel)
+}
+
+func zipMember(t *testing.T, method uint16, name string, payload []byte) []byte {
+	t.Helper()
+
+	buf := new(bytes.Buffer)
+	zipWriter := zip.NewWriter(buf)
+	header := &zip.FileHeader{Name: name, Method: method, Modified: time.Now()}
+	writer, err := zipWriter.CreateHeader(header)
+	require.NoError(t, err)
+	_, err = writer.Write(payload)
+	require.NoError(t, err)
+	require.NoError(t, zipWriter.Close())
+
+	return buf.Bytes()
 }
 
 func tinyZipBytes(t *testing.T, name, body string) []byte {

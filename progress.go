@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sync"
 )
 
@@ -43,6 +44,14 @@ type progressTracker struct {
 	// shared is set so a top-level archive and that folder's extras reuse
 	// Wrote/Files and the parent Compressed size used for MaxRatio.
 	shared bool
+	// ratioOmit is bytes already in Wrote for intermediate archives this
+	// tracker wrote and is now extracting. MaxRatio uses Wrote-ratioOmit.
+	// MaxBytes keeps the full Wrote: those files are still on disk.
+	ratioOmit uint64
+	// archiveOut is files this tracker wrote, keyed by cleaned path.
+	// omitNoted consumes an archive and its volumes so a password retry
+	// cannot omit them twice. Unconsumed paths stay in the MaxRatio numerator.
+	archiveOut map[string]uint64
 	// snap* are this archive's progress baseline. Limits still use the
 	// cumulative Wrote/Files/Compressed on Progress; snapshot() subtracts
 	// these so callbacks stay per-archive (extras Percent must not be
@@ -140,8 +149,11 @@ func (x *XFile) newProgress(total, compressed uint64, count int) *progressTracke
 // bindSharedProgress rebinds a shared tracker to this XFile. Wrote, Files,
 // and Compressed stay for the cap (Compressed is filled once from the first
 // archive). Read/Done/headerErr reset. snap* mark this archive so snapshot()
-// reports only its progress.
+// reports only its progress. When this tracker wrote FilePath, those bytes
+// leave the MaxRatio numerator before the header check runs.
 func (x *XFile) bindSharedProgress(total, compressed uint64, count int) {
+	x.omitNoted(x.FilePath)
+
 	x.prog.mu.Lock()
 	x.prog.Total = total
 	x.prog.Count = count
@@ -397,7 +409,7 @@ func (p *progressTracker) checkWriteLocked(add uint64) error {
 		return ErrMaxBytes
 	}
 
-	if exceedsRatio(p.Wrote+add, p.Compressed, xFile.MaxRatio) {
+	if exceedsRatio(ratioWrote(p.Wrote+add, p.ratioOmit), p.Compressed, xFile.MaxRatio) {
 		return ErrMaxRatio
 	}
 
@@ -539,12 +551,13 @@ func archiveFileSizes(paths ...string) uint64 {
 func (x *XFile) checkClaimedLimits(claimedBytes uint64, claimedFiles int, compressed uint64) error {
 	var (
 		wrote uint64
+		omit  uint64
 		files int
 	)
 
 	if x.prog != nil {
 		x.prog.mu.Lock()
-		wrote, files = x.prog.Wrote, x.prog.Files
+		wrote, omit, files = x.prog.Wrote, x.prog.ratioOmit, x.prog.Files
 		x.prog.mu.Unlock()
 	}
 
@@ -556,11 +569,85 @@ func (x *XFile) checkClaimedLimits(claimedBytes uint64, claimedFiles int, compre
 		return ErrMaxFiles
 	}
 
-	if claimedBytes > 0 && exceedsRatio(wrote+claimedBytes, compressed, x.MaxRatio) {
+	if claimedBytes > 0 && exceedsRatio(ratioWrote(wrote+claimedBytes, omit), compressed, x.MaxRatio) {
 		return ErrMaxRatio
 	}
 
 	return nil
+}
+
+// ratioWrote is the MaxRatio numerator: bytes written, minus intermediate
+// archive files this tracker is extracting. MaxBytes keeps the raw total.
+func ratioWrote(wrote, omit uint64) uint64 {
+	if omit >= wrote {
+		return 0
+	}
+
+	return wrote - omit
+}
+
+// noteArchiveOutput records a file this shared tracker wrote so a later extra
+// can drop that file's bytes from the MaxRatio numerator. A tracker that did
+// not write the path cannot omit it.
+func (x *XFile) noteArchiveOutput(path string, size uint64) {
+	if x == nil || x.prog == nil {
+		return
+	}
+
+	x.prog.noteArchiveOutput(path, size)
+}
+
+func (p *progressTracker) noteArchiveOutput(path string, size uint64) {
+	if p == nil || !p.shared || size == 0 || path == "" {
+		return
+	}
+
+	path = filepath.Clean(path)
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if p.archiveOut == nil {
+		p.archiveOut = make(map[string]uint64)
+	}
+
+	p.archiveOut[path] = size
+}
+
+// omitNoted moves noted sizes for paths into ratioOmit and drops the notes.
+// Paths this tracker did not write are ignored, so a tighter sibling budget
+// cannot be refunded by someone else's intermediate archive.
+func (x *XFile) omitNoted(paths ...string) {
+	if x == nil || x.prog == nil {
+		return
+	}
+
+	x.prog.omitNoted(paths...)
+}
+
+func (p *progressTracker) omitNoted(paths ...string) {
+	if p == nil || !p.shared || len(paths) == 0 {
+		return
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if len(p.archiveOut) == 0 {
+		return
+	}
+
+	for _, path := range paths {
+		path = filepath.Clean(path)
+
+		size, ok := p.archiveOut[path]
+		if !ok {
+			continue
+		}
+
+		delete(p.archiveOut, path)
+		p.ratioOmit += size
+	}
 }
 
 func exceedsRatio(wrote, compressed uint64, ratio float64) bool {
