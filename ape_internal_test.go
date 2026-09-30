@@ -614,8 +614,9 @@ func TestSplitAPEEndToEnd(t *testing.T) {
 	assert.Equal(t, make([]byte, len(padding)), padding, "trailing padding must be zero")
 }
 
-// TestSplitAPEKeepsCueTail includes the frame that contains the next cue and sets
-// FinalFrameBlocks to the cue sample, so the track does not end a frame early.
+// TestSplitAPEKeepsCueTail includes the frame that contains the next cue.
+// That frame keeps its encoded block count, so both tracks overlap on it
+// and a decoder can still check the frame CRC.
 func TestSplitAPEKeepsCueTail(t *testing.T) {
 	t.Parallel()
 
@@ -635,7 +636,7 @@ func TestSplitAPEKeepsCueTail(t *testing.T) {
 	track1, err := parseAPE(files[0])
 	require.NoError(t, err)
 	assert.Equal(t, uint32(3), track1.Header.TotalFrames, "track must include the cue frame")
-	assert.Equal(t, uint32(1), track1.Header.FinalFrameBlocks)
+	assert.Equal(t, uint32(testAPEBlocksPerFrame), track1.Header.FinalFrameBlocks)
 
 	track2, err := parseAPE(files[1])
 	require.NoError(t, err)

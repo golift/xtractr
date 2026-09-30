@@ -53,6 +53,8 @@ var (
 	ErrTrackTooShort = errors.New("cue track is shorter than the minimum FLAC block size")
 	// ErrUnsupportedAPEOutput is returned when APEOpts.Output is not ape, wav, or flac.
 	ErrUnsupportedAPEOutput = errors.New("unsupported ape output format")
+	// ErrAPEOverwrite is returned when decoded APE output would replace the source file.
+	ErrAPEOverwrite = errors.New("refusing to overwrite the ape source")
 
 	// RPM.
 

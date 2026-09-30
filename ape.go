@@ -490,14 +490,14 @@ func apeFrameDataSize(info *apeInfo, frameIdx int) int64 {
 }
 
 // apeFrameRange is the inclusive range of APE frames that make up one CUE track.
-// The last frame is the one that contains the next cue. finalBlocks tells the decoder
-// to stop at that cue, so the track keeps the tail of the song. The next track still
-// starts at the beginning of that same frame, which leaves up to one frame of the
-// previous track at the front.
+// A cue that lands inside a frame includes that whole frame in both tracks, so the
+// files overlap by at most one frame. finalBlocks stays at the count the frame was
+// encoded with: the frame CRC covers that many samples, and a shorter count does
+// not decode. Only the source's real last frame keeps a short count.
 type apeFrameRange struct {
 	start       int    // inclusive
 	end         int    // inclusive
-	finalBlocks uint32 // samples to play from the last frame
+	finalBlocks uint32 // encoded block count of the last copied frame
 }
 
 // apeTrackFrameRanges maps each CUE track to the inclusive APE frame range it occupies.
@@ -531,7 +531,7 @@ func apeTrackFrameRanges(cue *CueSheet, timestamps []cueTimestamp, info *apeInfo
 }
 
 // apeTrackSpan is one track's frames. endSample is the first sample that belongs
-// to the next track. The last included frame is played only up to that sample.
+// to the next track. The frame containing that sample is copied in full.
 func apeTrackSpan(info *apeInfo, bpf uint64, lastFrame, startFrame int, endSample uint64) apeFrameRange {
 	if endSample == 0 {
 		endSample = 1
@@ -539,7 +539,6 @@ func apeTrackSpan(info *apeInfo, bpf uint64, lastFrame, startFrame int, endSampl
 
 	lastSample := endSample - 1
 	endFrame := int(lastSample / bpf)
-	finalBlocks := uint32(lastSample%bpf) + 1
 
 	if startFrame > lastFrame {
 		startFrame = lastFrame
@@ -553,9 +552,11 @@ func apeTrackSpan(info *apeInfo, bpf uint64, lastFrame, startFrame int, endSampl
 		endFrame = startFrame
 	}
 
-	// The source's last frame is shorter than a full frame. Do not claim more
-	// samples than that frame was encoded with.
-	if endFrame == lastFrame && finalBlocks > info.Header.FinalFrameBlocks {
+	// Interior frames were encoded at BlocksPerFrame. Claiming fewer samples
+	// makes the decoder CRC the wrong PCM. The source's last frame is the
+	// only one whose encoded count is shorter.
+	finalBlocks := info.Header.BlocksPerFrame
+	if endFrame == lastFrame {
 		finalBlocks = info.Header.FinalFrameBlocks
 	}
 
@@ -677,8 +678,8 @@ type apeTrackFrameLayout struct {
 
 // layoutAPETrackFrames maps source frames startFrame..endFrame onto a new file whose
 // compressed audio begins at dataOffset. Seek entries are absolute file offsets.
-// finalBlocks is how many samples of the last frame the decoder should play. The
-// compressed bytes of that frame are still copied in full.
+// finalBlocks is the encoded sample count of the last copied frame. The
+// compressed bytes of that frame are copied in full, and the count is not trimmed.
 func layoutAPETrackFrames(
 	info *apeInfo,
 	startFrame, endFrame int,
