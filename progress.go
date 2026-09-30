@@ -53,14 +53,20 @@ type progressTracker struct {
 }
 
 // Percent returns the percent of bytes read or written.
+// A reread after a seek can push the raw ratio past 100. The result is capped
+// so callers, including ArchiveProgress, still see a finished archive as 100%.
 func (p *Progress) Percent() (perc float64) {
 	if p.Total > 0 {
-		return float64(p.Wrote) / float64(p.Total) * maxPercent
+		perc = float64(p.Wrote) / float64(p.Total) * maxPercent
 	} else if p.Compressed > 0 {
-		return float64(p.Read) / float64(p.Compressed) * maxPercent
+		perc = float64(p.Read) / float64(p.Compressed) * maxPercent
 	}
 
-	return 0
+	if perc > maxPercent {
+		return maxPercent
+	}
+
+	return perc
 }
 
 // ArchiveProgress is a helper/example function you can use in your code to print extraction percentages.

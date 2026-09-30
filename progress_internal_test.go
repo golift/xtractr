@@ -210,6 +210,16 @@ func TestArchiveProgressFailsClosedWithoutCompressedSize(t *testing.T) {
 	require.ErrorIs(t, err, ErrMaxRatio)
 }
 
+func TestPercentCapsAt100(t *testing.T) {
+	t.Parallel()
+
+	read := Progress{Read: 150, Compressed: 100}
+	require.InDelta(t, float64(maxPercent), read.Percent(), 0.01)
+
+	wrote := Progress{Wrote: 150, Total: 100}
+	require.InDelta(t, float64(maxPercent), wrote.Percent(), 0.01)
+}
+
 func TestCountingReadSeekerCountsReads(t *testing.T) {
 	t.Parallel()
 
