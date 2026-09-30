@@ -1,15 +1,16 @@
 # `xtractr`
 
-Go Library for Queuing and Extracting ZIP, RAR, GZ, BZ2, TAR,
-TGZ, TBZ2, 7Z, ISO ([and other](https://github.com/golift/xtractr/issues/44)) compressed archive files.
+Go library for queuing and extracting compressed archives, and for splitting
+FLAC and APE images that have a CUE sheet.
 Can also be used ad-hoc for direct decompression and extraction. See [GoDoc](https://pkg.go.dev/golift.io/xtractr).
 
 - [GoDoc](https://pkg.go.dev/golift.io/xtractr)
 - Works on Linux, Windows, FreeBSD and macOS **without Cgo**.
 - Supports 32 and 64 bit architectures.
 - Decrypts RAR and 7-Zip archives with passwords.
-- Extracts ISO images (ISO9660 and UDF volumes).
-- Splits FLAC+CUE sheets into individual tracks.
+- Extracts ISO images (ISO9660 and UDF volumes) and Electron ASAR archives.
+- Splits FLAC+CUE and APE+CUE sheets into tracks. APE output can be APE, WAV, or FLAC.
+- `ConvertAPE` writes one APE file to APE, WAV, or FLAC when there is no CUE sheet.
 - Detects non-UTF8 zip filenames automatically.
 
 ## Interface
@@ -19,16 +20,19 @@ It does not do the heavy lifting, and relies on these libraries to extract files
 
 - [**RAR**: nwaples/rardecode](https://github.com/nwaples/rardecode)
 - [**7-Zip**: bodgit/sevenzip](https://github.com/bodgit/sevenzip)
-- [**ISO**: kdomanski/iso9660](https://github.com/kdomanski/iso9660)
+- [**ISO**: Unpackerr/iso9660](https://github.com/Unpackerr/iso9660)
 - [**UDF**: golift/udf](https://github.com/golift/udf)
+- [**ASAR**: golift/asar](https://github.com/golift/asar)
+- [**APE**: golift/ape](https://github.com/golift/ape)
 - [**FLAC**: mewkiz/flac](https://github.com/mewkiz/flac)
+- [**CPIO**: cavaliergopher/cpio](https://github.com/cavaliergopher/cpio)
+- [**RPM**: cavaliergopher/rpm](https://github.com/cavaliergopher/rpm)
+- [**ar / deb**: peterebden/ar](https://github.com/peterebden/ar)
 - [**Brotli**: andybalholm/brotli](https://github.com/andybalholm/brotli)
 - [**LZ4**: pierrec/lz4](https://github.com/pierrec/lz4)
 - [**XZ**: therootcompany/xz](https://github.com/therootcompany/xz)
-- [**Zstandard**: klauspost/compress](https://github.com/klauspost/compress)
-- [**S2**: klauspost/compress](https://github.com/klauspost/compress)
-- [**Snappy**: klauspost/compress](https://github.com/klauspost/compress)
-- [**Zlib**: klauspost/compress](https://github.com/klauspost/compress)
+- [**LZMA**: ulikunitz/xz](https://github.com/ulikunitz/xz)
+- [**Zstandard, S2, Snappy, Zlib**: klauspost/compress](https://github.com/klauspost/compress)
 - [**LZW**: sshaman1101/dcompress](https://github.com/sshaman1101/dcompress)
 
 `Zip`, `Gzip`, `Tar` and `Bzip` are all handled by the standard Go library.
@@ -116,17 +120,15 @@ Failing to provide `OutputDir` results in unexpected behavior.
 `ExtractFile()` attempts to identify the type of file. If you
 know the file type you may call the direct method instead:
 
-- `ExtractZIP(*XFile)`
-- `ExtractRAR(*XFile)`
-- `ExtractTar(*XFile)`
-- `ExtractGzip(*XFile)`
-- `ExtractBzip(*XFile)`
-- `ExtractTarGzip(*XFile)`
-- `ExtractTarBzip(*XFile)`
-- `Extract7z(*XFile)`
-- `ExtractISO(*XFile)`
-- `SplitCueFlac(*XFile)`
-- etc.. there's more than this.
+- `ExtractZIP(*XFile)`, `ExtractRAR(*XFile)`, `Extract7z(*XFile)`
+- `ExtractTar(*XFile)`, `ExtractTarGzip(*XFile)`, `ExtractTarBzip(*XFile)`, `ExtractTarXZ(*XFile)`
+- `ExtractGzip(*XFile)`, `ExtractBzip(*XFile)`, `ExtractXZ(*XFile)`, `ExtractZstandard(*XFile)`
+- `ExtractISO(*XFile)`, `ExtractASAR(*XFile)`, `ExtractRPM(*XFile)`, `ExtractCPIO(*XFile)`
+- `ExtractCUE(*XFile)` for a `.cue` or `.cue.txt` next to a FLAC or APE image
+- `ConvertAPE(*XFile)` for one APE file and no CUE sheet
+
+A lone `.ape` is not an archive. `ExtractFile` does not convert it.
+`ExtractFile` does follow a `.cue` whose `FILE` line names a FLAC or APE image.
 
 ```golang
 package main
@@ -155,13 +157,34 @@ func main() {
 }
 ```
 
-## XFile Input
+### APE output
 
-This is what `XFile` looks like (yesterday at least):
+`XFile` embeds `APEOpts`. `ExtractCUE` and `ConvertAPE` both read it.
+An empty `Output` re-encodes APE. Compression `0` is normal (2000).
+WAV and FLAC ignore compression.
+
+```golang
+size, files, err := xtractr.ConvertAPE(&xtractr.XFile{
+	FilePath:  "/tmp/song.ape",
+	OutputDir: "/tmp/song",
+	APEOpts:   xtractr.APEOpts{Output: xtractr.AudioFormatFLAC},
+})
+```
+
+An APE CUE split this package can decode is cut on the cue sample. Files it cannot
+decode stay on a frame copy, and only when the output is still APE.
+That copy keeps whole frames, so a cue in the middle of a frame overlaps
+the next track by at most one frame.
+
+## XFile Input
 
 ```golang
 // XFile defines the data needed to extract an archive.
 type XFile struct {
+	// APEOpts selects the container and APE compression for ConvertAPE and for
+	// CUE splits of APE images. The zero value re-encodes APE at normal (2000).
+	APEOpts
+
 	// Path to archive being extracted.
 	FilePath string
 	// Folder to extract archive into.
@@ -178,8 +201,8 @@ type XFile struct {
 	// (RAR/7z) Archive passwords (to try multiple).
 	Passwords []string
 	// FileWorkers controls how many files within a single archive are extracted
-	// concurrently. Only effective for random-access formats (ZIP, 7z).
-	// Streaming formats ignore this. 0 or 1 = sequential (current behavior).
+	// concurrently. Only effective for random-access formats (ZIP, 7z, ASAR).
+	// Streaming formats ignore this. 0 or 1 = sequential.
 	// Total concurrent I/O when using the queue = Config.Parallel * FileWorkers.
 	FileWorkers int
 	// MaxBytes is the maximum uncompressed bytes written for this archive.

@@ -141,7 +141,7 @@ func streamTracksFLAC(
 	}
 	defer audioFile.Close()
 
-	stream, err := flac.Parse(audioFile)
+	stream, err := flac.Parse(xFile.countingReadSeeker(audioFile))
 	if err != nil {
 		return 0, nil, fmt.Errorf("parsing flac for streaming: %w", err)
 	}

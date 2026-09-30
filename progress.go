@@ -53,14 +53,20 @@ type progressTracker struct {
 }
 
 // Percent returns the percent of bytes read or written.
+// A reread after a seek can push the raw ratio past 100. The result is capped
+// so callers, including ArchiveProgress, still see a finished archive as 100%.
 func (p *Progress) Percent() (perc float64) {
 	if p.Total > 0 {
-		return float64(p.Wrote) / float64(p.Total) * maxPercent
+		perc = float64(p.Wrote) / float64(p.Total) * maxPercent
 	} else if p.Compressed > 0 {
-		return float64(p.Read) / float64(p.Compressed) * maxPercent
+		perc = float64(p.Read) / float64(p.Compressed) * maxPercent
 	}
 
-	return 0
+	if perc > maxPercent {
+		return maxPercent
+	}
+
+	return perc
 }
 
 // ArchiveProgress is a helper/example function you can use in your code to print extraction percentages.
@@ -698,6 +704,40 @@ func (x *XFile) uncountExtracted() {
 
 func (p *progressTracker) reader(reader io.Reader) io.Reader {
 	return &progressWrapper{Reader: reader, progressTracker: p}
+}
+
+// countingReadSeeker counts bytes read from src against this extract.
+// Seek does not count. A nil progress tracker returns src unchanged.
+func (x *XFile) countingReadSeeker(src io.ReadSeeker) io.ReadSeeker {
+	if x == nil || x.prog == nil || src == nil {
+		return src
+	}
+
+	return &countingReadSeeker{src: src, prog: x.prog}
+}
+
+// countingReadSeeker is an io.ReadSeeker that adds each Read to Progress.Read.
+type countingReadSeeker struct {
+	src  io.ReadSeeker
+	prog *progressTracker
+}
+
+func (c *countingReadSeeker) Read(data []byte) (int, error) {
+	size, err := c.src.Read(data)
+	if size > 0 && c.prog != nil {
+		c.prog.mu.Lock()
+		c.prog.Read += uint64(size)
+		c.prog.mu.Unlock()
+		c.prog.send()
+	}
+
+	return size, err //nolint:wrapcheck
+}
+
+func (c *countingReadSeeker) Seek(offset int64, whence int) (int64, error) {
+	pos, err := c.src.Seek(offset, whence)
+
+	return pos, err //nolint:wrapcheck
 }
 
 func (p *progressTracker) readAter(reader io.ReaderAt) io.ReaderAt {

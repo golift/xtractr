@@ -64,7 +64,7 @@ func splitAPEPlayable(
 		return 0, nil, err
 	}
 
-	src, dec, err := openAPEDecoder(audioPath)
+	src, dec, err := openAPEDecoder(xFile, audioPath)
 	if err != nil {
 		if format != AudioFormatAPE || !errors.Is(err, errAPEDecode) {
 			return 0, nil, err
@@ -82,13 +82,13 @@ func splitAPEPlayable(
 
 var errAPEDecode = errors.New("decoding ape")
 
-func openAPEDecoder(audioPath string) (*os.File, *ape.Decoder, error) {
+func openAPEDecoder(xFile *XFile, audioPath string) (*os.File, *ape.Decoder, error) {
 	src, err := os.Open(audioPath)
 	if err != nil {
 		return nil, nil, fmt.Errorf("opening ape: %w", err)
 	}
 
-	dec, err := ape.NewDecoder(src)
+	dec, err := ape.NewDecoder(xFile.countingReadSeeker(src))
 	if err != nil {
 		_ = src.Close()
 
@@ -105,7 +105,7 @@ func streamAPE(
 	cue *CueSheet,
 	timestamps []cueTimestamp,
 ) (uint64, []string, error) {
-	src, dec, err := openAPEDecoder(audioPath)
+	src, dec, err := openAPEDecoder(xFile, audioPath)
 	if err != nil {
 		return 0, nil, err
 	}
