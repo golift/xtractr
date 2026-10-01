@@ -193,6 +193,10 @@ type XFile struct {
 	// folder lags (FUSE) so the final move can Lstat paths we already wrote.
 	moveKnown []string
 	prog      *progressTracker
+	// ratioPeers are this folder's top-level budgets. An extra must fit every
+	// one of them: omitting an intermediate archive can make prog looser than
+	// a sibling, and the tighter leftover still applies.
+	ratioPeers []*progressTracker
 	// refused collects files not moved into place during Extract; it is
 	// copied into Response.Refused by processArchive.
 	refused []RefusedFile

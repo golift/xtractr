@@ -164,6 +164,82 @@ func TestTighterBudgetPicksSmallerRatioRoom(t *testing.T) {
 	require.Equal(t, tight, got)
 }
 
+func TestTighterBudgetUsesRatioOmit(t *testing.T) {
+	t.Parallel()
+
+	// Raw room is 10 (100-90). After omitting 80, ratio room is 90, so the
+	// sibling with 50 bytes left is the tighter leftover.
+	writer := &progressTracker{Progress: Progress{Wrote: 90, Compressed: 20}, ratioOmit: 80}
+	sibling := &progressTracker{Progress: Progress{Wrote: 50, Compressed: 20}}
+
+	got := tighterBudget([]*progressTracker{writer, sibling}, 0, 0, 5)
+	require.Equal(t, sibling, got)
+}
+
+func TestArchiveProgressPeerRatioStillCaps(t *testing.T) {
+	t.Parallel()
+
+	inner := filepath.Join(t.TempDir(), "inner.zip")
+	writer := newSharedBudget()
+	writer.Compressed = 100
+	writer.Wrote = 490
+	writer.noteArchiveOutput(inner, 80)
+
+	sibling := newSharedBudget()
+	sibling.Compressed = 100
+	sibling.Wrote = 450
+
+	xFile := &XFile{
+		FilePath:   inner,
+		MaxRatio:   5,
+		prog:       writer,
+		ratioPeers: []*progressTracker{writer, sibling},
+	}
+
+	// Writer room after omit is 90. Sibling room is 50. 60 fits only the writer.
+	_, err := xFile.archiveProgress(60, 10, 1)
+	require.ErrorIs(t, err, ErrMaxRatio)
+	require.Equal(t, uint64(80), writer.ratioOmit)
+
+	_, err = xFile.archiveProgress(40, 10, 1)
+	require.NoError(t, err)
+}
+
+func TestArchiveProgressPeerMaxBytesStillCaps(t *testing.T) {
+	t.Parallel()
+
+	writer := newSharedBudget()
+	writer.Compressed = 1000
+	writer.Wrote = 10
+
+	sibling := newSharedBudget()
+	sibling.Compressed = 1000
+	sibling.Wrote = 100
+
+	xFile := &XFile{
+		FilePath:   filepath.Join(t.TempDir(), "inner.zip"),
+		MaxBytes:   150,
+		MaxRatio:   5,
+		prog:       writer,
+		ratioPeers: []*progressTracker{writer, sibling},
+	}
+
+	_, err := xFile.archiveProgress(80, 10, 1)
+	require.ErrorIs(t, err, ErrMaxBytes)
+}
+
+func TestNoteArchiveOutputSkipsUnlimitedRatio(t *testing.T) {
+	t.Parallel()
+
+	xFile := &XFile{MaxRatio: 0, prog: newSharedBudget()}
+	xFile.noteArchiveOutput(filepath.Join(t.TempDir(), "inner.zip"), 10)
+	require.Nil(t, xFile.prog.archiveOut)
+
+	xFile.MaxRatio = 5
+	xFile.noteArchiveOutput(filepath.Join(t.TempDir(), "inner.zip"), 10)
+	require.Len(t, xFile.prog.archiveOut, 1)
+}
+
 func TestSharedSnapshotIsPerArchive(t *testing.T) {
 	t.Parallel()
 

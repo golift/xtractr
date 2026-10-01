@@ -66,6 +66,7 @@ type Xtract struct {
 	// the parent size (child sizes are not added) and share the tighter
 	// leftover. An intermediate archive this tracker already wrote is left
 	// out of the numerator while it is extracted; MaxBytes still counts it.
+	// The extra still has to fit every sibling budget after that omission.
 	// 0 means unlimited; when 0, Config.MaxRatio is used.
 	// Standalone XFile remains per-archive.
 	MaxRatio float64
@@ -367,6 +368,7 @@ func (x *Xtractr) decompressFiles(resp *Response) error {
 		Output:   resp.Output,
 		Archives: resp.Extras,
 		budget:   x.extrasBudget(resp),
+		budgets:  resp.budgets,
 	}
 	err = x.decompressArchives(nre)
 	// Combine the new Response with the existing response.
@@ -428,6 +430,15 @@ func (x *Xtractr) processArchive(filename string, resp *Response) (uint64, []str
 
 	x.config.Debugf("Extracting File: %v to %v", filename, resp.Output)
 
+	// Top-level archives each get a full cap. Only extras consult every
+	// sibling: resp.budget is set for that pass, and resp.budgets is the
+	// parent list. Including peers on the top-level pass would make the
+	// second archive fit inside the first.
+	var peers []*progressTracker
+	if resp.budget != nil {
+		peers = resp.budgets
+	}
+
 	xFile := &XFile{
 		APEOpts:       resp.X.APEOpts,
 		FilePath:      filename,
@@ -446,6 +457,7 @@ func (x *Xtractr) processArchive(filename string, resp *Response) (uint64, []str
 		Updates:       resp.X.Updates,
 		Progress:      resp.X.Progress,
 		prog:          resp.budget,
+		ratioPeers:    peers,
 	}
 
 	if xFile.prog == nil {

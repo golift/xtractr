@@ -214,6 +214,58 @@ func TestQueueMaxRatioStillCapsNestedExpansion(t *testing.T) {
 	require.ErrorIs(t, resp.Error, xtractr.ErrMaxRatio)
 }
 
+func TestQueueOmittedWriterStillRespectsSiblingRatio(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	const maxRatio = 5.0
+
+	payload := bytes.Repeat([]byte{7}, 4000)
+	inner := zipMember(t, zip.Store, "payload.bin", payload)
+	pad := make([]byte, 16000)
+	outer := zipMembers(t, []zipPart{
+		{name: "pad.bin", method: zip.Deflate, data: pad},
+		{name: "inner.zip", method: zip.Store, data: inner},
+	})
+	siblingBody := make([]byte, 400)
+	sibling := zipMember(t, zip.Store, "s.bin", siblingBody)
+
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "writer.zip"), outer, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "sibling.zip"), sibling, 0o600))
+
+	over := func(wrote, compressed int) bool {
+		if compressed == 0 {
+			return wrote > 0
+		}
+
+		return float64(wrote) > float64(compressed)*maxRatio
+	}
+	room := func(wrote, compressed int) int {
+		if over(wrote, compressed) {
+			return 0
+		}
+
+		allowed := int(float64(compressed) * maxRatio)
+		if wrote >= allowed {
+			return 0
+		}
+
+		return allowed - wrote
+	}
+
+	writerWrote := len(pad) + len(inner)
+	require.False(t, over(writerWrote, len(outer)), "writer extract must succeed")
+	require.False(t, over(len(siblingBody), len(sibling)), "sibling extract must succeed")
+	require.Less(t, room(writerWrote, len(outer)), room(len(siblingBody), len(sibling)))
+	require.Greater(t, room(len(pad), len(outer)), room(len(siblingBody), len(sibling)))
+	require.True(t, over(len(siblingBody)+len(payload), len(sibling)))
+	require.False(t, over(len(pad)+len(payload), len(outer)))
+
+	resp := extractQueueRatio(t, dir, maxRatio)
+	require.ErrorIs(t, resp.Error, xtractr.ErrMaxRatio)
+}
+
 func TestQueueMaxRatioDoesNotBorrowSiblingBudget(t *testing.T) {
 	t.Parallel()
 
@@ -340,6 +392,31 @@ func extractQueueRatio(t *testing.T, dir string, maxRatio float64) *xtractr.Resp
 	require.NoError(t, err)
 
 	return waitExtract(t, job.CBChannel)
+}
+
+type zipPart struct {
+	name   string
+	method uint16
+	data   []byte
+}
+
+func zipMembers(t *testing.T, parts []zipPart) []byte {
+	t.Helper()
+
+	buf := new(bytes.Buffer)
+	zipWriter := zip.NewWriter(buf)
+
+	for _, part := range parts {
+		header := &zip.FileHeader{Name: part.name, Method: part.method, Modified: time.Now()}
+		writer, err := zipWriter.CreateHeader(header)
+		require.NoError(t, err)
+		_, err = writer.Write(part.data)
+		require.NoError(t, err)
+	}
+
+	require.NoError(t, zipWriter.Close())
+
+	return buf.Bytes()
 }
 
 func zipMember(t *testing.T, method uint16, name string, payload []byte) []byte {
