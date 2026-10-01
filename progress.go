@@ -149,8 +149,8 @@ func (x *XFile) newProgress(total, compressed uint64, count int) *progressTracke
 // bindSharedProgress rebinds a shared tracker to this XFile. Wrote, Files,
 // and Compressed stay for the cap (Compressed is filled once from the first
 // archive). Read/Done/headerErr reset. snap* mark this archive so snapshot()
-// reports only its progress. When this tracker wrote FilePath, those bytes
-// leave the MaxRatio numerator before the header check runs.
+// reports only its progress. Budgets that wrote FilePath drop those bytes
+// from the MaxRatio numerator before the header check runs.
 func (x *XFile) bindSharedProgress(total, compressed uint64, count int) {
 	x.omitNoted(x.FilePath)
 
@@ -645,15 +645,27 @@ func (p *progressTracker) noteArchiveOutput(path string, size uint64) {
 	p.archiveOut[path] = size
 }
 
-// omitNoted moves noted sizes for paths into ratioOmit and drops the notes.
-// Paths this tracker did not write are ignored, so a tighter sibling budget
-// cannot be refunded by someone else's intermediate archive.
+// omitNoted drops these paths from every budget that actually wrote them.
+// A tracker with no note for a path is left unchanged, so one archive's
+// intermediate file cannot refund a sibling's ratio room. The selected
+// tracker is not the only writer: a tighter sibling can be prog while
+// another budget holds the note.
 func (x *XFile) omitNoted(paths ...string) {
-	if x == nil || x.prog == nil {
+	if x == nil || len(paths) == 0 {
 		return
 	}
 
-	x.prog.omitNoted(paths...)
+	if x.prog != nil {
+		x.prog.omitNoted(paths...)
+	}
+
+	for _, peer := range x.ratioPeers {
+		if peer == nil || peer == x.prog {
+			continue
+		}
+
+		peer.omitNoted(paths...)
+	}
 }
 
 func (p *progressTracker) omitNoted(paths ...string) {

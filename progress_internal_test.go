@@ -176,6 +176,39 @@ func TestTighterBudgetUsesRatioOmit(t *testing.T) {
 	require.Equal(t, sibling, got)
 }
 
+func TestOmitNotedCorrectsWriterWhenSiblingIsSelected(t *testing.T) {
+	t.Parallel()
+
+	inner := filepath.Join(t.TempDir(), "inner.zip")
+	writer := newSharedBudget()
+	writer.Compressed = 1000
+	writer.Wrote = 1000
+	writer.noteArchiveOutput(inner, 900)
+
+	selected := newSharedBudget()
+	selected.Compressed = 1000
+	selected.Wrote = 100
+
+	xFile := &XFile{
+		FilePath:   inner,
+		MaxRatio:   5,
+		prog:       selected,
+		ratioPeers: []*progressTracker{writer, selected},
+	}
+
+	// Writer raw (1000+4500)/1000 = 5.5. After the writer omits its own
+	// note, (100+4500)/1000 = 4.6, and the selected sibling matches that.
+	_, err := xFile.archiveProgress(4500, 50, 1)
+	require.NoError(t, err)
+	require.Equal(t, uint64(900), writer.ratioOmit)
+	require.Equal(t, uint64(0), selected.ratioOmit)
+	require.NotContains(t, writer.archiveOut, filepath.Clean(inner))
+
+	_, err = xFile.archiveProgress(4500, 50, 1)
+	require.NoError(t, err)
+	require.Equal(t, uint64(900), writer.ratioOmit, "a retry must not omit the writer's note twice")
+}
+
 func TestArchiveProgressPeerRatioStillCaps(t *testing.T) {
 	t.Parallel()
 
