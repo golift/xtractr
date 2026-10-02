@@ -51,7 +51,9 @@ type Config struct {
 	// Used when Xtract.MaxFiles is 0.
 	MaxFiles int
 	// MaxRatio is the default per-archive totalWritten / archive compressed size.
-	// Extras keep the parent size. 0 means unlimited. Used when Xtract.MaxRatio is 0.
+	// Extras keep the parent size. Intermediate archives this tracker wrote are
+	// left out of the numerator when extracted. 0 means unlimited.
+	// Used when Xtract.MaxRatio is 0.
 	MaxRatio float64
 	// MaxNested is the default maximum archives extracted from one source folder's
 	// extras pass. 0 or negative means unlimited. Used when Xtract.MaxNested is 0.

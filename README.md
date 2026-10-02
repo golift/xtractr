@@ -240,7 +240,7 @@ Extraction caps (`0` means unlimited):
 - `MaxFiles` — files, directories, and symlinks created
 - `MaxRatio` — `bytesWritten / archiveFileSize`
 
-On a queue job (`Xtract`/`Config`) these apply **per top-level archive**. Two sibling rips in one folder each get a full cap. Extras from that folder share the **tighter leftover** (smallest remaining byte/ratio room, then files). `MaxRatio` keeps the parent archive size, not child compressed sizes. Standalone `XFile` stays per-archive.
+On a queue job (`Xtract`/`Config`) these apply **per top-level archive**. Two sibling rips in one folder each get a full cap. Extras from that folder share the **tighter leftover** (smallest remaining byte/ratio room, then files). `MaxRatio` keeps the parent archive size, not child compressed sizes. Bytes of an intermediate archive that same tracker wrote are left out of the ratio numerator when that archive is extracted; `MaxBytes` still counts them. Standalone `XFile` stays per-archive.
 
 Queue extras caps on `Xtract` and `Config` (`0` inherits `Config`, then unlimited):
 

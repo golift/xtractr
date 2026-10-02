@@ -293,6 +293,8 @@ func (x *XFile) writeFile(file *file, parallel bool) (uint64, error) {
 		return uint64(size), fmt.Errorf("closing archived file '%s': %w", file.Path, closeErr)
 	}
 
+	x.noteArchiveOutput(file.Path, uint64(size))
+
 	// The error is ignored because it's not critical and pops up on OSes like Windows.
 	_ = os.Chtimes(file.Path, file.Atime, file.Mtime)
 

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sync"
 )
 
@@ -43,6 +44,14 @@ type progressTracker struct {
 	// shared is set so a top-level archive and that folder's extras reuse
 	// Wrote/Files and the parent Compressed size used for MaxRatio.
 	shared bool
+	// ratioOmit is bytes already in Wrote for intermediate archives this
+	// tracker wrote and is now extracting. MaxRatio uses Wrote-ratioOmit.
+	// MaxBytes keeps the full Wrote: those files are still on disk.
+	ratioOmit uint64
+	// archiveOut is files this tracker wrote, keyed by cleaned path.
+	// omitNoted consumes an archive and its volumes so a password retry
+	// cannot omit them twice. Unconsumed paths stay in the MaxRatio numerator.
+	archiveOut map[string]uint64
 	// snap* are this archive's progress baseline. Limits still use the
 	// cumulative Wrote/Files/Compressed on Progress; snapshot() subtracts
 	// these so callbacks stay per-archive (extras Percent must not be
@@ -140,8 +149,11 @@ func (x *XFile) newProgress(total, compressed uint64, count int) *progressTracke
 // bindSharedProgress rebinds a shared tracker to this XFile. Wrote, Files,
 // and Compressed stay for the cap (Compressed is filled once from the first
 // archive). Read/Done/headerErr reset. snap* mark this archive so snapshot()
-// reports only its progress.
+// reports only its progress. Budgets that wrote FilePath drop those bytes
+// from the MaxRatio numerator before the header check runs.
 func (x *XFile) bindSharedProgress(total, compressed uint64, count int) {
+	x.omitNoted(x.FilePath)
+
 	x.prog.mu.Lock()
 	x.prog.Total = total
 	x.prog.Count = count
@@ -397,11 +409,12 @@ func (p *progressTracker) checkWriteLocked(add uint64) error {
 		return ErrMaxBytes
 	}
 
-	if exceedsRatio(p.Wrote+add, p.Compressed, xFile.MaxRatio) {
+	if exceedsRatio(ratioWrote(p.Wrote+add, p.ratioOmit), p.Compressed, xFile.MaxRatio) {
 		return ErrMaxRatio
 	}
 
-	return nil
+	// p.mu is held. Peers are other budgets and are not checked re-entrantly.
+	return xFile.exceedsPeerLimits(p, add)
 }
 
 // archiveFileSize returns the size of path on disk, or 0 if it cannot be stat'd.
@@ -441,7 +454,7 @@ const (
 	unlimitedFiles = int(^uint(0) >> 1)
 )
 
-func remainingBytes(wrote, compressed, maxBytes uint64, maxRatio float64) uint64 {
+func remainingBytes(wrote, ratioNum, compressed, maxBytes uint64, maxRatio float64) uint64 {
 	room := unlimitedBytes
 
 	if maxBytes > 0 {
@@ -452,7 +465,7 @@ func remainingBytes(wrote, compressed, maxBytes uint64, maxRatio float64) uint64
 		room = maxBytes - wrote
 	}
 
-	if left := remainingRatio(wrote, compressed, maxRatio); left < room {
+	if left := remainingRatio(ratioNum, compressed, maxRatio); left < room {
 		return left
 	}
 
@@ -507,10 +520,10 @@ func tighterBudget(trackers []*progressTracker, maxBytes uint64, maxFiles int, m
 		}
 
 		tracker.mu.Lock()
-		wrote, files, compressed := tracker.Wrote, tracker.Files, tracker.Compressed
+		wrote, omit, files, compressed := tracker.Wrote, tracker.ratioOmit, tracker.Files, tracker.Compressed
 		tracker.mu.Unlock()
 
-		bytesLeft := remainingBytes(wrote, compressed, maxBytes, maxRatio)
+		bytesLeft := remainingBytes(wrote, ratioWrote(wrote, omit), compressed, maxBytes, maxRatio)
 		filesLeft := remainingFiles(files, maxFiles)
 
 		if best == nil || bytesLeft < bestBytes || (bytesLeft == bestBytes && filesLeft < bestFiles) {
@@ -539,12 +552,13 @@ func archiveFileSizes(paths ...string) uint64 {
 func (x *XFile) checkClaimedLimits(claimedBytes uint64, claimedFiles int, compressed uint64) error {
 	var (
 		wrote uint64
+		omit  uint64
 		files int
 	)
 
 	if x.prog != nil {
 		x.prog.mu.Lock()
-		wrote, files = x.prog.Wrote, x.prog.Files
+		wrote, omit, files = x.prog.Wrote, x.prog.ratioOmit, x.prog.Files
 		x.prog.mu.Unlock()
 	}
 
@@ -556,11 +570,127 @@ func (x *XFile) checkClaimedLimits(claimedBytes uint64, claimedFiles int, compre
 		return ErrMaxFiles
 	}
 
-	if claimedBytes > 0 && exceedsRatio(wrote+claimedBytes, compressed, x.MaxRatio) {
+	if claimedBytes > 0 && exceedsRatio(ratioWrote(wrote+claimedBytes, omit), compressed, x.MaxRatio) {
 		return ErrMaxRatio
 	}
 
+	return x.exceedsPeerLimits(x.prog, claimedBytes)
+}
+
+// exceedsPeerLimits reports when add would exceed another top-level budget.
+// Self is skipped. MaxBytes uses that budget's raw Wrote; MaxRatio uses its
+// ratio numerator, including any intermediate it has already omitted.
+func (x *XFile) exceedsPeerLimits(self *progressTracker, add uint64) error {
+	if x == nil || add == 0 || len(x.ratioPeers) == 0 {
+		return nil
+	}
+
+	for _, peer := range x.ratioPeers {
+		if peer == nil || peer == self {
+			continue
+		}
+
+		peer.mu.Lock()
+		wrote, omit, compressed := peer.Wrote, peer.ratioOmit, peer.Compressed
+		peer.mu.Unlock()
+
+		if x.MaxBytes > 0 && wrote+add > x.MaxBytes {
+			return ErrMaxBytes
+		}
+
+		if exceedsRatio(ratioWrote(wrote+add, omit), compressed, x.MaxRatio) {
+			return ErrMaxRatio
+		}
+	}
+
 	return nil
+}
+
+// ratioWrote is the MaxRatio numerator: bytes written, minus intermediate
+// archive files this tracker is extracting. MaxBytes keeps the raw total.
+func ratioWrote(wrote, omit uint64) uint64 {
+	if omit >= wrote {
+		return 0
+	}
+
+	return wrote - omit
+}
+
+// noteArchiveOutput records a file this shared tracker wrote so a later extra
+// can drop that file's bytes from the MaxRatio numerator. A tracker that did
+// not write the path cannot omit it. Unlimited MaxRatio never consults the
+// notes, so those extracts do not retain a path per output file.
+func (x *XFile) noteArchiveOutput(path string, size uint64) {
+	if x == nil || x.prog == nil || x.MaxRatio <= 0 {
+		return
+	}
+
+	x.prog.noteArchiveOutput(path, size)
+}
+
+func (p *progressTracker) noteArchiveOutput(path string, size uint64) {
+	if p == nil || !p.shared || size == 0 || path == "" {
+		return
+	}
+
+	path = filepath.Clean(path)
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if p.archiveOut == nil {
+		p.archiveOut = make(map[string]uint64)
+	}
+
+	p.archiveOut[path] = size
+}
+
+// omitNoted drops these paths from every budget that actually wrote them.
+// A tracker with no note for a path is left unchanged, so one archive's
+// intermediate file cannot refund a sibling's ratio room. The selected
+// tracker is not the only writer: a tighter sibling can be prog while
+// another budget holds the note.
+func (x *XFile) omitNoted(paths ...string) {
+	if x == nil || len(paths) == 0 {
+		return
+	}
+
+	if x.prog != nil {
+		x.prog.omitNoted(paths...)
+	}
+
+	for _, peer := range x.ratioPeers {
+		if peer == nil || peer == x.prog {
+			continue
+		}
+
+		peer.omitNoted(paths...)
+	}
+}
+
+func (p *progressTracker) omitNoted(paths ...string) {
+	if p == nil || !p.shared || len(paths) == 0 {
+		return
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if len(p.archiveOut) == 0 {
+		return
+	}
+
+	for _, path := range paths {
+		path = filepath.Clean(path)
+
+		size, ok := p.archiveOut[path]
+		if !ok {
+			continue
+		}
+
+		delete(p.archiveOut, path)
+		p.ratioOmit += size
+	}
 }
 
 func exceedsRatio(wrote, compressed uint64, ratio float64) bool {

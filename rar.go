@@ -65,7 +65,7 @@ func extractRAR(xFile *XFile) (uint64, []string, []string, error) {
 		return 0, nil, nil, fmt.Errorf("rardecode.OpenReader: %w", err)
 	}
 
-	tracker, headerErr := xFile.archiveProgress(getUncompressedRarSize(rarReader, xFile.FilePath))
+	tracker, headerErr := xFile.archiveProgress(getUncompressedRarSize(rarReader, xFile))
 	defer tracker.done() // getUncompressedRarSize closed rarReader
 
 	if headerErr != nil {
@@ -89,13 +89,16 @@ func extractRAR(xFile *XFile) (uint64, []string, []string, error) {
 	return xFile.prog.Wrote, files, normalizeVolumes(rarReader.Volumes(), xFile.FilePath), nil
 }
 
-func getUncompressedRarSize(rarReader *rardecode.ReadCloser, filePath string) (total, compressed uint64, count int) {
+func getUncompressedRarSize(rarReader *rardecode.ReadCloser, xFile *XFile) (total, compressed uint64, count int) {
 	defer rarReader.Close()
 
 	for {
 		header, err := rarReader.Next()
 		if err != nil {
-			compressed = archiveFileSizes(normalizeVolumes(rarReader.Volumes(), filePath)...)
+			volumes := normalizeVolumes(rarReader.Volumes(), xFile.FilePath)
+			// Before the header ratio check. Sibling volumes are not FilePath.
+			xFile.omitNoted(volumes...)
+			compressed = archiveFileSizes(volumes...)
 
 			return total, compressed, count
 		}

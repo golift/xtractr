@@ -164,6 +164,115 @@ func TestTighterBudgetPicksSmallerRatioRoom(t *testing.T) {
 	require.Equal(t, tight, got)
 }
 
+func TestTighterBudgetUsesRatioOmit(t *testing.T) {
+	t.Parallel()
+
+	// Raw room is 10 (100-90). After omitting 80, ratio room is 90, so the
+	// sibling with 50 bytes left is the tighter leftover.
+	writer := &progressTracker{Progress: Progress{Wrote: 90, Compressed: 20}, ratioOmit: 80}
+	sibling := &progressTracker{Progress: Progress{Wrote: 50, Compressed: 20}}
+
+	got := tighterBudget([]*progressTracker{writer, sibling}, 0, 0, 5)
+	require.Equal(t, sibling, got)
+}
+
+func TestOmitNotedCorrectsWriterWhenSiblingIsSelected(t *testing.T) {
+	t.Parallel()
+
+	inner := filepath.Join(t.TempDir(), "inner.zip")
+	writer := newSharedBudget()
+	writer.Compressed = 1000
+	writer.Wrote = 1000
+	writer.noteArchiveOutput(inner, 900)
+
+	selected := newSharedBudget()
+	selected.Compressed = 1000
+	selected.Wrote = 100
+
+	xFile := &XFile{
+		FilePath:   inner,
+		MaxRatio:   5,
+		prog:       selected,
+		ratioPeers: []*progressTracker{writer, selected},
+	}
+
+	// Writer raw (1000+4500)/1000 = 5.5. After the writer omits its own
+	// note, (100+4500)/1000 = 4.6, and the selected sibling matches that.
+	_, err := xFile.archiveProgress(4500, 50, 1)
+	require.NoError(t, err)
+	require.Equal(t, uint64(900), writer.ratioOmit)
+	require.Equal(t, uint64(0), selected.ratioOmit)
+	require.NotContains(t, writer.archiveOut, filepath.Clean(inner))
+
+	_, err = xFile.archiveProgress(4500, 50, 1)
+	require.NoError(t, err)
+	require.Equal(t, uint64(900), writer.ratioOmit, "a retry must not omit the writer's note twice")
+}
+
+func TestArchiveProgressPeerRatioStillCaps(t *testing.T) {
+	t.Parallel()
+
+	inner := filepath.Join(t.TempDir(), "inner.zip")
+	writer := newSharedBudget()
+	writer.Compressed = 100
+	writer.Wrote = 490
+	writer.noteArchiveOutput(inner, 80)
+
+	sibling := newSharedBudget()
+	sibling.Compressed = 100
+	sibling.Wrote = 450
+
+	xFile := &XFile{
+		FilePath:   inner,
+		MaxRatio:   5,
+		prog:       writer,
+		ratioPeers: []*progressTracker{writer, sibling},
+	}
+
+	// Writer room after omit is 90. Sibling room is 50. 60 fits only the writer.
+	_, err := xFile.archiveProgress(60, 10, 1)
+	require.ErrorIs(t, err, ErrMaxRatio)
+	require.Equal(t, uint64(80), writer.ratioOmit)
+
+	_, err = xFile.archiveProgress(40, 10, 1)
+	require.NoError(t, err)
+}
+
+func TestArchiveProgressPeerMaxBytesStillCaps(t *testing.T) {
+	t.Parallel()
+
+	writer := newSharedBudget()
+	writer.Compressed = 1000
+	writer.Wrote = 10
+
+	sibling := newSharedBudget()
+	sibling.Compressed = 1000
+	sibling.Wrote = 100
+
+	xFile := &XFile{
+		FilePath:   filepath.Join(t.TempDir(), "inner.zip"),
+		MaxBytes:   150,
+		MaxRatio:   5,
+		prog:       writer,
+		ratioPeers: []*progressTracker{writer, sibling},
+	}
+
+	_, err := xFile.archiveProgress(80, 10, 1)
+	require.ErrorIs(t, err, ErrMaxBytes)
+}
+
+func TestNoteArchiveOutputSkipsUnlimitedRatio(t *testing.T) {
+	t.Parallel()
+
+	xFile := &XFile{MaxRatio: 0, prog: newSharedBudget()}
+	xFile.noteArchiveOutput(filepath.Join(t.TempDir(), "inner.zip"), 10)
+	require.Nil(t, xFile.prog.archiveOut)
+
+	xFile.MaxRatio = 5
+	xFile.noteArchiveOutput(filepath.Join(t.TempDir(), "inner.zip"), 10)
+	require.Len(t, xFile.prog.archiveOut, 1)
+}
+
 func TestSharedSnapshotIsPerArchive(t *testing.T) {
 	t.Parallel()
 
@@ -200,6 +309,83 @@ func TestNewProgressSharedFillsCompressedOnce(t *testing.T) {
 
 	xFile.newProgress(10, 999, 1)
 	require.Equal(t, uint64(40), xFile.prog.Compressed)
+}
+
+func TestArchiveProgressOmitsNotedIntermediate(t *testing.T) {
+	t.Parallel()
+
+	inner := filepath.Join(t.TempDir(), "inner.zip")
+	xFile := &XFile{FilePath: inner, MaxRatio: 5, prog: newSharedBudget()}
+	xFile.prog.Compressed = 1000
+	xFile.prog.Wrote = 1000
+	mkv := filepath.Join(filepath.Dir(inner), "movie.mkv")
+	xFile.prog.noteArchiveOutput(inner, 900)
+	xFile.prog.noteArchiveOutput(mkv, 50)
+
+	// Raw (1000+4500)/1000 = 5.5. After omitting the nested zip, (100+4500)/1000 = 4.6.
+	_, err := xFile.archiveProgress(4500, 50, 1)
+	require.NoError(t, err)
+	require.Equal(t, uint64(900), xFile.prog.ratioOmit)
+	require.Equal(t, uint64(1000), xFile.prog.Wrote, "MaxBytes still sees the intermediate file")
+	require.Equal(t, uint64(1000), xFile.prog.Compressed, "MaxRatio keeps the parent size")
+	require.NotContains(t, xFile.prog.archiveOut, inner)
+	require.Equal(t, uint64(50), xFile.prog.archiveOut[mkv])
+
+	_, err = xFile.archiveProgress(4500, 50, 1)
+	require.NoError(t, err)
+	require.Equal(t, uint64(900), xFile.prog.ratioOmit, "a retry must not omit the same file twice")
+
+	xFile.MaxBytes = 1000
+	_, err = xFile.archiveProgress(1, 50, 1)
+	require.ErrorIs(t, err, ErrMaxBytes)
+}
+
+func TestArchiveProgressDoesNotOmitUnnotedArchive(t *testing.T) {
+	t.Parallel()
+
+	inner := filepath.Join(t.TempDir(), "inner.zip")
+	writer := newSharedBudget()
+	writer.noteArchiveOutput(inner, 900)
+
+	other := &XFile{FilePath: inner, MaxRatio: 5, prog: newSharedBudget()}
+	other.prog.Compressed = 1000
+	other.prog.Wrote = 1000
+
+	_, err := other.archiveProgress(4500, 50, 1)
+	require.ErrorIs(t, err, ErrMaxRatio)
+	require.Equal(t, uint64(0), other.prog.ratioOmit)
+	require.Equal(t, uint64(0), writer.ratioOmit)
+	require.Contains(t, writer.archiveOut, filepath.Clean(inner))
+}
+
+func TestOmitNotedVolumesOnce(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	tracker := newSharedBudget()
+	rar := filepath.Join(dir, "movie.rar")
+	r00 := filepath.Join(dir, "movie.r00")
+	r01 := filepath.Join(dir, "movie.r01")
+	part := filepath.Join(dir, "movie.7z.002")
+	mkv := filepath.Join(dir, "movie.mkv")
+
+	tracker.noteArchiveOutput(rar, 100)
+	tracker.noteArchiveOutput(r00, 200)
+	tracker.noteArchiveOutput(r01, 300)
+	tracker.noteArchiveOutput(part, 400)
+	tracker.noteArchiveOutput(mkv, 999)
+	require.Len(t, tracker.archiveOut, 5)
+
+	tracker.omitNoted(rar, r00, r01, part)
+	require.Equal(t, uint64(1000), tracker.ratioOmit)
+	require.Equal(t, map[string]uint64{mkv: 999}, tracker.archiveOut)
+
+	tracker.omitNoted(rar, r00, r01, part)
+	require.Equal(t, uint64(1000), tracker.ratioOmit)
+
+	plain := &progressTracker{}
+	plain.noteArchiveOutput(rar, 100)
+	require.Nil(t, plain.archiveOut)
 }
 
 func TestArchiveProgressFailsClosedWithoutCompressedSize(t *testing.T) {
