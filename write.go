@@ -78,6 +78,14 @@ func (x *XFile) squashRoot(files []string) ([]string, error) {
 	return files, nil
 }
 
+// accessPermMask is the group and other rwx triads. When an archive entry
+// already stores a mode, configured FileMode and DirMode contribute only these
+// bits, so a caller can grant group or other access without replacing the
+// archived mode. Owner bits stay with the archive, apart from the owner floor
+// below. Umask still applies at open. A zero stored mode uses the configured
+// mode as a whole.
+const accessPermMask os.FileMode = 0o077
+
 func (x *XFile) safeDirMode(current os.FileMode) os.FileMode {
 	if current.Perm() == 0 {
 		return x.DirMode
@@ -85,7 +93,7 @@ func (x *XFile) safeDirMode(current os.FileMode) os.FileMode {
 
 	const minimum = 0o700 // ensure owner has read/write/exec on folders.
 
-	return current | minimum
+	return current | minimum | x.DirMode&accessPermMask
 }
 
 func (x *XFile) safeFileMode(current os.FileMode) os.FileMode {
@@ -95,7 +103,7 @@ func (x *XFile) safeFileMode(current os.FileMode) os.FileMode {
 
 	const minimum = 0o400 // ensure owner has read access to the file.
 
-	return current | minimum
+	return current | minimum | x.FileMode&accessPermMask
 }
 
 func openStatFile(path string) (*os.File, os.FileInfo, error) {

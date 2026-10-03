@@ -30,9 +30,11 @@ type Config struct {
 	// Streaming formats ignore this. 0 or 1 = sequential (current behavior).
 	// Total concurrent I/O = Parallel * FileWorkers.
 	FileWorkers int
-	// Filemode used when writing files, tar ignores this, so does Windows.
+	// FileMode is used when an entry stores no permission bits. Otherwise only
+	// its group and other bits are added to the archived mode. Umask still applies.
 	FileMode os.FileMode
-	// Filemode used when writing folders, tar ignores this.
+	// DirMode is used when a directory stores no permission bits. Otherwise only
+	// its group and other bits are added to the archived mode. Owner rwx is always kept.
 	DirMode os.FileMode
 	// When true, if extractions would overwrite the final folder,
 	// a suffix is added instead. ie. .1, .2, .3, etc.

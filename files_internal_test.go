@@ -727,3 +727,61 @@ func TestUnknownArchiveTypeMentionsPathOnce(t *testing.T) {
 	require.ErrorIs(t, err, ErrUnknownArchiveType)
 	require.Equal(t, 1, strings.Count(err.Error(), path))
 }
+
+func TestSafeFileModeAddsNonOwnerBits(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		current os.FileMode
+		mode    os.FileMode
+		want    os.FileMode
+	}{
+		{name: "scene file gains group write", current: 0o644, mode: 0o660, want: 0o664},
+		{name: "scene file gains other write", current: 0o644, mode: 0o666, want: 0o666},
+		{name: "owner-only file gains other read", current: 0o600, mode: 0o644, want: 0o644},
+		{name: "executable keeps its execute bit", current: 0o755, mode: 0o660, want: 0o775},
+		{name: "executable gains other write", current: 0o755, mode: 0o666, want: 0o777},
+		{name: "default leaves a scene file", current: 0o644, mode: 0o644, want: 0o644},
+		{name: "default leaves an executable", current: 0o755, mode: 0o644, want: 0o755},
+		{name: "missing archive mode uses the configured mode", current: 0, mode: 0o660, want: 0o660},
+		{name: "owner read is restored", current: 0o044, mode: 0o660, want: 0o464},
+		{name: "configured setgid is not added", current: 0o644, mode: os.ModeSetgid | 0o660, want: 0o664},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := (&XFile{FileMode: test.mode}).safeFileMode(test.current)
+			assert.Equal(t, test.want, got)
+		})
+	}
+}
+
+func TestSafeDirModeAddsNonOwnerBits(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		current os.FileMode
+		mode    os.FileMode
+		want    os.FileMode
+	}{
+		{name: "archived directory gains group write", current: 0o755, mode: 0o770, want: 0o775},
+		{name: "archived directory gains other write", current: 0o755, mode: 0o777, want: 0o777},
+		{name: "default leaves an archived directory", current: 0o755, mode: 0o755, want: 0o755},
+		{name: "owner-only directory gains other access", current: 0o700, mode: 0o755, want: 0o755},
+		{name: "missing archive mode uses the configured mode", current: 0, mode: 0o770, want: 0o770},
+		{name: "owner rwx is restored", current: 0o055, mode: 0o755, want: 0o755},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := (&XFile{DirMode: test.mode}).safeDirMode(test.current)
+			assert.Equal(t, test.want, got)
+		})
+	}
+}
