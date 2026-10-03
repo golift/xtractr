@@ -84,7 +84,7 @@ func main() {
 		Suffix:   "_xtractd",
 		Logger:   log,
 		Parallel: 1,
-		FileMode: 0644, // ignored for tar files.
+		FileMode: 0644, // group and other bits are added to archived modes.
 		DirMode:  0755,
 	})
 	defer q.Stop() // Stop() waits until all extractions finish.
@@ -189,9 +189,11 @@ type XFile struct {
 	FilePath string
 	// Folder to extract archive into.
 	OutputDir string
-	// Write files with this mode.
+	// FileMode is used when an entry stores no permission bits. Otherwise only
+	// its group and other bits are added to the archived mode. Umask still applies.
 	FileMode os.FileMode
-	// Write folders with this mode.
+	// DirMode is used when a directory stores no permission bits. Otherwise only
+	// its group and other bits are added to the archived mode. Owner rwx is always kept.
 	DirMode os.FileMode
 	// Suffix brands cross-device copy siblings as a known extra extension
 	// (e.g. movie.mkv.xtractr_partial). Empty uses DefaultSuffix.
