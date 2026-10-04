@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -385,6 +386,81 @@ func TestDeleteOrigNestedArchiveSameOutput(t *testing.T) {
 		require.NoFileExists(t, filepath.Join(dir, "inner.zip"))
 		require.NoFileExists(t, filepath.Join(dir, "outer.zip"))
 	})
+}
+
+func TestQueuePreserveExecSurvivesArchivePasses(t *testing.T) {
+	t.Parallel()
+
+	if runtime.GOOS == "windows" {
+		t.Skip("unix file modes")
+	}
+
+	dir := t.TempDir()
+	writeModeZip(t, filepath.Join(dir, "outer.zip"), []zipModeFile{
+		{name: "outer-bin", body: []byte("outer"), mode: 0o755},
+		{name: "inner.zip", body: zipModeBytes(t, []zipModeFile{
+			{name: "inner-bin", body: []byte("inner"), mode: 0o755},
+		}), mode: 0o644},
+	})
+
+	queue := xtractr.NewQueue(&xtractr.Config{Logger: &testLogger{t: t}, FileMode: 0o644, DirMode: 0o755})
+	defer queue.Stop()
+
+	item := &xtractr.Xtract{
+		Name:         "preserve-exec",
+		Filter:       xtractr.Filter{Path: dir},
+		TempFolder:   false,
+		DeleteOrig:   true,
+		PreserveExec: true,
+		CBChannel:    make(chan *xtractr.Response),
+	}
+
+	_, err := queue.Extract(item)
+	require.NoError(t, err)
+
+	done := waitFinalResponse(t, item.CBChannel)
+	require.NoError(t, done.Error)
+
+	for _, name := range []string{"outer-bin", "inner-bin"} {
+		path := filepath.Join(dir, name)
+		info, statErr := os.Stat(path)
+		require.NoError(t, statErr)
+		assert.NotEqual(t, os.FileMode(0), info.Mode()&0o100, name)
+	}
+}
+
+type zipModeFile struct {
+	name string
+	body []byte
+	mode os.FileMode
+}
+
+func writeModeZip(t *testing.T, path string, files []zipModeFile) {
+	t.Helper()
+
+	require.NoError(t, os.WriteFile(path, zipModeBytes(t, files), 0o600))
+}
+
+func zipModeBytes(t *testing.T, files []zipModeFile) []byte {
+	t.Helper()
+
+	var buf bytes.Buffer
+
+	writer := zip.NewWriter(&buf)
+
+	for _, file := range files {
+		header := &zip.FileHeader{Name: file.name, Method: zip.Deflate}
+		header.SetMode(file.mode)
+
+		entry, err := writer.CreateHeader(header)
+		require.NoError(t, err)
+		_, err = entry.Write(file.body)
+		require.NoError(t, err)
+	}
+
+	require.NoError(t, writer.Close())
+
+	return buf.Bytes()
 }
 
 func extractDir(t *testing.T, dir string) *xtractr.Response {
