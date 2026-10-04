@@ -230,36 +230,7 @@ func (x *Xtractr) decompressFolders(resp *Response) error {
 			output = filepath.Join(resp.Output, strings.TrimPrefix(subDir, resp.X.Path))
 		}
 
-		subResp := &Response{
-			X: &Xtract{
-				Filter: Filter{
-					Path:          subDir,
-					ExcludeSuffix: resp.X.ExcludeSuffix,
-					AllowSymlinks: resp.X.AllowSymlinks,
-				},
-				Name:             resp.X.Name,
-				Password:         resp.X.Password,
-				Passwords:        resp.X.Passwords,
-				DisableRecursion: resp.X.DisableRecursion,
-				RecurseISO:       resp.X.RecurseISO,
-				ExtractTo:        resp.X.ExtractTo,
-				DeleteOrig:       resp.X.DeleteOrig,
-				TempFolder:       resp.X.TempFolder,
-				LogFile:          resp.X.LogFile,
-				PreserveExec:     resp.X.PreserveExec,
-				Updates:          resp.X.Updates,
-				Progress:         resp.X.Progress,
-				MaxBytes:         resp.X.MaxBytes,
-				MaxFiles:         resp.X.MaxFiles,
-				MaxRatio:         resp.X.MaxRatio,
-				MaxNested:        resp.X.MaxNested,
-				ExtrasMaxDepth:   resp.X.ExtrasMaxDepth,
-				APEOpts:          resp.X.APEOpts,
-			},
-			Started:  resp.Started,
-			Output:   output,
-			Archives: ArchiveList{subDir: resp.Archives[subDir]},
-		}
+		subResp := folderResponse(resp, subDir, output)
 
 		err := x.decompressFiles(subResp)
 		resp.NewFiles = append(resp.NewFiles, subResp.NewFiles...)
@@ -283,6 +254,41 @@ func (x *Xtractr) decompressFolders(resp *Response) error {
 	resp.Archives = allArchives
 
 	return nil
+}
+
+// folderResponse is one source folder's extract. The queued job is copied so a
+// later field, such as PreserveExec, is not dropped on this pass.
+func folderResponse(resp *Response, subDir, output string) *Response {
+	return &Response{
+		X: &Xtract{
+			Filter: Filter{
+				Path:          subDir,
+				ExcludeSuffix: resp.X.ExcludeSuffix,
+				AllowSymlinks: resp.X.AllowSymlinks,
+			},
+			Name:             resp.X.Name,
+			Password:         resp.X.Password,
+			Passwords:        resp.X.Passwords,
+			DisableRecursion: resp.X.DisableRecursion,
+			RecurseISO:       resp.X.RecurseISO,
+			ExtractTo:        resp.X.ExtractTo,
+			DeleteOrig:       resp.X.DeleteOrig,
+			TempFolder:       resp.X.TempFolder,
+			LogFile:          resp.X.LogFile,
+			PreserveExec:     resp.X.PreserveExec,
+			Updates:          resp.X.Updates,
+			Progress:         resp.X.Progress,
+			MaxBytes:         resp.X.MaxBytes,
+			MaxFiles:         resp.X.MaxFiles,
+			MaxRatio:         resp.X.MaxRatio,
+			MaxNested:        resp.X.MaxNested,
+			ExtrasMaxDepth:   resp.X.ExtrasMaxDepth,
+			APEOpts:          resp.X.APEOpts,
+		},
+		Started:  resp.Started,
+		Output:   output,
+		Archives: ArchiveList{subDir: resp.Archives[subDir]},
+	}
 }
 
 func (x *Xtractr) finishExtract(resp *Response, err error) {
