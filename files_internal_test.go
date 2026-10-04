@@ -11,6 +11,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golift.io/asar"
 )
 
 func TestNormalizeVolumes(t *testing.T) {
@@ -728,7 +729,7 @@ func TestUnknownArchiveTypeMentionsPathOnce(t *testing.T) {
 	require.Equal(t, 1, strings.Count(err.Error(), path))
 }
 
-func TestSafeFileModeAddsNonOwnerBits(t *testing.T) {
+func TestSafeFileModeKeepsArchiveExecuteBits(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -737,16 +738,19 @@ func TestSafeFileModeAddsNonOwnerBits(t *testing.T) {
 		mode    os.FileMode
 		want    os.FileMode
 	}{
-		{name: "scene file gains group write", current: 0o644, mode: 0o660, want: 0o664},
-		{name: "scene file gains other write", current: 0o644, mode: 0o666, want: 0o666},
-		{name: "owner-only file gains other read", current: 0o600, mode: 0o644, want: 0o644},
-		{name: "executable keeps its execute bit", current: 0o755, mode: 0o660, want: 0o775},
-		{name: "executable gains other write", current: 0o755, mode: 0o666, want: 0o777},
-		{name: "default leaves a scene file", current: 0o644, mode: 0o644, want: 0o644},
-		{name: "default leaves an executable", current: 0o755, mode: 0o644, want: 0o755},
+		{name: "scene file uses the configured mode", current: 0o644, mode: 0o660, want: 0o660},
+		{name: "scene file gains other write from the configured mode", current: 0o644, mode: 0o666, want: 0o666},
+		{name: "configured mode replaces an owner-only file", current: 0o600, mode: 0o644, want: 0o644},
+		{name: "group write keeps group execute", current: 0o755, mode: 0o660, want: 0o770},
+		{name: "other write keeps other execute", current: 0o755, mode: 0o666, want: 0o777},
+		{name: "owner-only mode keeps only owner execute", current: 0o755, mode: 0o600, want: 0o700},
+		{name: "read access keeps execute", current: 0o755, mode: 0o644, want: 0o755},
+		{name: "scene file stays a scene file", current: 0o644, mode: 0o644, want: 0o644},
 		{name: "missing archive mode uses the configured mode", current: 0, mode: 0o660, want: 0o660},
-		{name: "owner read is restored", current: 0o044, mode: 0o660, want: 0o464},
-		{name: "configured setgid is not added", current: 0o644, mode: os.ModeSetgid | 0o660, want: 0o664},
+		{name: "execute-only mode keeps group execute", current: 0o111, mode: 0o660, want: 0o770},
+		{name: "execute-only mode keeps other execute when other can read", current: 0o111, mode: 0o644, want: 0o755},
+		{name: "configured mode replaces a read-only archive mode", current: 0o044, mode: 0o660, want: 0o660},
+		{name: "configured setgid is not added", current: 0o644, mode: os.ModeSetgid | 0o660, want: 0o660},
 	}
 
 	for _, test := range tests {
@@ -759,7 +763,14 @@ func TestSafeFileModeAddsNonOwnerBits(t *testing.T) {
 	}
 }
 
-func TestSafeDirModeAddsNonOwnerBits(t *testing.T) {
+func TestASARFileModeStoresExecuteOnly(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, os.FileMode(0), (&XFile{}).asarFileMode(&asar.File{}))
+	assert.Equal(t, os.FileMode(0o111), (&XFile{}).asarFileMode(&asar.File{Executable: true}))
+}
+
+func TestSafeDirModeUsesConfiguredMode(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -768,12 +779,12 @@ func TestSafeDirModeAddsNonOwnerBits(t *testing.T) {
 		mode    os.FileMode
 		want    os.FileMode
 	}{
-		{name: "archived directory gains group write", current: 0o755, mode: 0o770, want: 0o775},
-		{name: "archived directory gains other write", current: 0o755, mode: 0o777, want: 0o777},
-		{name: "default leaves an archived directory", current: 0o755, mode: 0o755, want: 0o755},
-		{name: "owner-only directory gains other access", current: 0o700, mode: 0o755, want: 0o755},
+		{name: "configured mode replaces an archived directory", current: 0o755, mode: 0o770, want: 0o770},
+		{name: "configured mode drops archived other write", current: 0o777, mode: 0o755, want: 0o755},
+		{name: "matching modes stay put", current: 0o755, mode: 0o755, want: 0o755},
+		{name: "owner-only archive uses the configured mode", current: 0o700, mode: 0o755, want: 0o755},
 		{name: "missing archive mode uses the configured mode", current: 0, mode: 0o770, want: 0o770},
-		{name: "owner rwx is restored", current: 0o055, mode: 0o755, want: 0o755},
+		{name: "zero configured mode uses the default", current: 0o755, mode: 0, want: DefaultDirMode},
 	}
 
 	for _, test := range tests {

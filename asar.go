@@ -265,11 +265,13 @@ func requireUnpackedRegular(src *os.File) error {
 	return nil
 }
 
+// asarFileMode is the only permission bit an ASAR entry can store. The header
+// has an executable flag and no Unix mode. safeFileMode keeps that execute bit
+// for each class FileMode already grants access.
 func (x *XFile) asarFileMode(asarFile *asar.File) os.FileMode {
-	mode := x.FileMode
 	if asarFile.Executable {
-		mode |= 0o111
+		return executePermMask
 	}
 
-	return mode
+	return 0
 }

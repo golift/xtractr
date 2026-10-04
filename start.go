@@ -30,11 +30,12 @@ type Config struct {
 	// Streaming formats ignore this. 0 or 1 = sequential (current behavior).
 	// Total concurrent I/O = Parallel * FileWorkers.
 	FileWorkers int
-	// FileMode is used when an entry stores no permission bits. Otherwise only
-	// its group and other bits are added to the archived mode. Umask still applies.
+	// FileMode is the mode for extracted files. Execute bits stored in the
+	// archive are kept for owner, group, or other only when this mode already
+	// grants that class access. Umask still applies. Zero uses DefaultFileMode.
 	FileMode os.FileMode
-	// DirMode is used when a directory stores no permission bits. Otherwise only
-	// its group and other bits are added to the archived mode. Owner rwx is always kept.
+	// DirMode is the mode for extracted directories. Umask still applies.
+	// Zero uses DefaultDirMode.
 	DirMode os.FileMode
 	// When true, if extractions would overwrite the final folder,
 	// a suffix is added instead. ie. .1, .2, .3, etc.

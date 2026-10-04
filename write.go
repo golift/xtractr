@@ -78,32 +78,52 @@ func (x *XFile) squashRoot(files []string) ([]string, error) {
 	return files, nil
 }
 
-// accessPermMask is the group and other rwx triads. When an archive entry
-// already stores a mode, configured FileMode and DirMode contribute only these
-// bits, so a caller can grant group or other access without replacing the
-// archived mode. Owner bits stay with the archive, apart from the owner floor
-// below. Umask still applies at open. A zero stored mode uses the configured
-// mode as a whole.
-const accessPermMask os.FileMode = 0o077
+// Permission triads. FileMode supplies read and write. An execute bit stored in
+// the archive is kept only for a triad FileMode already grants some access, so
+// a 6 beside an archive 7 becomes 7, a 4 becomes 5, and a 0 stays 0. DirMode is
+// used as given. Umask still applies at open. A zero configured mode uses the
+// package default.
+const (
+	ownerPermMask   os.FileMode = 0o700
+	groupPermMask   os.FileMode = 0o070
+	otherPermMask   os.FileMode = 0o007
+	executePermMask os.FileMode = 0o111
+)
 
-func (x *XFile) safeDirMode(current os.FileMode) os.FileMode {
-	if current.Perm() == 0 {
-		return x.DirMode
+func (x *XFile) safeDirMode(_ os.FileMode) os.FileMode {
+	mode := x.DirMode.Perm()
+	if mode == 0 {
+		return DefaultDirMode
 	}
 
-	const minimum = 0o700 // ensure owner has read/write/exec on folders.
-
-	return current | minimum | x.DirMode&accessPermMask
+	return mode
 }
 
 func (x *XFile) safeFileMode(current os.FileMode) os.FileMode {
-	if current.Perm() == 0 {
-		return x.FileMode
+	mode := x.FileMode.Perm()
+	if mode == 0 {
+		mode = DefaultFileMode
 	}
 
-	const minimum = 0o400 // ensure owner has read access to the file.
+	return mode | preservedExec(current, mode)
+}
 
-	return current | minimum | x.FileMode&accessPermMask
+// preservedExec returns archive execute bits for triads that configured already allows.
+func preservedExec(archive, configured os.FileMode) os.FileMode {
+	exec := archive.Perm() & executePermMask
+	if configured&ownerPermMask == 0 {
+		exec &^= ownerPermMask & executePermMask
+	}
+
+	if configured&groupPermMask == 0 {
+		exec &^= groupPermMask & executePermMask
+	}
+
+	if configured&otherPermMask == 0 {
+		exec &^= otherPermMask & executePermMask
+	}
+
+	return exec
 }
 
 func openStatFile(path string) (*os.File, os.FileInfo, error) {
