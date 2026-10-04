@@ -48,11 +48,12 @@ func TestExtractASAR(t *testing.T) {
 
 			out := filepath.Join(dir, "out")
 			size, files, archives, err := xtractr.ExtractASAR(&xtractr.XFile{
-				FilePath:    archive,
-				OutputDir:   out,
-				FileMode:    0o600,
-				DirMode:     0o700,
-				FileWorkers: workers,
+				FilePath:     archive,
+				OutputDir:    out,
+				FileMode:     0o600,
+				DirMode:      0o700,
+				FileWorkers:  workers,
+				PreserveExec: true,
 			})
 			require.NoError(t, err)
 			assert.Equal(t, uint64(5+3+4+4+3), size)

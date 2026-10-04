@@ -135,7 +135,7 @@ func (x *XFile) uniso(isoFile *iso9660.File, parent string) (uint64, []string, e
 				x.FilePath, ErrInvalidPath, dirPath, isoFile.Name())
 		}
 
-		err := x.mkDir(dirPath, isoFile.Mode(), isoFile.ModTime())
+		err := x.mkDir(dirPath, isoFile.ModTime())
 		if err != nil {
 			return 0, nil, fmt.Errorf("making iso directory %s: %w", isoFile.Name(), err)
 		}
@@ -170,7 +170,6 @@ func (x *XFile) unisofile(isoFile *iso9660.File, wfile string) (uint64, []string
 		Path:     x.clean(wfile),
 		Data:     isoFile.Reader(),
 		FileMode: isoFile.Mode(),
-		DirMode:  x.DirMode,
 		Mtime:    isoFile.ModTime(),
 	}
 

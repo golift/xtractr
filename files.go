@@ -146,12 +146,12 @@ type XFile struct {
 	FilePath string
 	// Folder to extract archive into.
 	OutputDir string
-	// FileMode is the mode for extracted files. Execute bits stored in the
-	// archive are kept for owner, group, or other only when this mode already
-	// grants that class access. Umask still applies. Zero uses DefaultFileMode.
+	// FileMode is the mode passed to open for extracted files. Umask still
+	// applies. Zero uses DefaultFileMode. Setuid, setgid, and sticky are
+	// discarded. Archive execute bits are kept only when PreserveExec is set.
 	FileMode os.FileMode
 	// DirMode is the mode for extracted directories. Umask still applies.
-	// Zero uses DefaultDirMode.
+	// Zero uses DefaultDirMode. Setuid, setgid, and sticky are discarded.
 	DirMode os.FileMode
 	// Suffix brands cross-device copy siblings as a known extra extension
 	// (e.g. movie.mkv.xtractr_partial). Empty uses DefaultSuffix.
@@ -175,6 +175,9 @@ type XFile struct {
 	MaxRatio float64
 	// AllowSymlinks allows FilePath to be a symbolic link to an archive.
 	AllowSymlinks bool
+	// PreserveExec keeps archive execute bits for each class FileMode already
+	// grants. Off, FileMode is the mode passed to open. Umask still applies.
+	PreserveExec bool
 	// Progress is called periodically during file extraction.
 	// Contains info about the progress of the extraction.
 	// This is not called if an Updates channel is also provided.

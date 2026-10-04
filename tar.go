@@ -168,7 +168,6 @@ func (x *XFile) untarFile(header *tar.Header, tarReader *tar.Reader) (uint64, er
 		Path:     x.clean(header.Name),
 		Data:     tarReader,
 		FileMode: header.FileInfo().Mode(),
-		DirMode:  x.DirMode,
 		Mtime:    header.ChangeTime,
 		Atime:    header.AccessTime,
 	}
@@ -187,7 +186,7 @@ func (x *XFile) untarFile(header *tar.Header, tarReader *tar.Reader) (uint64, er
 	case tar.TypeDir:
 		x.Debugf("Writing archived directory: %s", file.Path)
 
-		err := x.mkDir(file.Path, header.FileInfo().Mode(), header.ModTime)
+		err := x.mkDir(file.Path, header.ModTime)
 		if err != nil {
 			return 0, fmt.Errorf("making tar file dir: %w", err)
 		}
@@ -206,7 +205,7 @@ func (x *XFile) untarFile(header *tar.Header, tarReader *tar.Reader) (uint64, er
 
 // untarLink creates a symlink or hard link from a tar header.
 func (x *XFile) untarLink(header *tar.Header, path string) (uint64, error) {
-	err := x.mkDir(filepath.Dir(path), x.DirMode, header.ModTime)
+	err := x.mkDir(filepath.Dir(path), header.ModTime)
 	if err != nil {
 		return 0, fmt.Errorf("making tar link parent dir: %w", err)
 	}

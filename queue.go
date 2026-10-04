@@ -39,6 +39,9 @@ type Xtract struct {
 	DeleteOrig bool
 	// Create a log (.txt) file of the extraction information.
 	LogFile bool
+	// PreserveExec keeps archive execute bits for each class FileMode already
+	// grants. Off, Config.FileMode is the mode passed to open. Umask still applies.
+	PreserveExec bool
 	// Callback Function, runs twice per queued item.
 	CBFunction func(*Response)
 	// Callback Channel, msg sent twice per queued item.
@@ -420,7 +423,7 @@ func (x *Xtractr) decompressArchives(resp *Response) error {
 // processArchives extracts one archive at a time.
 // Returns list of archive files extracted, size of data written and files written.
 func (x *Xtractr) processArchive(filename string, resp *Response) (uint64, []string, []string, error) {
-	err := os.MkdirAll(resp.Output, x.config.DirMode)
+	err := os.MkdirAll(resp.Output, permMode(x.config.DirMode, DefaultDirMode))
 	if err != nil {
 		return 0, nil, nil, NewExtractError(
 			fmt.Errorf("making output dir: %w", err),
@@ -445,6 +448,7 @@ func (x *Xtractr) processArchive(filename string, resp *Response) (uint64, []str
 		OutputDir:     resp.Output,
 		FileMode:      x.config.FileMode,
 		DirMode:       x.config.DirMode,
+		PreserveExec:  resp.X.PreserveExec,
 		Suffix:        x.config.Suffix,
 		Passwords:     resp.X.Passwords,
 		Password:      resp.X.Password,
@@ -596,7 +600,7 @@ func (x *Xtractr) createLogFile(resp *Response) {
 		x.config.Suffix, resp.Archives, resp.Extras, resp.X.Path, resp.Output, !resp.X.TempFolder, time.Now(),
 		strings.Join(resp.NewFiles, "\n  - "))
 
-	err := os.WriteFile(tmpFile, msg, x.config.FileMode)
+	err := os.WriteFile(tmpFile, msg, permMode(x.config.FileMode, DefaultFileMode))
 	if err != nil {
 		resp.NewFiles = resp.NewFiles[:len(resp.NewFiles)-1]
 

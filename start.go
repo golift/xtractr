@@ -30,12 +30,13 @@ type Config struct {
 	// Streaming formats ignore this. 0 or 1 = sequential (current behavior).
 	// Total concurrent I/O = Parallel * FileWorkers.
 	FileWorkers int
-	// FileMode is the mode for extracted files. Execute bits stored in the
-	// archive are kept for owner, group, or other only when this mode already
-	// grants that class access. Umask still applies. Zero uses DefaultFileMode.
+	// FileMode is the mode passed to open for extracted files. Umask still
+	// applies. Zero uses DefaultFileMode. Setuid, setgid, and sticky are
+	// discarded. Archive execute bits are kept only when the Xtract or XFile
+	// sets PreserveExec.
 	FileMode os.FileMode
 	// DirMode is the mode for extracted directories. Umask still applies.
-	// Zero uses DefaultDirMode.
+	// Zero uses DefaultDirMode. Setuid, setgid, and sticky are discarded.
 	DirMode os.FileMode
 	// When true, if extractions would overwrite the final folder,
 	// a suffix is added instead. ie. .1, .2, .3, etc.
@@ -124,13 +125,8 @@ func (x *Xtractr) Start() error {
 
 // parseConfig verifies sane config data and returns the Xtractr struct.
 func parseConfig(config *Config) *Xtractr {
-	if config.FileMode == 0 {
-		config.FileMode = DefaultFileMode
-	}
-
-	if config.DirMode == 0 {
-		config.DirMode = DefaultDirMode
-	}
+	config.FileMode = permMode(config.FileMode, DefaultFileMode)
+	config.DirMode = permMode(config.DirMode, DefaultDirMode)
 
 	if config.Parallel < 1 {
 		config.Parallel = 1

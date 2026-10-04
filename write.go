@@ -17,7 +17,6 @@ type file struct {
 	Path     string
 	Data     io.Reader
 	FileMode os.FileMode
-	DirMode  os.FileMode
 	Mtime    time.Time
 	Atime    time.Time
 	// Linkname is an explicit symlink target when the archive format stores it
@@ -78,11 +77,11 @@ func (x *XFile) squashRoot(files []string) ([]string, error) {
 	return files, nil
 }
 
-// Permission triads. FileMode supplies read and write. An execute bit stored in
-// the archive is kept only for a triad FileMode already grants some access, so
-// a 6 beside an archive 7 becomes 7, a 4 becomes 5, and a 0 stays 0. DirMode is
-// used as given. Umask still applies at open. A zero configured mode uses the
-// package default.
+// Permission triads. FileMode supplies read and write. When PreserveExec is set,
+// an execute bit stored in the archive is kept only for a triad FileMode already
+// grants some access, so a 6 beside an archive 7 becomes 7, a 4 becomes 5, and a
+// 0 stays 0. DirMode is used as given. Umask still applies at open. A zero
+// configured mode uses the package default. Setuid, setgid, and sticky are discarded.
 const (
 	ownerPermMask   os.FileMode = 0o700
 	groupPermMask   os.FileMode = 0o070
@@ -90,22 +89,31 @@ const (
 	executePermMask os.FileMode = 0o111
 )
 
-func (x *XFile) safeDirMode(_ os.FileMode) os.FileMode {
-	mode := x.DirMode.Perm()
+// permMode keeps the read, write, and execute bits. Setuid, setgid, and sticky
+// are discarded. A zero permission uses fallback.
+func permMode(mode, fallback os.FileMode) os.FileMode {
+	mode = mode.Perm()
 	if mode == 0 {
-		return DefaultDirMode
+		return fallback
 	}
 
 	return mode
 }
 
-func (x *XFile) safeFileMode(current os.FileMode) os.FileMode {
-	mode := x.FileMode.Perm()
-	if mode == 0 {
-		mode = DefaultFileMode
+// fileMode is the mode passed to open. When PreserveExec is set, archive
+// execute bits are kept for each triad this mode already grants.
+func (x *XFile) fileMode(archive os.FileMode) os.FileMode {
+	mode := permMode(x.FileMode, DefaultFileMode)
+	if !x.PreserveExec {
+		return mode
 	}
 
-	return mode | preservedExec(current, mode)
+	return mode | preservedExec(archive, mode)
+}
+
+// dirMode is the mode passed to mkdir.
+func (x *XFile) dirMode() os.FileMode {
+	return permMode(x.DirMode, DefaultDirMode)
 }
 
 // preservedExec returns archive execute bits for triads that configured already allows.
@@ -143,14 +151,14 @@ func openStatFile(path string) (*os.File, os.FileInfo, error) {
 
 // mkDir creates a folder (and parents) with safe permissions.
 // It refuses to leave the output folder through a pre-existing symlink.
-func (x *XFile) mkDir(path string, mode os.FileMode, mtime time.Time) error {
+func (x *XFile) mkDir(path string, mtime time.Time) error {
 	// Check before creating so we do not mkdir (or Chtimes) through a symlink
 	// that already points outside OutputDir.
 	if !x.resolvedWithinOutput(path) {
 		return fmt.Errorf("%s: %w: %s resolves outside the output folder", x.FilePath, ErrInvalidPath, path)
 	}
 
-	err := x.mkdirAllCounted(path, mode)
+	err := x.mkdirAllCounted(path)
 	if err != nil {
 		return err
 	}
@@ -169,10 +177,10 @@ func (x *XFile) mkDir(path string, mode os.FileMode, mtime time.Time) error {
 // so MaxFiles charges one slot per new directory. EEXIST from a parallel worker
 // is not counted. The caller-provided OutputDir itself is created if needed
 // but is not charged.
-func (x *XFile) mkdirAllCounted(path string, mode os.FileMode) error {
+func (x *XFile) mkdirAllCounted(path string) error {
 	path = filepath.Clean(path)
 	base := filepath.Clean(x.OutputDir)
-	perm := x.safeDirMode(mode)
+	perm := x.dirMode()
 
 	err := os.MkdirAll(base, perm)
 	if err != nil {
@@ -274,7 +282,7 @@ func (x *XFile) writeParallel(file *file) (uint64, error) {
 }
 
 func (x *XFile) writeFile(file *file, parallel bool) (uint64, error) {
-	err := x.mkDir(filepath.Dir(file.Path), file.DirMode, file.Mtime)
+	err := x.mkDir(filepath.Dir(file.Path), file.Mtime)
 	if err != nil {
 		return 0, fmt.Errorf("writing archived file '%s' parent folder: %w", filepath.Base(file.Path), err)
 	}
@@ -291,7 +299,7 @@ func (x *XFile) writeFile(file *file, parallel bool) (uint64, error) {
 		return 0, err
 	}
 
-	fout, pathUsed, err := openExtractFile(file.Path, x.safeFileMode(file.FileMode))
+	fout, pathUsed, err := openExtractFile(file.Path, x.fileMode(file.FileMode))
 	if err != nil {
 		return 0, err
 	}
@@ -353,7 +361,7 @@ type noFollowOpen func(path string, flags int, mode os.FileMode) (*os.File, erro
 // A hard link to a file outside the output directory is indistinguishable from
 // a regular file after open and is still truncated; that matches os.OpenFile.
 func openExtractFile(path string, mode os.FileMode) (*os.File, string, error) {
-	return openExtractFileWith(openFileNoFollow, path, mode)
+	return openExtractFileWith(openFileNoFollow, path, permMode(mode, DefaultFileMode))
 }
 
 func openExtractFileWith(open noFollowOpen, path string, mode os.FileMode) (*os.File, string, error) {
