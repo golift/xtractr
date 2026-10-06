@@ -607,24 +607,132 @@ func (x *XFile) resolvedWithinOutput(path string) bool {
 	return pathWithin(resolveExisting(x.OutputDir), resolveExisting(path))
 }
 
-// resolveLinkTarget returns the cleaned filesystem path a link would resolve to.
-func resolveLinkTarget(linkPath, linkName string) string {
+// maxSymlinkHops bounds how many links walkLinkTarget follows for one archive
+// symlink. A cycle in the output directory fails closed instead of looping.
+const maxSymlinkHops = 40
+
+// walkLinkTarget returns the path the kernel would resolve for a symlink
+// created at linkPath with target text linkName.
+//
+// filepath.Clean is the wrong tool here: it drops ".." lexically, so a target
+// like foo/bar/../outside still looks inside OutputDir when foo/bar is a
+// symlink to "..". This walk applies ".." to the directory actually reached,
+// following links that already exist.
+func walkLinkTarget(linkPath, linkName string) (string, error) {
+	linkName = slashToSeparator(linkName)
+
+	start := resolveExisting(filepath.Dir(linkPath))
+	elems := splitElems(linkName)
+
 	if filepath.IsAbs(linkName) {
-		return filepath.Clean(linkName)
+		start = volumeRoot(linkName)
+		elems = splitElems(strings.TrimPrefix(linkName, filepath.VolumeName(linkName)))
 	}
 
-	return filepath.Clean(filepath.Join(filepath.Dir(linkPath), linkName))
+	return walkLinkElems(start, elems, 0)
+}
+
+func walkLinkElems(dir string, elems []string, hops int) (string, error) {
+	current := dir
+
+	for _, elem := range elems {
+		next, err := stepLinkElem(current, elem, hops)
+		if err != nil {
+			return "", err
+		}
+
+		current = next
+	}
+
+	return current, nil
+}
+
+func stepLinkElem(current, elem string, hops int) (string, error) {
+	switch elem {
+	case "", ".":
+		return current, nil
+	case "..":
+		return filepath.Dir(current), nil
+	}
+
+	next := filepath.Join(current, elem)
+
+	info, err := os.Lstat(next)
+	if errors.Is(err, os.ErrNotExist) {
+		return next, nil
+	}
+
+	if err != nil {
+		return "", fmt.Errorf("lstat %s: %w", next, err)
+	}
+
+	if info.Mode()&os.ModeSymlink == 0 {
+		return next, nil
+	}
+
+	return followLinkElem(current, next, hops)
+}
+
+func followLinkElem(parent, link string, hops int) (string, error) {
+	if hops >= maxSymlinkHops {
+		return "", fmt.Errorf("%w: symlink cycle", ErrInvalidPath)
+	}
+
+	target, err := os.Readlink(link)
+	if err != nil {
+		return "", fmt.Errorf("readlink %s: %w", link, err)
+	}
+
+	target = slashToSeparator(target)
+	start := parent
+	rest := target
+
+	if filepath.IsAbs(target) {
+		start = volumeRoot(target)
+		rest = strings.TrimPrefix(target, filepath.VolumeName(target))
+	}
+
+	return walkLinkElems(start, splitElems(rest), hops+1)
+}
+
+func slashToSeparator(path string) string {
+	if os.PathSeparator == '/' {
+		return path
+	}
+
+	return strings.ReplaceAll(path, "/", string(os.PathSeparator))
+}
+
+func splitElems(path string) []string {
+	return strings.Split(path, string(os.PathSeparator))
+}
+
+func volumeRoot(path string) string {
+	vol := filepath.VolumeName(path)
+	if vol == "" {
+		return string(os.PathSeparator)
+	}
+
+	if strings.HasSuffix(vol, string(os.PathSeparator)) {
+		return vol
+	}
+
+	return vol + string(os.PathSeparator)
 }
 
 // ensureLinkWithinOutput rejects symlink targets that escape OutputDir,
-// including those that only escape after following a pre-existing symlink.
+// including ones that escape only after an earlier symlink is followed.
 func (x *XFile) ensureLinkWithinOutput(linkPath, linkName string) error {
-	resolved := resolveLinkTarget(linkPath, linkName)
-	if !x.pathWithinOutput(resolved) || !x.resolvedWithinOutput(resolved) {
-		return fmt.Errorf("%s: %w: %s (from: %s)", x.FilePath, ErrInvalidPath, resolved, linkName)
+	resolved, err := walkLinkTarget(linkPath, linkName)
+	if err != nil {
+		return fmt.Errorf("%s: %w: %s: %w", x.FilePath, ErrInvalidPath, linkName, err)
 	}
 
-	return nil
+	if pathWithin(resolveExisting(x.OutputDir), resolved) && x.resolvedWithinOutput(resolved) {
+		return nil
+	}
+
+	return fmt.Errorf("%s: %w: %s (from: %s)", x.FilePath, ErrInvalidPath, resolved, linkName)
 }
 
 func (x *XFile) createSymlink(path, linkName string) error {
