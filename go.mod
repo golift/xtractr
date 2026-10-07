@@ -23,7 +23,7 @@ require (
 	github.com/ulikunitz/xz v0.5.17
 	golang.org/x/text v0.42.0
 	golift.io/ape v0.2.0
-	golift.io/asar v0.0.0-20260922041046-6f7004983a76
+	golift.io/asar v0.1.0
 	golift.io/udf v0.1.0
 )
 
