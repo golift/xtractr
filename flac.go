@@ -49,7 +49,7 @@ func splitFLAC(xFile *XFile, audioPath string, cue *CueSheet, timestamps []cueTi
 	}
 
 	// Ensure output directory exists.
-	err = os.MkdirAll(xFile.OutputDir, xFile.DirMode)
+	err = os.MkdirAll(xFile.OutputDir, xFile.dirMode())
 	if err != nil {
 		return 0, nil, fmt.Errorf("creating output directory: %w", err)
 	}

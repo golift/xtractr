@@ -39,6 +39,9 @@ type Xtract struct {
 	DeleteOrig bool
 	// Create a log (.txt) file of the extraction information.
 	LogFile bool
+	// PreserveExec keeps archive execute bits for each class FileMode already
+	// grants. Off, Config.FileMode is the mode passed to open. Umask still applies.
+	PreserveExec bool
 	// Callback Function, runs twice per queued item.
 	CBFunction func(*Response)
 	// Callback Channel, msg sent twice per queued item.
@@ -227,35 +230,7 @@ func (x *Xtractr) decompressFolders(resp *Response) error {
 			output = filepath.Join(resp.Output, strings.TrimPrefix(subDir, resp.X.Path))
 		}
 
-		subResp := &Response{
-			X: &Xtract{
-				Filter: Filter{
-					Path:          subDir,
-					ExcludeSuffix: resp.X.ExcludeSuffix,
-					AllowSymlinks: resp.X.AllowSymlinks,
-				},
-				Name:             resp.X.Name,
-				Password:         resp.X.Password,
-				Passwords:        resp.X.Passwords,
-				DisableRecursion: resp.X.DisableRecursion,
-				RecurseISO:       resp.X.RecurseISO,
-				ExtractTo:        resp.X.ExtractTo,
-				DeleteOrig:       resp.X.DeleteOrig,
-				TempFolder:       resp.X.TempFolder,
-				LogFile:          resp.X.LogFile,
-				Updates:          resp.X.Updates,
-				Progress:         resp.X.Progress,
-				MaxBytes:         resp.X.MaxBytes,
-				MaxFiles:         resp.X.MaxFiles,
-				MaxRatio:         resp.X.MaxRatio,
-				MaxNested:        resp.X.MaxNested,
-				ExtrasMaxDepth:   resp.X.ExtrasMaxDepth,
-				APEOpts:          resp.X.APEOpts,
-			},
-			Started:  resp.Started,
-			Output:   output,
-			Archives: ArchiveList{subDir: resp.Archives[subDir]},
-		}
+		subResp := folderResponse(resp, subDir, output)
 
 		err := x.decompressFiles(subResp)
 		resp.NewFiles = append(resp.NewFiles, subResp.NewFiles...)
@@ -279,6 +254,41 @@ func (x *Xtractr) decompressFolders(resp *Response) error {
 	resp.Archives = allArchives
 
 	return nil
+}
+
+// folderResponse is one source folder's extract. The queued job is copied so a
+// later field, such as PreserveExec, is not dropped on this pass.
+func folderResponse(resp *Response, subDir, output string) *Response {
+	return &Response{
+		X: &Xtract{
+			Filter: Filter{
+				Path:          subDir,
+				ExcludeSuffix: resp.X.ExcludeSuffix,
+				AllowSymlinks: resp.X.AllowSymlinks,
+			},
+			Name:             resp.X.Name,
+			Password:         resp.X.Password,
+			Passwords:        resp.X.Passwords,
+			DisableRecursion: resp.X.DisableRecursion,
+			RecurseISO:       resp.X.RecurseISO,
+			ExtractTo:        resp.X.ExtractTo,
+			DeleteOrig:       resp.X.DeleteOrig,
+			TempFolder:       resp.X.TempFolder,
+			LogFile:          resp.X.LogFile,
+			PreserveExec:     resp.X.PreserveExec,
+			Updates:          resp.X.Updates,
+			Progress:         resp.X.Progress,
+			MaxBytes:         resp.X.MaxBytes,
+			MaxFiles:         resp.X.MaxFiles,
+			MaxRatio:         resp.X.MaxRatio,
+			MaxNested:        resp.X.MaxNested,
+			ExtrasMaxDepth:   resp.X.ExtrasMaxDepth,
+			APEOpts:          resp.X.APEOpts,
+		},
+		Started:  resp.Started,
+		Output:   output,
+		Archives: ArchiveList{subDir: resp.Archives[subDir]},
+	}
 }
 
 func (x *Xtractr) finishExtract(resp *Response, err error) {
@@ -363,6 +373,7 @@ func (x *Xtractr) decompressFiles(resp *Response) error {
 			MaxNested:      resp.X.MaxNested,
 			ExtrasMaxDepth: resp.X.ExtrasMaxDepth,
 			APEOpts:        resp.X.APEOpts,
+			PreserveExec:   resp.X.PreserveExec,
 		},
 		Started:  resp.Started,
 		Output:   resp.Output,
@@ -420,7 +431,7 @@ func (x *Xtractr) decompressArchives(resp *Response) error {
 // processArchives extracts one archive at a time.
 // Returns list of archive files extracted, size of data written and files written.
 func (x *Xtractr) processArchive(filename string, resp *Response) (uint64, []string, []string, error) {
-	err := os.MkdirAll(resp.Output, x.config.DirMode)
+	err := os.MkdirAll(resp.Output, permMode(x.config.DirMode, DefaultDirMode))
 	if err != nil {
 		return 0, nil, nil, NewExtractError(
 			fmt.Errorf("making output dir: %w", err),
@@ -445,6 +456,7 @@ func (x *Xtractr) processArchive(filename string, resp *Response) (uint64, []str
 		OutputDir:     resp.Output,
 		FileMode:      x.config.FileMode,
 		DirMode:       x.config.DirMode,
+		PreserveExec:  resp.X.PreserveExec,
 		Suffix:        x.config.Suffix,
 		Passwords:     resp.X.Passwords,
 		Password:      resp.X.Password,
@@ -596,7 +608,7 @@ func (x *Xtractr) createLogFile(resp *Response) {
 		x.config.Suffix, resp.Archives, resp.Extras, resp.X.Path, resp.Output, !resp.X.TempFolder, time.Now(),
 		strings.Join(resp.NewFiles, "\n  - "))
 
-	err := os.WriteFile(tmpFile, msg, x.config.FileMode)
+	err := os.WriteFile(tmpFile, msg, permMode(x.config.FileMode, DefaultFileMode))
 	if err != nil {
 		resp.NewFiles = resp.NewFiles[:len(resp.NewFiles)-1]
 
