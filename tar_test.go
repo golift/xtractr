@@ -333,6 +333,121 @@ func writeTarGzipSymlinkBypass(dest string) error {
 	return nil
 }
 
+// TestTarSymlinkRetargetEscape is a link that stays inside OutputDir only while
+// an earlier symlink is deep. Replacing that symlink leaves the first one
+// pointing at a sibling of OutputDir. "foo/../victim" still cleans inside, so
+// the lexical check alone does not reject it.
+func TestTarSymlinkRetargetEscape(t *testing.T) {
+	t.Parallel()
+
+	err := os.Symlink("target", filepath.Join(t.TempDir(), "symlink-probe"))
+	if err != nil {
+		t.Skipf("symlinks unavailable on this platform: %v", err)
+	}
+
+	t.Run("shorten deep link", func(t *testing.T) {
+		t.Parallel()
+		assertTarRetargetRejected(t, []tarMember{
+			{name: "sub", dir: true},
+			{name: "sub/deep", dir: true},
+			{name: "foo", link: "sub/deep"},
+			{name: "bar", link: "foo/../../victim"},
+			{name: "foo", link: "sub"},
+		})
+	})
+
+	t.Run("climb before link exists", func(t *testing.T) {
+		t.Parallel()
+		assertTarRetargetRejected(t, []tarMember{
+			{name: "bar", link: "foo/../victim"},
+			{name: "foo", link: "."},
+		})
+	})
+}
+
+func assertTarRetargetRejected(t *testing.T, members []tarMember) {
+	t.Helper()
+
+	root := t.TempDir()
+	out := filepath.Join(root, "out")
+	archive := filepath.Join(root, "retarget.tar.gz")
+	require.NoError(t, writeTarGzipMembers(archive, members))
+
+	_, _, err := xtractr.ExtractTarGzip(&xtractr.XFile{
+		FilePath:  archive,
+		OutputDir: out,
+		FileMode:  0o644,
+		DirMode:   0o755,
+	})
+	require.ErrorIs(t, err, xtractr.ErrInvalidPath)
+	assertAbsent(t, filepath.Join(out, "bar"))
+	assertAbsent(t, filepath.Join(root, "victim"))
+}
+
+type tarMember struct {
+	name string
+	link string
+	dir  bool
+}
+
+func writeTarGzipMembers(dest string, members []tarMember) error {
+	archiveFile, err := os.Create(dest)
+	if err != nil {
+		return fmt.Errorf("create tar: %w", err)
+	}
+
+	gzipWriter := gzip.NewWriter(archiveFile)
+	tarWriter := tar.NewWriter(gzipWriter)
+
+	for _, member := range members {
+		header := &tar.Header{
+			Name:    member.name,
+			Mode:    0o755,
+			ModTime: time.Now(),
+		}
+		switch {
+		case member.dir:
+			header.Typeflag = tar.TypeDir
+		case member.link != "":
+			header.Typeflag = tar.TypeSymlink
+			header.Linkname = member.link
+		default:
+			header.Typeflag = tar.TypeReg
+		}
+
+		err = tarWriter.WriteHeader(header)
+		if err != nil {
+			_ = tarWriter.Close()
+			_ = gzipWriter.Close()
+			_ = archiveFile.Close()
+
+			return fmt.Errorf("tar header %s: %w", member.name, err)
+		}
+	}
+
+	err = tarWriter.Close()
+	if err != nil {
+		_ = gzipWriter.Close()
+		_ = archiveFile.Close()
+
+		return fmt.Errorf("close tar: %w", err)
+	}
+
+	err = gzipWriter.Close()
+	if err != nil {
+		_ = archiveFile.Close()
+
+		return fmt.Errorf("close gzip: %w", err)
+	}
+
+	err = archiveFile.Close()
+	if err != nil {
+		return fmt.Errorf("close tar file: %w", err)
+	}
+
+	return nil
+}
+
 // TestTarEmptyLinkSkipped warns and continues when a link target is empty.
 func TestTarEmptyLinkSkipped(t *testing.T) {
 	t.Parallel()

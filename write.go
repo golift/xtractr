@@ -742,9 +742,55 @@ func volumeRoot(path string) string {
 	return vol + string(os.PathSeparator)
 }
 
+// lexicalLinkTarget is where the link text points after dropping "." and "..",
+// without following any symlink. A walk can still accept that text when an
+// existing link is deep enough to absorb the climbs; a later entry can shorten
+// that link and leave the earlier one pointing outside OutputDir.
+func lexicalLinkTarget(linkPath, linkName string) string {
+	linkName = slashToSeparator(linkName)
+	if filepath.IsAbs(linkName) {
+		return filepath.Clean(linkName)
+	}
+
+	return filepath.Clean(filepath.Join(filepath.Dir(linkPath), linkName))
+}
+
+// linkTargetClimbsAfterComponent reports whether ".." appears after a normal
+// path component. Leading climbs ("../file") only move through ancestors of
+// the link, which cannot be removed while the link exists. A climb after a
+// component ("foo/../victim") depends on whatever is later created or replaced
+// at that name, so the same text can resolve outside OutputDir.
+func linkTargetClimbsAfterComponent(linkName string) bool {
+	sawComponent := false
+
+	for _, elem := range splitElems(slashToSeparator(linkName)) {
+		switch elem {
+		case "", ".":
+			continue
+		case "..":
+			if sawComponent {
+				return true
+			}
+		default:
+			sawComponent = true
+		}
+	}
+
+	return false
+}
+
 // ensureLinkWithinOutput rejects symlink targets that escape OutputDir,
 // including ones that escape only after an earlier symlink is followed.
 func (x *XFile) ensureLinkWithinOutput(linkPath, linkName string) error {
+	if linkTargetClimbsAfterComponent(linkName) {
+		return fmt.Errorf("%s: %w: %s", x.FilePath, ErrInvalidPath, linkName)
+	}
+
+	lexical := lexicalLinkTarget(linkPath, linkName)
+	if !x.pathWithinOutput(lexical) || !x.resolvedWithinOutput(lexical) {
+		return fmt.Errorf("%s: %w: %s (from: %s)", x.FilePath, ErrInvalidPath, lexical, linkName)
+	}
+
 	resolved, err := walkLinkTarget(linkPath, linkName)
 	if err != nil {
 		return fmt.Errorf("%s: %w: %s: %w", x.FilePath, ErrInvalidPath, linkName, err)

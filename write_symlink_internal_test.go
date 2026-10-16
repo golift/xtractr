@@ -59,3 +59,33 @@ func TestEnsureLinkWithinOutputFanoutBudget(t *testing.T) {
 	err = xFile.ensureLinkWithinOutput(filepath.Join(out, "ok"), "s0")
 	require.NoError(t, err)
 }
+
+// TestCreateSymlinkRejectsClimbAfterComponent is the retarget hole lexical
+// cleaning misses. "foo/../victim" cleans to a path inside OutputDir, and the
+// walk agrees while foo is missing or deep. Creating foo -> "." afterwards
+// would make the kernel resolve victim outside OutputDir.
+func TestCreateSymlinkRejectsClimbAfterComponent(t *testing.T) {
+	t.Parallel()
+	skipWithoutSymlinks(t)
+
+	root := t.TempDir()
+	out := filepath.Join(root, "out")
+	require.NoError(t, os.MkdirAll(filepath.Join(out, "sub", "deep"), 0o750))
+
+	xFile := &XFile{FilePath: "retarget.tar", OutputDir: out}
+
+	require.NoError(t, xFile.createSymlink(filepath.Join(out, "foo"), "sub/deep"))
+
+	err := xFile.createSymlink(filepath.Join(out, "bar"), "foo/../../victim")
+	require.ErrorIs(t, err, ErrInvalidPath)
+
+	_, statErr := os.Lstat(filepath.Join(out, "bar"))
+	require.ErrorIs(t, statErr, os.ErrNotExist)
+
+	err = xFile.createSymlink(filepath.Join(out, "early"), "foo/../victim")
+	require.ErrorIs(t, err, ErrInvalidPath)
+
+	require.NoError(t, os.MkdirAll(filepath.Join(out, "nested"), 0o750))
+	err = xFile.createSymlink(filepath.Join(out, "nested", "link"), "../real.txt")
+	require.NoError(t, err)
+}
