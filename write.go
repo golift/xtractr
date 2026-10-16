@@ -73,14 +73,16 @@ func (x *XFile) squashRoot(files []string) ([]string, error) {
 	for root := range roots {
 		from := filepath.Join(x.OutputDir, root)
 
-		info, err := os.Stat(from)
+		info, err := os.Lstat(from)
 		if err != nil {
 			return files, fmt.Errorf("stat squash root: %w", err)
 		}
 
 		if !info.IsDir() {
 			// A lone top-level file is already in OutputDir. Moving it onto
-			// itself used to skip the rename and then delete the extract.
+			// itself used to skip the rename and then delete the extract. A
+			// lone symlink stays as well: the move would follow it and pull
+			// the contents of whatever directory it names into OutputDir.
 			return files, nil
 		}
 
@@ -540,11 +542,8 @@ func (x *XFile) writeSymlink(file *file) error {
 		return errSkipEntry
 	}
 
-	err := os.Remove(file.Path)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("%s: removing existing path for symlink: %w: %s", x.FilePath, err, file.Path)
-	}
-
+	// An entry already at this path is replaced inside createSymlink, after
+	// the text is checked, so a rejected link leaves it in place.
 	return x.createSymlink(file.Path, linkName)
 }
 
@@ -634,6 +633,9 @@ const maxSymlinkHops = 40
 // followed, across all branches, against maxSymlinkHops.
 type linkWalk struct {
 	followed int
+	// visits are the paths looked up, in order. A link written at one of
+	// them later changes where this resolution lands. See plantedLink.
+	visits []string
 	// rejectClimbs fails the walk at a followed link whose own text climbs
 	// after a component. That is a rule for text the archive asks xtractr to
 	// write, not part of resolving a link that already exists, so checks on
@@ -728,6 +730,7 @@ func stepLinkElem(current, elem string, walk *linkWalk) (string, error) {
 	}
 
 	next := filepath.Join(current, elem)
+	walk.visits = append(walk.visits, next)
 
 	info, err := os.Lstat(walk.disk(next))
 	if errors.Is(err, os.ErrNotExist) {
@@ -889,15 +892,24 @@ func (x *XFile) ensureLinksWithin(root string) error {
 
 	// Extraction has finished, so no link write races this. The scan is a
 	// no-op when the archive wrote a link; links already under root need it.
-	x.collectClimbLinks()
+	x.collectPlantedLinks()
 
 	layout := newSquashLayout(x.OutputDir, root)
 	scope := &XFile{
-		FilePath:       x.FilePath,
-		OutputDir:      x.OutputDir,
-		climbLinks:     x.climbLinks,
-		climbCollected: true,
-		onDisk:         layout.onDisk,
+		FilePath:         x.FilePath,
+		OutputDir:        x.OutputDir,
+		plantedCollected: true,
+		onDisk:           layout.onDisk,
+	}
+
+	// Links under root are checked below, at the position the move gives
+	// them. The planted links elsewhere are walked under the layout.
+	moved := resolveExisting(root)
+
+	for _, link := range x.planted {
+		if !pathWithin(moved, link.path) {
+			scope.planted = append(scope.planted, link)
+		}
 	}
 
 	for _, path := range links {
@@ -912,7 +924,7 @@ func (x *XFile) ensureLinksWithin(root string) error {
 		}
 	}
 
-	err = scope.climbLinksInside()
+	err = scope.plantedLinksInside("")
 	if err != nil {
 		return fmt.Errorf("squash root: %w", err)
 	}
@@ -1008,28 +1020,40 @@ func (x *XFile) createSymlinkLocked(path, linkName string) error {
 		return err
 	}
 
-	x.collectClimbLinks()
+	old, err := x.replaceEntry(path)
+	if err != nil {
+		return err
+	}
+
+	return x.placeSymlink(path, linkName, old)
+}
+
+// placeSymlink writes a symlink whose text passed ensureLinkWithinOutput at
+// a path replaceEntry cleared.
+func (x *XFile) placeSymlink(path, linkName string, old replacedEntry) error {
 	x.Debugf("Writing archived symlink: %s -> %s", path, linkName)
 
-	err = os.Symlink(linkName, path)
+	err := os.Symlink(linkName, path)
 	if err != nil {
+		old.restore()
+
 		return fmt.Errorf("%s: creating symlink: %w: %s -> %s", x.FilePath, err, path, linkName)
 	}
 
-	return x.finishLink(path)
+	return x.finishLink(path, old)
 }
 
-// finishLink runs once a symlink or hard link exists at path. The link is
-// removed again if it armed a pre-existing climb-after link or exceeds
-// MaxFiles.
-func (x *XFile) finishLink(path string) error {
-	err := x.climbLinksInside()
+// finishLink runs once a symlink or hard link exists at path. The write is
+// undone, and what it replaced put back, if it moved a planted link outside
+// OutputDir or exceeds MaxFiles.
+func (x *XFile) finishLink(path string, old replacedEntry) error {
+	err := x.plantedLinksInside(path)
 	if err == nil {
 		err = x.countExtracted()
 	}
 
 	if err != nil {
-		_ = os.Remove(path)
+		old.restore()
 
 		return err
 	}
@@ -1037,81 +1061,190 @@ func (x *XFile) finishLink(path string) error {
 	return nil
 }
 
-// collectClimbLinks finds symlinks already under OutputDir whose text climbs
-// after a component, such as "missing/../victim". Where that text resolves
-// depends on what later occupies the component, and a link this extract
-// creates there can move it outside OutputDir without ever naming it.
+// replacedEntry is what a link write found at its path. Archives replace a
+// symlink, an empty directory, or a file with a link, so the entry is removed
+// first; a write that then fails puts it back, since a removed symlink changes
+// what resolves through it just as a new one does.
+type replacedEntry struct {
+	path   string
+	found  bool
+	mode   os.FileMode
+	target string // symlink text, when the entry was one.
+}
+
+// replaceEntry collects the planted links, then clears path for a link.
+// Collection comes first: the planted set records where links resolved
+// before this extract changed anything, and removing a symlink here is a
+// change. The text going in has already been checked, so nothing is removed
+// for an entry that will be rejected.
+func (x *XFile) replaceEntry(path string) (replacedEntry, error) {
+	x.collectPlantedLinks()
+
+	old := replacedEntry{path: path}
+
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return old, nil
+	}
+
+	if err != nil {
+		return old, fmt.Errorf("%s: checking existing path for link: %w: %s", x.FilePath, err, path)
+	}
+
+	old.found = true
+	old.mode = info.Mode()
+
+	if old.mode&os.ModeSymlink != 0 {
+		old.target, _ = os.Readlink(path)
+	}
+
+	err = os.Remove(path)
+	if err != nil {
+		return old, fmt.Errorf("%s: removing existing path for link: %w: %s", x.FilePath, err, path)
+	}
+
+	return old, nil
+}
+
+// restore removes the link written at path and puts back the symlink or
+// empty directory that was there. A regular file is gone; it was replaced by
+// text that passed the checks, and the failure came after that.
+func (r replacedEntry) restore() {
+	_ = os.Remove(r.path)
+
+	switch {
+	case !r.found:
+	case r.mode&os.ModeSymlink != 0 && r.target != "":
+		_ = os.Symlink(r.target, r.path)
+	case r.mode.IsDir():
+		_ = os.Mkdir(r.path, r.mode.Perm())
+	}
+}
+
+// plantedLink is a symlink that was under OutputDir, resolving inside it,
+// before this extract wrote or removed any link. visits are the paths that
+// resolution looked up; a link written at one of them can move the link.
+type plantedLink struct {
+	path   string
+	visits []string
+}
+
+func (l *plantedLink) visited(path string) bool {
+	for _, visit := range l.visits {
+		// Case-insensitive, since the filesystem may be. A spurious match
+		// only costs a walk.
+		if strings.EqualFold(visit, path) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// collectPlantedLinks finds the symlinks already under OutputDir that resolve
+// inside it. One of those lands outside once a link is written in its path:
+// "missing/../victim" when missing -> . appears, or "foo/../../victim" when
+// the foo it climbed through is replaced by a shorter link. The archive's
+// own links are judged by their text and never need this; a link already in
+// place is judged by where it resolved, whatever its text looks like.
 //
-// Links whose text is lexically outside OutputDir, or that already resolve
-// outside it, were pointing out before this extract and are left alone. The
-// archive's own links never qualify (ensureLinkWithinOutput rejects the
-// text), so the set is fixed after this one scan. Unreadable entries are
+// Links whose text leaves OutputDir without climbing after a component are
+// skipped without a walk: they come back inside only through a link outside
+// OutputDir, which this extract never writes. Unreadable entries are
 // skipped; the walk is a best-effort defense against an attacker who could
 // already write into OutputDir.
-func (x *XFile) collectClimbLinks() {
-	if x.climbCollected {
+func (x *XFile) collectPlantedLinks() {
+	if x.plantedCollected {
 		return
 	}
 
-	x.climbCollected = true
+	x.plantedCollected = true
 	root := resolveExisting(x.OutputDir)
 
 	_ = filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
-		if walkErr == nil && entry.Type()&os.ModeSymlink != 0 && x.climbLinkQualifies(root, path) {
-			x.climbLinks = append(x.climbLinks, path)
+		if walkErr == nil && entry.Type()&os.ModeSymlink != 0 {
+			if link, ok := plantedLinkAt(root, path); ok {
+				x.planted = append(x.planted, link)
+			}
 		}
 
 		return nil
 	})
 }
 
-// climbLinkQualifies is true for a symlink whose text climbs after a
-// component, points inside root lexically, and does not already escape.
-func (x *XFile) climbLinkQualifies(root, path string) bool {
+// plantedLinkAt resolves the symlink at path the way the kernel would and
+// returns it, with the paths looked up, when it lands inside root.
+func plantedLinkAt(root, path string) (plantedLink, bool) {
 	target, err := os.Readlink(path)
-	if err != nil || !linkTargetClimbsAfterComponent(target) {
-		return false
+	if err != nil {
+		return plantedLink{}, false
 	}
 
 	lexical, err := lexicalLinkTarget(path, target)
 	if err != nil {
-		return false
+		return plantedLink{}, false
 	}
 
-	return pathWithin(root, lexical) && !x.linkEscapes(path, target)
+	if !pathWithin(root, lexical) && !linkTargetClimbsAfterComponent(target) {
+		return plantedLink{}, false
+	}
+
+	walk := &linkWalk{}
+
+	resolved, err := walkLinkTarget(path, target, walk)
+	if err != nil || !pathWithin(root, resolved) {
+		return plantedLink{}, false
+	}
+
+	return plantedLink{path: path, visits: walk.visits}, true
 }
 
-// climbLinksInside fails when a collected climb-after link now resolves
-// outside OutputDir. One that was removed or rewritten by this extract is
-// skipped; a rewritten link went through ensureLinkWithinOutput.
-func (x *XFile) climbLinksInside() error {
-	for _, link := range x.climbLinks {
-		target, err := os.Readlink(link)
+// plantedLinksInside fails when a planted link now resolves outside
+// OutputDir. A link written at path only moves the links whose resolution
+// looked that path up, so only those are walked again; path == "" walks them
+// all, for SquashRoot, which changes many names at once.
+//
+// A link this extract removed is skipped. One it rewrote was checked as text
+// and is walked with the new text. Text that no longer walks (a cycle, the
+// hop budget) resolves nowhere and is not an escape.
+func (x *XFile) plantedLinksInside(path string) error {
+	if len(x.planted) == 0 {
+		return nil
+	}
+
+	if path != "" {
+		path = filepath.Join(resolveExisting(filepath.Dir(path)), filepath.Base(path))
+	}
+
+	root := resolveExisting(x.OutputDir)
+
+	for idx := range x.planted {
+		link := &x.planted[idx]
+		if path != "" && !link.visited(path) {
+			continue
+		}
+
+		target, err := os.Readlink(link.path)
 		if err != nil {
 			continue
 		}
 
-		if x.linkEscapes(link, target) {
-			return fmt.Errorf("%s: %w: %s -> %s now resolves outside the output folder",
-				x.FilePath, ErrInvalidPath, link, target)
+		walk := &linkWalk{onDisk: x.onDisk}
+
+		resolved, err := walkLinkTarget(link.path, target, walk)
+		if err != nil {
+			continue
 		}
+
+		if !pathWithin(root, resolved) {
+			return fmt.Errorf("%s: %w: %s -> %s now resolves outside the output folder",
+				x.FilePath, ErrInvalidPath, link.path, target)
+		}
+
+		link.visits = walk.visits
 	}
 
 	return nil
-}
-
-// linkEscapes reports whether the link at linkPath resolves outside
-// OutputDir. This is resolution only: the climb-after rule applied to archive
-// text is left off, since a planted link can sit behind another one and the
-// kernel follows both. Text that cannot be walked (a cycle, the hop budget)
-// does not resolve anywhere and is not an escape.
-func (x *XFile) linkEscapes(linkPath, target string) bool {
-	resolved, err := walkLinkTarget(linkPath, target, &linkWalk{onDisk: x.onDisk})
-	if err != nil {
-		return false
-	}
-
-	return !pathWithin(resolveExisting(x.OutputDir), resolved)
 }
 
 func (x *XFile) createHardLink(path, linkName string) error {
@@ -1139,17 +1272,23 @@ func (x *XFile) createHardLinkLocked(path, linkName string) error {
 	}
 
 	x.Debugf("Writing archived hard link: %s => %s", path, target)
-	x.collectClimbLinks()
 
-	err := os.Link(target, path)
+	old, err := x.replaceEntry(path)
+	if err != nil {
+		return err
+	}
+
+	err = os.Link(target, path)
 	if err == nil {
-		return x.finishHardLink(path)
+		return x.finishHardLink(path, old)
 	}
 
 	linkErr := err
 
 	rel, relErr := filepath.Rel(filepath.Dir(path), target)
 	if relErr != nil {
+		old.restore()
+
 		return fmt.Errorf("%s: creating hard link: %w: %s => %s", x.FilePath, linkErr, path, target)
 	}
 
@@ -1157,16 +1296,23 @@ func (x *XFile) createHardLinkLocked(path, linkName string) error {
 	// (e.g. target not extracted yet, or the filesystem does not support them).
 	x.Debugf("Hard link failed (%v); falling back to symlink: %s -> %s", linkErr, path, rel)
 
-	return x.createSymlinkLocked(path, rel)
+	err = x.ensureLinkWithinOutput(path, rel)
+	if err != nil {
+		old.restore()
+
+		return err
+	}
+
+	return x.placeSymlink(path, rel, old)
 }
 
 // finishHardLink validates a hard link whose target was itself a symlink.
 // Linux and Windows link the symlink inode, so path is now a second symlink
 // with text that was never checked from this directory.
-func (x *XFile) finishHardLink(path string) error {
+func (x *XFile) finishHardLink(path string, old replacedEntry) error {
 	info, err := os.Lstat(path)
 	if err != nil {
-		_ = os.Remove(path)
+		old.restore()
 
 		return fmt.Errorf("%s: lstat hard link: %w", x.FilePath, err)
 	}
@@ -1178,11 +1324,11 @@ func (x *XFile) finishHardLink(path string) error {
 		}
 
 		if err != nil {
-			_ = os.Remove(path)
+			old.restore()
 
 			return err
 		}
 	}
 
-	return x.finishLink(path)
+	return x.finishLink(path, old)
 }

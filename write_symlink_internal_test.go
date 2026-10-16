@@ -259,3 +259,82 @@ func TestCreateSymlinkIgnoresClimbAlreadyOutside(t *testing.T) {
 	xFile := &XFile{FilePath: "planted.tar", OutputDir: out}
 	require.NoError(t, xFile.createSymlink(filepath.Join(out, "readme"), "README"))
 }
+
+// plantShortenedClimb lays out foo -> sub/deep and existing -> foo/../../victim.
+// The text of existing cleans to a path outside OutputDir, but it resolves
+// inside: the two climbs are absorbed by foo's depth. Replacing foo with a
+// shorter link moves it outside.
+func plantShortenedClimb(t *testing.T) (out, victim string) {
+	t.Helper()
+
+	root := t.TempDir()
+	out = filepath.Join(root, "out")
+	victim = filepath.Join(root, "victim")
+
+	require.NoError(t, os.MkdirAll(filepath.Join(out, "sub", "deep"), 0o750))
+	require.NoError(t, os.WriteFile(victim, []byte("pwned"), 0o600))
+	require.NoError(t, os.Symlink("sub/deep", filepath.Join(out, "foo")))
+	require.NoError(t, os.Symlink("foo/../../victim", filepath.Join(out, "existing")))
+
+	return out, victim
+}
+
+// TestCreateSymlinkDoesNotShortenPlantedClimb replaces the link a planted
+// climb goes through. The write is refused and the original link put back,
+// whether or not an earlier link write already collected the planted set.
+func TestCreateSymlinkDoesNotShortenPlantedClimb(t *testing.T) {
+	t.Parallel()
+	skipWithoutSymlinks(t)
+
+	for _, collectFirst := range []bool{true, false} {
+		out, victim := plantShortenedClimb(t)
+		xFile := &XFile{FilePath: "planted.tar", OutputDir: out}
+
+		if collectFirst {
+			require.NoError(t, xFile.createSymlink(filepath.Join(out, "readme"), "README"))
+		}
+
+		err := xFile.createSymlink(filepath.Join(out, "foo"), "sub")
+		require.ErrorIs(t, err, ErrInvalidPath, "collect first: %v", collectFirst)
+
+		got, err := os.Readlink(filepath.Join(out, "foo"))
+		require.NoError(t, err)
+		require.Equal(t, "sub/deep", got, "foo must be restored")
+		requireNotResolvingTo(t, filepath.Join(out, "existing"), victim)
+	}
+}
+
+// TestCreateSymlinkReplacesEntry is the replacement archives rely on: a
+// symlink, an empty directory, or a file at the path gives way to the link.
+// Rejected text leaves the entry alone, and a file is never removed for it.
+func TestCreateSymlinkReplacesEntry(t *testing.T) {
+	t.Parallel()
+	skipWithoutSymlinks(t)
+
+	out := t.TempDir()
+	xFile := &XFile{FilePath: "replace.tar", OutputDir: out}
+
+	keep := filepath.Join(out, "keep.txt")
+	require.NoError(t, os.WriteFile(keep, []byte("mine"), 0o600))
+
+	err := xFile.createSymlink(keep, "../../etc/passwd")
+	require.ErrorIs(t, err, ErrInvalidPath)
+
+	data, err := os.ReadFile(keep)
+	require.NoError(t, err)
+	require.Equal(t, "mine", string(data))
+
+	require.NoError(t, os.Symlink("old", filepath.Join(out, "link")))
+	require.NoError(t, xFile.createSymlink(filepath.Join(out, "link"), "new"))
+
+	got, err := os.Readlink(filepath.Join(out, "link"))
+	require.NoError(t, err)
+	require.Equal(t, "new", got)
+
+	require.NoError(t, os.Mkdir(filepath.Join(out, "empty"), 0o750))
+	require.NoError(t, xFile.createSymlink(filepath.Join(out, "empty"), "new"))
+
+	got, err = os.Readlink(filepath.Join(out, "empty"))
+	require.NoError(t, err)
+	require.Equal(t, "new", got)
+}

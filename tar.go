@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"time"
 
@@ -211,11 +210,8 @@ func (x *XFile) untarLink(header *tar.Header, path string) (uint64, error) {
 		return 0, fmt.Errorf("making tar link parent dir: %w", err)
 	}
 
-	err = os.Remove(path)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return 0, fmt.Errorf("%s: removing existing path for link: %w: %s", x.FilePath, err, path)
-	}
-
+	// An entry already at this path is replaced inside the link write, after
+	// the target is checked, so a rejected link leaves it in place.
 	switch header.Typeflag {
 	case tar.TypeSymlink:
 		return 0, x.createSymlink(path, header.Linkname)
