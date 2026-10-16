@@ -206,6 +206,18 @@ type XFile struct {
 	// refused collects files not moved into place during Extract; it is
 	// copied into Response.Refused by processArchive.
 	refused []RefusedFile
+	// planted are the symlinks that were under OutputDir, resolving inside it,
+	// before this extract wrote any link. A link written in one's path can
+	// move it outside; see collectPlantedLinks. Collected once, before the
+	// first symlink or hard-link write (or before SquashRoot moves links), and
+	// guarded by linkWrite rather than a lock in this struct: password
+	// retries copy XFile.
+	planted          []plantedLink
+	plantedCollected bool
+	// onDisk, when set, tells link walks where an entry seen at a path is
+	// right now. SquashRoot sets it on a scoped copy to check links at the
+	// position they will have after the move. See linkWalk.
+	onDisk func(path string) string
 }
 
 // Debugf calls the debug method on the logger if it's not nil.
