@@ -11,6 +11,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golift.io/asar"
 )
 
 func TestNormalizeVolumes(t *testing.T) {
@@ -142,7 +143,7 @@ func TestMkDirRefusesPreExistingSymlinkDir(t *testing.T) {
 	require.NoError(t, os.Symlink(evil, filepath.Join(out, "sub")))
 
 	xFile := &XFile{FilePath: "archive.zip", OutputDir: out, DirMode: 0o755}
-	err = xFile.mkDir(filepath.Join(out, "sub", "nested"), 0o755, time.Now())
+	err = xFile.mkDir(filepath.Join(out, "sub", "nested"), time.Now())
 	require.Error(t, err)
 	require.ErrorIs(t, err, ErrInvalidPath)
 
@@ -601,7 +602,7 @@ func TestMkDirCountsEachMissingComponent(t *testing.T) {
 	xFile := &XFile{FilePath: "a.zip", OutputDir: out, MaxFiles: 2, DirMode: 0o755}
 	xFile.newProgress(0, 0, 0)
 
-	err := xFile.mkDir(filepath.Join(out, "a", "b", "c"), 0o755, time.Now())
+	err := xFile.mkDir(filepath.Join(out, "a", "b", "c"), time.Now())
 	require.ErrorIs(t, err, ErrMaxFiles)
 	require.DirExists(t, filepath.Join(out, "a"))
 	require.DirExists(t, filepath.Join(out, "a", "b"))
@@ -619,7 +620,7 @@ func TestMkDirExistingFileIsNotDirectory(t *testing.T) {
 	require.NoError(t, os.Chtimes(filePath, oldTime, oldTime))
 
 	xFile := &XFile{FilePath: "a.zip", OutputDir: out, DirMode: 0o755}
-	err := xFile.mkDir(filePath, 0o755, time.Now())
+	err := xFile.mkDir(filePath, time.Now())
 	require.ErrorIs(t, err, errNotDirectory)
 
 	info, err := os.Stat(filePath)
@@ -726,4 +727,111 @@ func TestUnknownArchiveTypeMentionsPathOnce(t *testing.T) {
 	require.Error(t, err)
 	require.ErrorIs(t, err, ErrUnknownArchiveType)
 	require.Equal(t, 1, strings.Count(err.Error(), path))
+}
+
+func TestSafeFileModeKeepsArchiveExecuteBits(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		current os.FileMode
+		mode    os.FileMode
+		want    os.FileMode
+	}{
+		{name: "scene file uses the configured mode", current: 0o644, mode: 0o660, want: 0o660},
+		{name: "scene file gains other write from the configured mode", current: 0o644, mode: 0o666, want: 0o666},
+		{name: "configured mode replaces an owner-only file", current: 0o600, mode: 0o644, want: 0o644},
+		{name: "group write keeps group execute", current: 0o755, mode: 0o660, want: 0o770},
+		{name: "other write keeps other execute", current: 0o755, mode: 0o666, want: 0o777},
+		{name: "owner-only mode keeps only owner execute", current: 0o755, mode: 0o600, want: 0o700},
+		{name: "read access keeps execute", current: 0o755, mode: 0o644, want: 0o755},
+		{name: "scene file stays a scene file", current: 0o644, mode: 0o644, want: 0o644},
+		{name: "missing archive mode uses the configured mode", current: 0, mode: 0o660, want: 0o660},
+		{name: "execute-only mode keeps group execute", current: 0o111, mode: 0o660, want: 0o770},
+		{name: "execute-only mode keeps other execute when other can read", current: 0o111, mode: 0o644, want: 0o755},
+		{name: "configured mode replaces a read-only archive mode", current: 0o044, mode: 0o660, want: 0o660},
+		{name: "configured setgid is not added", current: 0o644, mode: os.ModeSetgid | 0o660, want: 0o660},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := (&XFile{FileMode: test.mode, PreserveExec: true}).fileMode(test.current)
+			assert.Equal(t, test.want, got)
+		})
+	}
+}
+
+func TestSafeFileModeIgnoresArchiveExecuteBits(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		current os.FileMode
+		mode    os.FileMode
+		want    os.FileMode
+	}{
+		{name: "scene file uses the configured mode", current: 0o644, mode: 0o660, want: 0o660},
+		{name: "archived execute is not added to group write", current: 0o755, mode: 0o660, want: 0o660},
+		{name: "archived execute is not added to read mode", current: 0o755, mode: 0o644, want: 0o644},
+		{name: "execute-only archive uses the configured mode", current: 0o111, mode: 0o660, want: 0o660},
+		{name: "zero configured mode uses the default", current: 0o755, mode: 0, want: DefaultFileMode},
+		{name: "configured setuid is discarded", current: 0o644, mode: os.ModeSetuid | 0o755, want: 0o755},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := (&XFile{FileMode: test.mode}).fileMode(test.current)
+			assert.Equal(t, test.want, got)
+		})
+	}
+}
+
+func TestParseConfigDropsSpecialModeBits(t *testing.T) {
+	t.Parallel()
+
+	app := parseConfig(&Config{
+		FileMode: os.ModeSetuid | 0o755,
+		DirMode:  os.ModeSetgid | 0o775,
+	})
+
+	assert.Equal(t, os.FileMode(0o755), app.config.FileMode)
+	assert.Equal(t, os.FileMode(0o775), app.config.DirMode)
+
+	zero := parseConfig(&Config{})
+	assert.Equal(t, os.FileMode(DefaultFileMode), zero.config.FileMode)
+	assert.Equal(t, os.FileMode(DefaultDirMode), zero.config.DirMode)
+}
+
+func TestASARFileModeStoresExecuteOnly(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, os.FileMode(0), (&XFile{}).asarFileMode(&asar.File{}))
+	assert.Equal(t, os.FileMode(0o111), (&XFile{}).asarFileMode(&asar.File{Executable: true}))
+}
+
+func TestDirModeUsesConfiguredMode(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		mode os.FileMode
+		want os.FileMode
+	}{
+		{name: "configured mode is kept", mode: 0o770, want: 0o770},
+		{name: "zero configured mode uses the default", mode: 0, want: DefaultDirMode},
+		{name: "configured setgid is discarded", mode: os.ModeSetgid | 0o775, want: 0o775},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := (&XFile{DirMode: test.mode}).dirMode()
+			assert.Equal(t, test.want, got)
+		})
+	}
 }

@@ -39,7 +39,6 @@ func ExtractXZ(xFile *XFile) (size uint64, filesList []string, err error) {
 		Path:     xFile.clean(xFile.FilePath, ".xz"),
 		Data:     zipReader,
 		FileMode: xFile.FileMode,
-		DirMode:  xFile.DirMode,
 	}
 
 	size, err = xFile.write(file)
@@ -67,7 +66,6 @@ func ExtractZlib(xFile *XFile) (size uint64, filesList []string, err error) {
 		Path:     xFile.clean(xFile.FilePath, ".zz", ".zlib"),
 		Data:     zipReader,
 		FileMode: xFile.FileMode,
-		DirMode:  xFile.DirMode,
 	}
 
 	size, err = xFile.write(file)
@@ -100,7 +98,6 @@ func ExtractLZMA(xFile *XFile) (size uint64, filesList []string, err error) {
 		Path:     xFile.clean(xFile.FilePath, ".lzma", ".lz", ".lzip"),
 		Data:     zipReader,
 		FileMode: xFile.FileMode,
-		DirMode:  xFile.DirMode,
 	}
 
 	size, err = xFile.write(file)
@@ -131,7 +128,6 @@ func ExtractLZMA2(xFile *XFile) (size uint64, filesList []string, err error) {
 		Path:     xFile.clean(xFile.FilePath, ".lzma", ".lzma2"),
 		Data:     zipReader,
 		FileMode: xFile.FileMode,
-		DirMode:  xFile.DirMode,
 	}
 
 	size, err = xFile.write(file)
@@ -161,7 +157,6 @@ func ExtractZstandard(xFile *XFile) (size uint64, filesList []string, err error)
 		Path:     xFile.clean(xFile.FilePath, ".zstd", ".zst"),
 		Data:     zipReader,
 		FileMode: xFile.FileMode,
-		DirMode:  xFile.DirMode,
 	}
 
 	size, err = xFile.write(file)
@@ -189,7 +184,6 @@ func ExtractLZW(xFile *XFile) (size uint64, filesList []string, err error) {
 		Path:     xFile.clean(xFile.FilePath, ".Z"),
 		Data:     zipReader,
 		FileMode: xFile.FileMode,
-		DirMode:  xFile.DirMode,
 	}
 
 	size, err = xFile.write(file)
@@ -215,7 +209,6 @@ func ExtractLZ4(xFile *XFile) (size uint64, filesList []string, err error) {
 		Path:     xFile.clean(xFile.FilePath, ".lz4"),
 		Data:     reader,
 		FileMode: xFile.FileMode,
-		DirMode:  xFile.DirMode,
 	}
 
 	size, err = xFile.write(file)
@@ -238,7 +231,6 @@ func ExtractSnappy(xFile *XFile) (size uint64, filesList []string, err error) {
 		Path:     xFile.clean(xFile.FilePath, ".snappy", ".sz"),
 		Data:     snappy.NewReader(xFile.prog.reader(compressedFile)),
 		FileMode: xFile.FileMode,
-		DirMode:  xFile.DirMode,
 	}
 
 	size, err = xFile.write(file)
@@ -261,7 +253,6 @@ func ExtractS2(xFile *XFile) (size uint64, filesList []string, err error) {
 		Path:     xFile.clean(xFile.FilePath, ".s2"),
 		Data:     s2.NewReader(xFile.prog.reader(compressedFile)),
 		FileMode: xFile.FileMode,
-		DirMode:  xFile.DirMode,
 	}
 
 	size, err = xFile.write(file)
@@ -284,7 +275,6 @@ func ExtractBrotli(xFile *XFile) (size uint64, filesList []string, err error) {
 		Path:     xFile.clean(xFile.FilePath, ".brotli", ".br"),
 		Data:     brotli.NewReader(xFile.prog.reader(compressedFile)),
 		FileMode: xFile.FileMode,
-		DirMode:  xFile.DirMode,
 	}
 
 	size, err = xFile.write(file)
@@ -307,7 +297,6 @@ func ExtractBzip(xFile *XFile) (size uint64, filesList []string, err error) {
 		Path:     xFile.clean(xFile.FilePath, ".bz", ".bz2"),
 		Data:     bzip2.NewReader(xFile.prog.reader(compressedFile)),
 		FileMode: xFile.FileMode,
-		DirMode:  xFile.DirMode,
 	}
 
 	size, err = xFile.write(file)
@@ -335,7 +324,6 @@ func ExtractGzip(xFile *XFile) (size uint64, filesList []string, err error) {
 		Path:     xFile.clean(xFile.FilePath, ".gz"),
 		Data:     zipReader,
 		FileMode: xFile.FileMode,
-		DirMode:  xFile.DirMode,
 		Mtime:    zipReader.ModTime,
 	}
 

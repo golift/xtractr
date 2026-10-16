@@ -92,12 +92,12 @@ func (x *XFile) asarPrepareEntries(reader *asar.Reader) ([]asarFileEntry, []stri
 
 		switch {
 		case asarFile.IsDir():
-			err := x.mkDir(cleanPath, x.DirMode, time.Now())
+			err := x.mkDir(cleanPath, time.Now())
 			if err != nil {
 				return nil, files, fmt.Errorf("making asar dir: %w", err)
 			}
 		case asarFile.IsLink():
-			err := x.mkDir(filepath.Dir(cleanPath), x.DirMode, time.Now())
+			err := x.mkDir(filepath.Dir(cleanPath), time.Now())
 			if err != nil {
 				return nil, files, fmt.Errorf("making asar symlink parent: %w", err)
 			}
@@ -157,7 +157,6 @@ func (x *XFile) writeASARFile(asarFile *asar.File, parallel bool) (err error) {
 		Path:     x.clean(asarFile.Name),
 		Data:     src,
 		FileMode: x.asarFileMode(asarFile),
-		DirMode:  x.DirMode,
 		Mtime:    time.Now(),
 		Atime:    time.Now(),
 	}
@@ -265,11 +264,13 @@ func requireUnpackedRegular(src *os.File) error {
 	return nil
 }
 
+// asarFileMode is the only permission bit an ASAR entry can store. The header
+// has an executable flag and no Unix mode. When PreserveExec is set, fileMode
+// keeps that execute bit for each class FileMode already grants access.
 func (x *XFile) asarFileMode(asarFile *asar.File) os.FileMode {
-	mode := x.FileMode
 	if asarFile.Executable {
-		mode |= 0o111
+		return executePermMask
 	}
 
-	return mode
+	return 0
 }

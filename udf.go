@@ -104,7 +104,7 @@ func (x *XFile) unUDFDir(udfImage *udf.Udf, entry *udf.File, parent string) (uin
 			x.FilePath, ErrInvalidPath, cleanPath, entry.Name())
 	}
 
-	err := x.mkDir(cleanPath, entry.Mode(), entry.ModTime())
+	err := x.mkDir(cleanPath, entry.ModTime())
 	if err != nil {
 		return 0, nil, fmt.Errorf("making UDF directory %s: %w", entry.Name(), err)
 	}
@@ -129,7 +129,6 @@ func (x *XFile) unUDFFile(entry *udf.File, parent string) (uint64, []string, err
 		Path:     x.clean(filePath),
 		Data:     reader,
 		FileMode: entry.Mode(),
-		DirMode:  x.DirMode,
 		Mtime:    entry.ModTime(),
 	}
 

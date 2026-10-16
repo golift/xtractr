@@ -147,7 +147,7 @@ func (x *XFile) sevenZipPrepareEntries(sevenZip *sevenzip.ReadCloser) ([]sevenZi
 		files = append(files, filepath.Join(x.OutputDir, zipFile.Name))
 
 		if zipFile.FileInfo().IsDir() {
-			err := x.mkDir(cleanPath, zipFile.Mode(), zipFile.Modified)
+			err := x.mkDir(cleanPath, zipFile.Modified)
 			if err != nil {
 				return nil, files, fmt.Errorf("%s: making 7z dir: %w", x.FilePath, err)
 			}
@@ -171,7 +171,6 @@ func (x *XFile) extract7zEntry(entry sevenZipEntry) (err error) {
 	fileInfo := &file{
 		Path:     x.clean(entry.sevenZipFile.Name),
 		FileMode: entry.sevenZipFile.Mode(),
-		DirMode:  x.DirMode,
 		Mtime:    entry.sevenZipFile.Modified,
 		Atime:    entry.sevenZipFile.Accessed,
 	}
@@ -194,7 +193,6 @@ func (x *XFile) un7zip(zipFile *sevenzip.File) (size uint64, path string, err er
 	file := &file{
 		Path:     x.clean(zipFile.Name),
 		FileMode: zipFile.Mode(),
-		DirMode:  x.DirMode,
 		Mtime:    zipFile.Modified,
 		Atime:    zipFile.Accessed,
 	}
@@ -209,7 +207,7 @@ func (x *XFile) un7zip(zipFile *sevenzip.File) (size uint64, path string, err er
 	if zipFile.FileInfo().IsDir() {
 		x.Debugf("Writing archived directory: %s", file.Path)
 
-		err = x.mkDir(file.Path, zipFile.Mode(), zipFile.Modified)
+		err = x.mkDir(file.Path, zipFile.Modified)
 		closeNamed(zFile, &err)
 
 		if err != nil {

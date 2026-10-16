@@ -53,7 +53,6 @@ func (x *XFile) unAr(reader io.Reader) ([]string, error) {
 			Path:     x.clean(header.Name),
 			Data:     arReader,
 			FileMode: os.FileMode(header.Mode),
-			DirMode:  x.DirMode,
 			Mtime:    header.ModTime,
 		}
 
