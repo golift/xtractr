@@ -171,8 +171,7 @@ func (x *XFile) writeASARFile(asarFile *asar.File, parallel bool) (err error) {
 	closeNamed(src, &err)
 
 	if err != nil {
-		_ = os.Remove(fileInfo.Path)
-
+		// writeFile removed any partial; see its doc for why not here.
 		return fmt.Errorf("%s: %w: %s", asarFile.Name, err, fileInfo.Path)
 	}
 

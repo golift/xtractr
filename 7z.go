@@ -3,7 +3,6 @@ package xtractr
 import (
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 
 	"github.com/bodgit/sevenzip"
@@ -244,8 +243,7 @@ func (x *XFile) write7zFile(zFile io.ReadCloser, file *file, wantCRC uint32, par
 	closeNamed(zFile, &err)
 
 	if err != nil {
-		_ = os.Remove(file.Path)
-
+		// writeFile removed any partial; see its doc for why not here.
 		return size, err
 	}
 

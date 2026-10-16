@@ -204,7 +204,7 @@ type XFile struct {
 	// before this extract wrote any link. A link written in one's path can
 	// move it outside; see collectPlantedLinks. Collected once, before the
 	// first symlink or hard-link write (or before SquashRoot moves links), and
-	// guarded by symlinkCreate rather than a lock in this struct: password
+	// guarded by linkWrite rather than a lock in this struct: password
 	// retries copy XFile.
 	planted          []plantedLink
 	plantedCollected bool

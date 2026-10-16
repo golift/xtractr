@@ -15,12 +15,15 @@ import (
 	"time"
 )
 
-// symlinkCreate serializes symlink and hard-link creation across workers.
-// Zip, 7z, and ASAR extract those entries concurrently, and the climb check
-// has to see every link created before it.
+// linkWrite serializes symlink and hard-link writes across workers, and keeps
+// them out of the span in which a file's parent folders are checked and the
+// file is opened. Zip, 7z, and ASAR write entries concurrently. The checks
+// have to see every link written before them, and a link written between
+// mkDir and the open, even one the audit then rolls back, is what the open
+// would follow. Link writes take it exclusively; openOutputFile shares it.
 //
 //nolint:gochecknoglobals // password retries copy XFile, so this lock cannot live on it.
-var symlinkCreate sync.Mutex
+var linkWrite sync.RWMutex
 
 type file struct {
 	Path     string
@@ -264,17 +267,21 @@ func (x *XFile) writeParallel(file *file) (uint64, error) {
 	return x.writeFile(file, true)
 }
 
+// writeFile writes one archive member. A partial file is removed here, and
+// callers must not remove file.Path on error themselves: the path may be a
+// symlink entry that was left or put back, or a path whose parent resolves
+// outside OutputDir, which os.Remove would follow.
 func (x *XFile) writeFile(file *file, parallel bool) (uint64, error) {
-	err := x.mkDir(filepath.Dir(file.Path), file.DirMode, file.Mtime)
-	if err != nil {
-		return 0, fmt.Errorf("writing archived file '%s' parent folder: %w", filepath.Base(file.Path), err)
-	}
-
 	// ZIP/RAR/7z (and similar) store symlink targets as the member payload with
 	// ModeSymlink set. Writing them as regular files leaves a text stub instead
 	// of a real link — the same class of bug as tar (#153), different symptom.
 	if file.FileMode&os.ModeSymlink != 0 {
-		err := x.writeSymlink(file)
+		err := x.mkDir(filepath.Dir(file.Path), file.DirMode, file.Mtime)
+		if err != nil {
+			return 0, fmt.Errorf("writing archived file '%s' parent folder: %w", filepath.Base(file.Path), err)
+		}
+
+		err = x.writeSymlink(file)
 		if errors.Is(err, errSkipEntry) {
 			return 0, nil
 		}
@@ -282,7 +289,7 @@ func (x *XFile) writeFile(file *file, parallel bool) (uint64, error) {
 		return 0, err
 	}
 
-	fout, pathUsed, err := openExtractFile(file.Path, x.safeFileMode(file.FileMode))
+	fout, pathUsed, err := x.openOutputFile(file)
 	if err != nil {
 		return 0, err
 	}
@@ -318,6 +325,22 @@ func (x *XFile) writeFile(file *file, parallel bool) (uint64, error) {
 	_ = os.Chtimes(file.Path, file.Atime, file.Mtime)
 
 	return uint64(size), nil
+}
+
+// openOutputFile makes the file's parent folders and opens it while no link is
+// being written (linkWrite). mkDir checks that the parents resolve inside
+// OutputDir; the open follows whatever the parents are at that moment, so the
+// two have to see the same links.
+func (x *XFile) openOutputFile(file *file) (*os.File, string, error) {
+	linkWrite.RLock()
+	defer linkWrite.RUnlock()
+
+	err := x.mkDir(filepath.Dir(file.Path), file.DirMode, file.Mtime)
+	if err != nil {
+		return nil, "", fmt.Errorf("writing archived file '%s' parent folder: %w", filepath.Base(file.Path), err)
+	}
+
+	return openExtractFile(file.Path, x.safeFileMode(file.FileMode))
 }
 
 // extractOpenAttempts bounds the create/replace loop so a tight symlink-plant
@@ -411,6 +434,10 @@ func finishExtractOpen(file *os.File, used string, truncate bool) (*os.File, str
 	err := requireRegularFile(file)
 	if err != nil {
 		_ = file.Close()
+
+		if !truncate {
+			_ = os.Remove(used) // the exclusive create made this file.
+		}
 
 		return nil, used, err
 	}
@@ -1002,8 +1029,8 @@ func (l *squashLayout) onDisk(path string) string {
 }
 
 func (x *XFile) createSymlink(path, linkName string) error {
-	symlinkCreate.Lock()
-	defer symlinkCreate.Unlock()
+	linkWrite.Lock()
+	defer linkWrite.Unlock()
 
 	return x.createSymlinkLocked(path, linkName)
 }
@@ -1044,12 +1071,13 @@ func (x *XFile) placeSymlink(path, linkName string, old replacedEntry) error {
 }
 
 // finishLink runs once a symlink or hard link exists at path. The write is
-// undone, and what it replaced put back, if it moved a planted link outside
-// OutputDir or exceeds MaxFiles.
+// undone, and what it replaced put back, if it exceeds MaxFiles or moved a
+// planted link outside OutputDir. The audit goes last: it records what the
+// planted links look up now, and that must describe the layout that stays.
 func (x *XFile) finishLink(path string, old replacedEntry) error {
-	err := x.plantedLinksInside(path)
+	err := x.countExtracted()
 	if err == nil {
-		err = x.countExtracted()
+		err = x.plantedLinksInside(path)
 	}
 
 	if err != nil {
@@ -1121,9 +1149,9 @@ func (r replacedEntry) restore() {
 	}
 }
 
-// plantedLink is a symlink that was under OutputDir, resolving inside it,
-// before this extract wrote or removed any link. visits are the paths that
-// resolution looked up; a link written at one of them can move the link.
+// plantedLink is a symlink that was under OutputDir before this extract wrote
+// or removed any link, and did not resolve outside it. visits are the paths
+// its resolution looked up; a link written at one of them can move the link.
 type plantedLink struct {
 	path   string
 	visits []string
@@ -1141,12 +1169,25 @@ func (l *plantedLink) visited(path string) bool {
 	return false
 }
 
-// collectPlantedLinks finds the symlinks already under OutputDir that resolve
-// inside it. One of those lands outside once a link is written in its path:
-// "missing/../victim" when missing -> . appears, or "foo/../../victim" when
-// the foo it climbed through is replaced by a shorter link. The archive's
-// own links are judged by their text and never need this; a link already in
-// place is judged by where it resolved, whatever its text looks like.
+// uniqueVisits drops the repeats a cycle leaves in a walk's lookups.
+func uniqueVisits(visits []string) []string {
+	slices.Sort(visits)
+
+	return slices.Compact(visits)
+}
+
+// collectPlantedLinks finds the symlinks already under OutputDir that do not
+// resolve outside it. One of those lands outside once a link is written in
+// its path: "missing/../victim" when missing -> . appears, or
+// "foo/../../victim" when the foo it climbed through is replaced by a shorter
+// link. The archive's own links are judged by their text and never need
+// this; a link already in place is judged by where it resolves, whatever its
+// text looks like.
+//
+// A link that does not resolve at all (a cycle, a file in its path) is kept
+// as well, with the lookups it made: the write that makes it resolve has to
+// be audited too, and a dropped link would be missed. One that already
+// resolves outside was pointing out before this extract and is left alone.
 //
 // Links whose text leaves OutputDir without climbing after a component are
 // skipped without a walk: they come back inside only through a link outside
@@ -1173,7 +1214,7 @@ func (x *XFile) collectPlantedLinks() {
 }
 
 // plantedLinkAt resolves the symlink at path the way the kernel would and
-// returns it, with the paths looked up, when it lands inside root.
+// returns it, with the paths looked up, unless it lands outside root.
 func plantedLinkAt(root, path string) (plantedLink, bool) {
 	target, err := os.Readlink(path)
 	if err != nil {
@@ -1192,11 +1233,11 @@ func plantedLinkAt(root, path string) (plantedLink, bool) {
 	walk := &linkWalk{}
 
 	resolved, err := walkLinkTarget(path, target, walk)
-	if err != nil || !pathWithin(root, resolved) {
+	if err == nil && !pathWithin(root, resolved) {
 		return plantedLink{}, false
 	}
 
-	return plantedLink{path: path, visits: walk.visits}, true
+	return plantedLink{path: path, visits: uniqueVisits(walk.visits)}, true
 }
 
 // plantedLinksInside fails when a planted link now resolves outside
@@ -1206,7 +1247,10 @@ func plantedLinkAt(root, path string) (plantedLink, bool) {
 //
 // A link this extract removed is skipped. One it rewrote was checked as text
 // and is walked with the new text. Text that no longer walks (a cycle, the
-// hop budget) resolves nowhere and is not an escape.
+// hop budget) resolves nowhere and is not an escape, but the lookups it made
+// are still what a later write has to be matched against. New lookups are
+// recorded only when every link passes: on failure the caller puts the
+// replaced entry back, and the old lookups describe that layout.
 func (x *XFile) plantedLinksInside(path string) error {
 	if len(x.planted) == 0 {
 		return nil
@@ -1217,6 +1261,7 @@ func (x *XFile) plantedLinksInside(path string) error {
 	}
 
 	root := resolveExisting(x.OutputDir)
+	visits := map[int][]string{}
 
 	for idx := range x.planted {
 		link := &x.planted[idx]
@@ -1232,24 +1277,24 @@ func (x *XFile) plantedLinksInside(path string) error {
 		walk := &linkWalk{onDisk: x.onDisk}
 
 		resolved, err := walkLinkTarget(link.path, target, walk)
-		if err != nil {
-			continue
-		}
-
-		if !pathWithin(root, resolved) {
+		if err == nil && !pathWithin(root, resolved) {
 			return fmt.Errorf("%s: %w: %s -> %s now resolves outside the output folder",
 				x.FilePath, ErrInvalidPath, link.path, target)
 		}
 
-		link.visits = walk.visits
+		visits[idx] = uniqueVisits(walk.visits)
+	}
+
+	for idx, seen := range visits {
+		x.planted[idx].visits = seen
 	}
 
 	return nil
 }
 
 func (x *XFile) createHardLink(path, linkName string) error {
-	symlinkCreate.Lock()
-	defer symlinkCreate.Unlock()
+	linkWrite.Lock()
+	defer linkWrite.Unlock()
 
 	return x.createHardLinkLocked(path, linkName)
 }

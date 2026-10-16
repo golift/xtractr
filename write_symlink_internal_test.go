@@ -305,6 +305,63 @@ func TestCreateSymlinkDoesNotShortenPlantedClimb(t *testing.T) {
 	}
 }
 
+// TestCreateSymlinkKeepsLookupsThroughCycle makes a planted link unresolvable
+// before arming it. existing -> foo/../victim resolves through foo -> sub/deep.
+// Replacing foo with foo -> bar (bar -> foo) is a cycle: no escape, but the
+// lookups of that failed walk, bar among them, are what the next write must
+// be matched against. bar -> . then makes existing resolve outside.
+func TestCreateSymlinkKeepsLookupsThroughCycle(t *testing.T) {
+	t.Parallel()
+	skipWithoutSymlinks(t)
+
+	root := t.TempDir()
+	out := filepath.Join(root, "out")
+	victim := filepath.Join(root, "victim")
+
+	require.NoError(t, os.MkdirAll(filepath.Join(out, "sub", "deep"), 0o750))
+	require.NoError(t, os.WriteFile(victim, []byte("pwned"), 0o600))
+	require.NoError(t, os.Symlink("sub/deep", filepath.Join(out, "foo")))
+	require.NoError(t, os.Symlink("foo", filepath.Join(out, "bar")))
+	require.NoError(t, os.Symlink("foo/../victim", filepath.Join(out, "existing")))
+
+	xFile := &XFile{FilePath: "planted.tar", OutputDir: out}
+	require.NoError(t, xFile.createSymlink(filepath.Join(out, "foo"), "bar"))
+
+	err := xFile.createSymlink(filepath.Join(out, "bar"), ".")
+	require.ErrorIs(t, err, ErrInvalidPath)
+
+	got, err := os.Readlink(filepath.Join(out, "bar"))
+	require.NoError(t, err)
+	require.Equal(t, "foo", got, "bar must be restored")
+	requireNotResolvingTo(t, filepath.Join(out, "existing"), victim)
+}
+
+// TestCreateSymlinkTracksUnresolvableLink is a planted link that does not
+// resolve when collected: existing -> foo/bar/../../victim with a regular file
+// at foo. Replacing foo with foo -> . would make it resolve outside, so the
+// link has to be collected anyway, with the lookups it made.
+func TestCreateSymlinkTracksUnresolvableLink(t *testing.T) {
+	t.Parallel()
+	skipWithoutSymlinks(t)
+
+	root := t.TempDir()
+	out := filepath.Join(root, "out")
+	victim := filepath.Join(root, "victim")
+
+	require.NoError(t, os.MkdirAll(filepath.Join(out, "bar"), 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(out, "foo"), []byte("file"), 0o600))
+	require.NoError(t, os.WriteFile(victim, []byte("pwned"), 0o600))
+	require.NoError(t, os.Symlink("foo/bar/../../victim", filepath.Join(out, "existing")))
+
+	xFile := &XFile{FilePath: "planted.tar", OutputDir: out}
+	err := xFile.createSymlink(filepath.Join(out, "foo"), ".")
+	require.ErrorIs(t, err, ErrInvalidPath)
+
+	_, statErr := os.Lstat(filepath.Join(out, "foo"))
+	require.ErrorIs(t, statErr, os.ErrNotExist, "the replaced file cannot be put back, and no link may sit there")
+	requireNotResolvingTo(t, filepath.Join(out, "existing"), victim)
+}
+
 // TestCreateSymlinkReplacesEntry is the replacement archives rely on: a
 // symlink, an empty directory, or a file at the path gives way to the link.
 // Rejected text leaves the entry alone, and a file is never removed for it.
