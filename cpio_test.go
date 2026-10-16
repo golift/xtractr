@@ -33,7 +33,8 @@ func TestExtractCPIOSymlinkWithinOutput(t *testing.T) {
 
 	got, err := os.Readlink(filepath.Join(out, "nested", "link"))
 	require.NoError(t, err)
-	assert.Equal(t, "../real.txt", got)
+	// Windows stores the target with backslashes even when the archive used '/'.
+	assert.Equal(t, filepath.FromSlash("../real.txt"), got)
 	assertPathInside(t, out, filepath.Join(out, "nested", "link"))
 
 	body, err := os.ReadFile(filepath.Join(out, "real.txt"))
