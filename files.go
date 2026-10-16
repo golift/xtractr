@@ -203,10 +203,15 @@ type XFile struct {
 	// climbLinks are symlinks that were already under OutputDir with text that
 	// climbs after a component ("missing/../victim"). A link this extract
 	// creates can make that text resolve outside OutputDir. Collected once, on
-	// the first symlink or hard-link write, and guarded by symlinkCreate rather
-	// than a lock in this struct: password retries copy XFile.
+	// the first symlink or hard-link write (or before SquashRoot moves links),
+	// and guarded by symlinkCreate rather than a lock in this struct: password
+	// retries copy XFile.
 	climbLinks     []string
 	climbCollected bool
+	// onDisk, when set, tells link walks where an entry seen at a path is
+	// right now. SquashRoot sets it on a scoped copy to check links at the
+	// position they will have after the move. See linkWalk.
+	onDisk func(path string) string
 }
 
 // Debugf calls the debug method on the logger if it's not nil.

@@ -118,10 +118,20 @@ func TestCreateSymlinkDoesNotArmPlantedClimb(t *testing.T) {
 
 	_, statErr = os.Lstat(filepath.Join(out, "missing"))
 	require.ErrorIs(t, statErr, os.ErrNotExist)
+	requireNotResolvingTo(t, filepath.Join(out, "existing"), victim)
+}
 
-	resolved, evalErr := filepath.EvalSymlinks(filepath.Join(out, "existing"))
-	if evalErr == nil {
-		require.NotEqual(t, victim, resolved)
+// requireNotResolvingTo fails when link resolves to victim. A dangling link
+// is fine: it points at nothing.
+func requireNotResolvingTo(t *testing.T, link, victim string) {
+	t.Helper()
+
+	realVictim, err := filepath.EvalSymlinks(victim)
+	require.NoError(t, err)
+
+	resolved, err := filepath.EvalSymlinks(link)
+	if err == nil {
+		require.NotEqual(t, realVictim, resolved)
 	}
 }
 
@@ -145,11 +155,36 @@ func TestCreateSymlinkAllowsUnrelatedClimb(t *testing.T) {
 	got, err := os.Readlink(filepath.Join(out, "readme"))
 	require.NoError(t, err)
 	require.Equal(t, "README", got)
+	requireNotResolvingTo(t, filepath.Join(out, "existing"), victim)
+}
 
-	resolved, evalErr := filepath.EvalSymlinks(filepath.Join(out, "existing"))
-	if evalErr == nil {
-		require.NotEqual(t, victim, resolved)
-	}
+// TestCreateSymlinkDoesNotArmNestedClimb is a planted climb behind another
+// one: existing -> foo/../victim, where foo -> deep/../leaf. The check on
+// archive text refuses to follow foo at all; the audit of planted links has
+// to resolve it the way the kernel does, or creating leaf -> "." is missed.
+func TestCreateSymlinkDoesNotArmNestedClimb(t *testing.T) {
+	t.Parallel()
+	skipWithoutSymlinks(t)
+
+	root := t.TempDir()
+	out := filepath.Join(root, "out")
+	victim := filepath.Join(root, "victim")
+
+	require.NoError(t, os.MkdirAll(filepath.Join(out, "deep"), 0o750))
+	require.NoError(t, os.WriteFile(victim, []byte("pwned"), 0o600))
+	require.NoError(t, os.Symlink("deep/../leaf", filepath.Join(out, "foo")))
+	require.NoError(t, os.Symlink("foo/../victim", filepath.Join(out, "existing")))
+
+	xFile := &XFile{FilePath: "planted.tar", OutputDir: out}
+	err := xFile.createSymlink(filepath.Join(out, "leaf"), ".")
+	require.ErrorIs(t, err, ErrInvalidPath)
+
+	_, statErr := os.Lstat(filepath.Join(out, "leaf"))
+	require.ErrorIs(t, statErr, os.ErrNotExist)
+	requireNotResolvingTo(t, filepath.Join(out, "existing"), victim)
+
+	// A leaf that keeps the climb inside OutputDir is fine.
+	require.NoError(t, xFile.createSymlink(filepath.Join(out, "leaf"), "deep"))
 }
 
 // TestCreateSymlinkDoesNotArmPlantedChain is the same escape one hop further
@@ -180,11 +215,7 @@ func TestCreateSymlinkDoesNotArmPlantedChain(t *testing.T) {
 
 	_, statErr = os.Lstat(filepath.Join(out, "missing"))
 	require.ErrorIs(t, statErr, os.ErrNotExist)
-
-	resolved, evalErr := filepath.EvalSymlinks(filepath.Join(out, "existing"))
-	if evalErr == nil {
-		require.NotEqual(t, victim, resolved)
-	}
+	requireNotResolvingTo(t, filepath.Join(out, "existing"), victim)
 }
 
 // TestCreateHardLinkDoesNotArmPlantedClimb is a hard link to a symlink to "."
@@ -211,11 +242,7 @@ func TestCreateHardLinkDoesNotArmPlantedClimb(t *testing.T) {
 	require.ErrorIs(t, statErr, os.ErrNotExist)
 	_, statErr = os.Lstat(filepath.Join(out, "shallow"))
 	require.NoError(t, statErr)
-
-	resolved, evalErr := filepath.EvalSymlinks(filepath.Join(out, "existing"))
-	if evalErr == nil {
-		require.NotEqual(t, victim, resolved)
-	}
+	requireNotResolvingTo(t, filepath.Join(out, "existing"), victim)
 }
 
 // TestCreateSymlinkIgnoresClimbAlreadyOutside still writes an unrelated

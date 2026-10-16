@@ -627,19 +627,37 @@ func (x *XFile) resolvedWithinOutput(path string) bool {
 // while staying shallow. Cycles and that fan-out fail closed.
 const maxSymlinkHops = 40
 
-// symlinkBudget counts links followed while resolving one archive symlink.
-type symlinkBudget struct {
+// linkWalk is the state of one link resolution. followed counts every link
+// followed, across all branches, against maxSymlinkHops.
+type linkWalk struct {
 	followed int
+	// rejectClimbs fails the walk at a followed link whose own text climbs
+	// after a component. That is a rule for text the archive asks xtractr to
+	// write, not part of resolving a link that already exists, so checks on
+	// those leave it off. See followLinkElem.
+	rejectClimbs bool
+	// onDisk, when set, maps a path the walk reaches to where that entry is
+	// right now. SquashRoot checks links at the position they will have after
+	// the move while the entries are still under the root. See squashLayout.
+	onDisk func(path string) string
 }
 
-func (b *symlinkBudget) consume() error {
-	if b.followed >= maxSymlinkHops {
+func (w *linkWalk) consume() error {
+	if w.followed >= maxSymlinkHops {
 		return fmt.Errorf("%w: symlink cycle", ErrInvalidPath)
 	}
 
-	b.followed++
+	w.followed++
 
 	return nil
+}
+
+func (w *linkWalk) disk(path string) string {
+	if w.onDisk == nil {
+		return path
+	}
+
+	return w.onDisk(path)
 }
 
 // linkTargetStart returns the directory a link's text is resolved from and
@@ -670,20 +688,20 @@ func linkTargetStart(parent, target string) (string, string, error) {
 // symlink to "..". This walk applies ".." to the directory actually reached,
 // following links that already exist. A component that does not exist yet is
 // kept as written.
-func walkLinkTarget(linkPath, linkName string) (string, error) {
+func walkLinkTarget(linkPath, linkName string, walk *linkWalk) (string, error) {
 	start, rest, err := linkTargetStart(resolveExisting(filepath.Dir(linkPath)), linkName)
 	if err != nil {
 		return "", err
 	}
 
-	return walkLinkElems(start, splitElems(rest), &symlinkBudget{})
+	return walkLinkElems(start, splitElems(rest), walk)
 }
 
-func walkLinkElems(dir string, elems []string, budget *symlinkBudget) (string, error) {
+func walkLinkElems(dir string, elems []string, walk *linkWalk) (string, error) {
 	current := dir
 
 	for _, elem := range elems {
-		next, err := stepLinkElem(current, elem, budget)
+		next, err := stepLinkElem(current, elem, walk)
 		if err != nil {
 			return "", err
 		}
@@ -694,7 +712,7 @@ func walkLinkElems(dir string, elems []string, budget *symlinkBudget) (string, e
 	return current, nil
 }
 
-func stepLinkElem(current, elem string, budget *symlinkBudget) (string, error) {
+func stepLinkElem(current, elem string, walk *linkWalk) (string, error) {
 	switch elem {
 	case "", ".":
 		return current, nil
@@ -708,7 +726,7 @@ func stepLinkElem(current, elem string, budget *symlinkBudget) (string, error) {
 
 	next := filepath.Join(current, elem)
 
-	info, err := os.Lstat(next)
+	info, err := os.Lstat(walk.disk(next))
 	if errors.Is(err, os.ErrNotExist) {
 		return next, nil
 	}
@@ -721,16 +739,16 @@ func stepLinkElem(current, elem string, budget *symlinkBudget) (string, error) {
 		return next, nil
 	}
 
-	return followLinkElem(current, next, budget)
+	return followLinkElem(current, next, walk)
 }
 
-func followLinkElem(parent, link string, budget *symlinkBudget) (string, error) {
-	err := budget.consume()
+func followLinkElem(parent, link string, walk *linkWalk) (string, error) {
+	err := walk.consume()
 	if err != nil {
 		return "", err
 	}
 
-	target, err := os.Readlink(link)
+	target, err := os.Readlink(walk.disk(link))
 	if err != nil {
 		return "", fmt.Errorf("readlink %s: %w", link, err)
 	}
@@ -738,7 +756,7 @@ func followLinkElem(parent, link string, budget *symlinkBudget) (string, error) 
 	// The archive entry's own text may be a single name. The ".." that escapes
 	// can live in this existing link, which a later entry can arm by creating
 	// the missing component as a shallower symlink.
-	if linkTargetClimbsAfterComponent(target) {
+	if walk.rejectClimbs && linkTargetClimbsAfterComponent(target) {
 		return "", fmt.Errorf("%w: %s -> %s", ErrInvalidPath, link, target)
 	}
 
@@ -747,7 +765,7 @@ func followLinkElem(parent, link string, budget *symlinkBudget) (string, error) 
 		return "", err
 	}
 
-	return walkLinkElems(start, splitElems(rest), budget)
+	return walkLinkElems(start, splitElems(rest), walk)
 }
 
 func slashToSeparator(path string) string {
@@ -833,7 +851,7 @@ func (x *XFile) ensureLinkWithinOutput(linkPath, linkName string) error {
 		return fmt.Errorf("%s: %w: %s (from: %s)", x.FilePath, ErrInvalidPath, lexical, linkName)
 	}
 
-	resolved, err := walkLinkTarget(linkPath, linkName)
+	resolved, err := walkLinkTarget(linkPath, linkName, &linkWalk{rejectClimbs: true, onDisk: x.onDisk})
 	if err != nil {
 		return fmt.Errorf("%s: %w: %s: %w", x.FilePath, ErrInvalidPath, linkName, err)
 	}
@@ -845,34 +863,127 @@ func (x *XFile) ensureLinkWithinOutput(linkPath, linkName string) error {
 	return nil
 }
 
-// ensureLinksWithin checks every symlink under root against root instead of
-// OutputDir. SquashRoot moves root's children up one level, which shortens
-// each relative link by a component: a link that resolved inside OutputDir by
-// leaving root would climb out of OutputDir after the move.
+// ensureLinksWithin checks the links SquashRoot is about to move out of root,
+// each at the position it will have afterwards and against the layout the
+// move produces (squashLayout), while nothing has moved yet.
+//
+// Checking them where they are is not enough: moving shortens every relative
+// link by a component, and the names the move fills in under OutputDir change
+// what links already there resolve to. A link that leaves root and comes back
+// ("../pkg/victim") lands on a sibling of OutputDir; a link to a name that is
+// occupied under OutputDir follows that entry, since the move keeps it; a
+// moved link to "." arms a planted "missing/../victim" the same way creating
+// it there would, so the climb-after links are audited against the layout too.
 func (x *XFile) ensureLinksWithin(root string) error {
-	scope := &XFile{FilePath: x.FilePath, OutputDir: root}
+	links, err := symlinksUnder(root)
+	if err != nil {
+		return fmt.Errorf("squash root: %w", err)
+	}
 
-	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
+	if len(links) == 0 {
+		return nil // Files and directories resolve where they are put.
+	}
 
-		if entry.Type()&os.ModeSymlink == 0 {
-			return nil
-		}
+	// Extraction has finished, so no link write races this. The scan is a
+	// no-op when the archive wrote a link; links already under root need it.
+	x.collectClimbLinks()
 
+	layout := newSquashLayout(x.OutputDir, root)
+	scope := &XFile{
+		FilePath:       x.FilePath,
+		OutputDir:      x.OutputDir,
+		climbLinks:     x.climbLinks,
+		climbCollected: true,
+		onDisk:         layout.onDisk,
+	}
+
+	for _, path := range links {
 		target, err := os.Readlink(path)
 		if err != nil {
-			return fmt.Errorf("readlink: %w", err)
+			return fmt.Errorf("squash root: readlink: %w", err)
 		}
 
-		return scope.ensureLinkWithinOutput(path, target)
-	})
+		err = scope.ensureLinkWithinOutput(layout.destination(path), target)
+		if err != nil {
+			return fmt.Errorf("squash root: %w", err)
+		}
+	}
+
+	err = scope.climbLinksInside()
 	if err != nil {
 		return fmt.Errorf("squash root: %w", err)
 	}
 
 	return nil
+}
+
+// symlinksUnder lists the symlinks in the tree at root without following any.
+func symlinksUnder(root string) ([]string, error) {
+	var links []string
+
+	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr == nil && entry.Type()&os.ModeSymlink != 0 {
+			links = append(links, path)
+		}
+
+		return walkErr
+	})
+	if err != nil {
+		return nil, fmt.Errorf("listing links: %w", err)
+	}
+
+	return links, nil
+}
+
+// squashLayout is OutputDir as it will be once SquashRoot moves root's
+// children up one level. moveFilesKnown moves the top-level children only and
+// refuses an occupied destination: a name that already exists under OutputDir
+// keeps that entry, and the copy under root is discarded with root (or left
+// there if another move fails). Every other name is whatever is under root.
+type squashLayout struct {
+	outputDir string
+	resolved  string // resolveExisting(outputDir); walks run in this space.
+	root      string
+}
+
+func newSquashLayout(outputDir, root string) *squashLayout {
+	return &squashLayout{outputDir: outputDir, resolved: resolveExisting(outputDir), root: root}
+}
+
+// occupied reports whether the move refuses the top-level child named top.
+func (l *squashLayout) occupied(top string) bool {
+	_, err := os.Lstat(filepath.Join(l.outputDir, top))
+
+	return err == nil
+}
+
+// destination is where the entry at path, under root, sits after the move.
+func (l *squashLayout) destination(path string) string {
+	rel, err := filepath.Rel(l.root, path)
+	if err != nil {
+		return path
+	}
+
+	if top, _, _ := strings.Cut(rel, string(filepath.Separator)); l.occupied(top) {
+		return path
+	}
+
+	return filepath.Join(l.outputDir, rel)
+}
+
+// onDisk is the linkWalk hook: a path under OutputDir whose top-level name the
+// move fills in is looked up under root. See linkWalk.
+func (l *squashLayout) onDisk(path string) string {
+	rel, err := filepath.Rel(l.resolved, path)
+	if err != nil || rel == "." || !pathWithin(l.resolved, path) {
+		return path
+	}
+
+	if top, _, _ := strings.Cut(rel, string(filepath.Separator)); l.occupied(top) {
+		return path
+	}
+
+	return filepath.Join(l.root, rel)
 }
 
 func (x *XFile) createSymlink(path, linkName string) error {
@@ -987,10 +1098,12 @@ func (x *XFile) climbLinksInside() error {
 }
 
 // linkEscapes reports whether the link at linkPath resolves outside
-// OutputDir. Text that cannot be walked (a cycle, the hop budget, a climb
-// inside a followed link) does not resolve anywhere and is not an escape.
+// OutputDir. This is resolution only: the climb-after rule applied to archive
+// text is left off, since a planted link can sit behind another one and the
+// kernel follows both. Text that cannot be walked (a cycle, the hop budget)
+// does not resolve anywhere and is not an escape.
 func (x *XFile) linkEscapes(linkPath, target string) bool {
-	resolved, err := walkLinkTarget(linkPath, target)
+	resolved, err := walkLinkTarget(linkPath, target, &linkWalk{onDisk: x.onDisk})
 	if err != nil {
 		return false
 	}
