@@ -193,6 +193,146 @@ func TestTarSymlinkEscape(t *testing.T) {
 	}
 }
 
+// TestTarSymlinkCleanBypass is the chained-link case also covered for cpio.
+// createSymlink is shared, so tar must reject it too: foo/bar -> ".." makes
+// foo/bar/../victim look inside OutputDir after filepath.Clean, and the kernel
+// resolves it outside.
+func TestTarSymlinkCleanBypass(t *testing.T) {
+	t.Parallel()
+
+	err := os.Symlink("target", filepath.Join(t.TempDir(), "symlink-probe"))
+	if err != nil {
+		t.Skipf("symlinks unavailable on this platform: %v", err)
+	}
+
+	t.Run("existing", func(t *testing.T) {
+		t.Parallel()
+		assertTarCleanBypassRejected(t, true)
+	})
+
+	t.Run("dangling", func(t *testing.T) {
+		t.Parallel()
+		assertTarCleanBypassRejected(t, false)
+	})
+}
+
+func assertTarCleanBypassRejected(t *testing.T, victimExists bool) {
+	t.Helper()
+
+	root := t.TempDir()
+	out := filepath.Join(root, "out")
+	victim := filepath.Join(root, "victim")
+
+	if victimExists {
+		require.NoError(t, os.MkdirAll(victim, 0o750))
+	}
+
+	archive := filepath.Join(root, "bypass.tar.gz")
+	require.NoError(t, writeTarGzipSymlinkBypass(archive))
+
+	_, _, err := xtractr.ExtractTarGzip(&xtractr.XFile{
+		FilePath:  archive,
+		OutputDir: out,
+		FileMode:  0o644,
+		DirMode:   0o755,
+	})
+	require.ErrorIs(t, err, xtractr.ErrInvalidPath)
+
+	got, err := os.Readlink(filepath.Join(out, "foo", "bar"))
+	require.NoError(t, err)
+	assert.Equal(t, "..", got)
+	assertPathInside(t, out, filepath.Join(out, "foo", "bar"))
+
+	assertAbsent(t, filepath.Join(out, "baz"))
+	assertAbsent(t, filepath.Join(victim, "pwned"))
+
+	if !victimExists {
+		assertAbsent(t, victim)
+	}
+}
+
+func writeTarGzipSymlinkBypass(dest string) error {
+	archiveFile, err := os.Create(dest)
+	if err != nil {
+		return fmt.Errorf("create tar: %w", err)
+	}
+
+	gzipWriter := gzip.NewWriter(archiveFile)
+	tarWriter := tar.NewWriter(gzipWriter)
+
+	links := []struct {
+		name   string
+		target string
+	}{
+		{name: "foo/bar", target: ".."},
+		{name: "baz", target: "foo/bar/../victim"},
+	}
+	for _, link := range links {
+		err = tarWriter.WriteHeader(&tar.Header{
+			Name:     link.name,
+			Linkname: link.target,
+			Mode:     0o777,
+			Typeflag: tar.TypeSymlink,
+			ModTime:  time.Now(),
+		})
+		if err != nil {
+			_ = tarWriter.Close()
+			_ = gzipWriter.Close()
+			_ = archiveFile.Close()
+
+			return fmt.Errorf("tar link %s: %w", link.name, err)
+		}
+	}
+
+	payload := []byte("pwned")
+
+	err = tarWriter.WriteHeader(&tar.Header{
+		Name:     "baz/pwned",
+		Mode:     0o644,
+		Size:     int64(len(payload)),
+		Typeflag: tar.TypeReg,
+		ModTime:  time.Now(),
+	})
+	if err != nil {
+		_ = tarWriter.Close()
+		_ = gzipWriter.Close()
+		_ = archiveFile.Close()
+
+		return fmt.Errorf("tar file header: %w", err)
+	}
+
+	_, err = tarWriter.Write(payload)
+	if err != nil {
+		_ = tarWriter.Close()
+		_ = gzipWriter.Close()
+		_ = archiveFile.Close()
+
+		return fmt.Errorf("tar file payload: %w", err)
+	}
+
+	err = tarWriter.Close()
+	if err != nil {
+		_ = gzipWriter.Close()
+		_ = archiveFile.Close()
+
+		return fmt.Errorf("close tar: %w", err)
+	}
+
+	err = gzipWriter.Close()
+	if err != nil {
+		_ = archiveFile.Close()
+
+		return fmt.Errorf("close gzip: %w", err)
+	}
+
+	err = archiveFile.Close()
+	if err != nil {
+		return fmt.Errorf("close tar file: %w", err)
+	}
+
+	return nil
+}
+
 // TestTarEmptyLinkSkipped warns and continues when a link target is empty.
 func TestTarEmptyLinkSkipped(t *testing.T) {
 	t.Parallel()
