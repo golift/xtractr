@@ -587,7 +587,8 @@ func TestTarShortenedPlantedClimb(t *testing.T) {
 
 			got, err := os.Readlink(filepath.Join(out, "foo"))
 			require.NoError(t, err)
-			assert.Equal(t, "sub/deep", got)
+			// Windows os.Symlink stores the text with backslashes.
+			assert.Equal(t, filepath.FromSlash("sub/deep"), got)
 
 			resolved, evalErr := filepath.EvalSymlinks(filepath.Join(out, "existing"))
 			if evalErr == nil {

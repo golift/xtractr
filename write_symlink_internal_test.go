@@ -299,7 +299,8 @@ func TestCreateSymlinkDoesNotShortenPlantedClimb(t *testing.T) {
 
 		got, err := os.Readlink(filepath.Join(out, "foo"))
 		require.NoError(t, err)
-		require.Equal(t, "sub/deep", got, "foo must be restored")
+		// Windows os.Symlink stores the text with backslashes.
+		require.Equal(t, filepath.FromSlash("sub/deep"), got, "foo must be restored")
 		requireNotResolvingTo(t, filepath.Join(out, "existing"), victim)
 	}
 }
