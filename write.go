@@ -607,9 +607,26 @@ func (x *XFile) resolvedWithinOutput(path string) bool {
 	return pathWithin(resolveExisting(x.OutputDir), resolveExisting(path))
 }
 
-// maxSymlinkHops bounds how many links walkLinkTarget follows for one archive
-// symlink. A cycle in the output directory fails closed instead of looping.
+// maxSymlinkHops is the total number of links walked for one archive symlink,
+// counting every branch. A depth cap is not enough: a target like s1/s1, where
+// each link points at two copies of the previous one, does exponential work
+// while staying shallow. Cycles and that fan-out fail closed.
 const maxSymlinkHops = 40
+
+// symlinkBudget counts links followed while resolving one archive symlink.
+type symlinkBudget struct {
+	followed int
+}
+
+func (b *symlinkBudget) consume() error {
+	if b.followed >= maxSymlinkHops {
+		return fmt.Errorf("%w: symlink cycle", ErrInvalidPath)
+	}
+
+	b.followed++
+
+	return nil
+}
 
 // walkLinkTarget returns the path the kernel would resolve for a symlink
 // created at linkPath with target text linkName.
@@ -629,14 +646,14 @@ func walkLinkTarget(linkPath, linkName string) (string, error) {
 		elems = splitElems(strings.TrimPrefix(linkName, filepath.VolumeName(linkName)))
 	}
 
-	return walkLinkElems(start, elems, 0)
+	return walkLinkElems(start, elems, &symlinkBudget{})
 }
 
-func walkLinkElems(dir string, elems []string, hops int) (string, error) {
+func walkLinkElems(dir string, elems []string, budget *symlinkBudget) (string, error) {
 	current := dir
 
 	for _, elem := range elems {
-		next, err := stepLinkElem(current, elem, hops)
+		next, err := stepLinkElem(current, elem, budget)
 		if err != nil {
 			return "", err
 		}
@@ -647,12 +664,16 @@ func walkLinkElems(dir string, elems []string, hops int) (string, error) {
 	return current, nil
 }
 
-func stepLinkElem(current, elem string, hops int) (string, error) {
+func stepLinkElem(current, elem string, budget *symlinkBudget) (string, error) {
 	switch elem {
 	case "", ".":
 		return current, nil
 	case "..":
-		return filepath.Dir(current), nil
+		// filepath.Dir(".") stays "." and filepath.Dir("..") stays ".", so a
+		// relative OutputDir would drop climbs and then look contained.
+		// Join preserves them: Join(".", "..") is ".." and Join("..", "..")
+		// is "../..".
+		return filepath.Join(current, ".."), nil
 	}
 
 	next := filepath.Join(current, elem)
@@ -670,12 +691,13 @@ func stepLinkElem(current, elem string, hops int) (string, error) {
 		return next, nil
 	}
 
-	return followLinkElem(current, next, hops)
+	return followLinkElem(current, next, budget)
 }
 
-func followLinkElem(parent, link string, hops int) (string, error) {
-	if hops >= maxSymlinkHops {
-		return "", fmt.Errorf("%w: symlink cycle", ErrInvalidPath)
+func followLinkElem(parent, link string, budget *symlinkBudget) (string, error) {
+	err := budget.consume()
+	if err != nil {
+		return "", err
 	}
 
 	target, err := os.Readlink(link)
@@ -692,7 +714,7 @@ func followLinkElem(parent, link string, hops int) (string, error) {
 		rest = strings.TrimPrefix(target, filepath.VolumeName(target))
 	}
 
-	return walkLinkElems(start, splitElems(rest), hops+1)
+	return walkLinkElems(start, splitElems(rest), budget)
 }
 
 func slashToSeparator(path string) string {
