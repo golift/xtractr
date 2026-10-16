@@ -448,6 +448,87 @@ func writeTarGzipMembers(dest string, members []tarMember) error {
 	return nil
 }
 
+// TestTarPlantedSymlinkClimb arms a link that was already in OutputDir.
+// "bar -> existing" follows "missing/../victim", and "missing -> ." makes that
+// text resolve outside. Replacing an existing directory with the shallower
+// link does the same.
+func TestTarPlantedSymlinkClimb(t *testing.T) {
+	t.Parallel()
+
+	err := os.Symlink("target", filepath.Join(t.TempDir(), "symlink-probe"))
+	if err != nil {
+		t.Skipf("symlinks unavailable on this platform: %v", err)
+	}
+
+	t.Run("follow planted link", func(t *testing.T) {
+		t.Parallel()
+		assertTarPlantedClimbRejected(t, false, []tarMember{
+			{name: "bar", link: "existing"},
+			{name: "missing", link: "."},
+		})
+	})
+
+	t.Run("arm planted link first", func(t *testing.T) {
+		t.Parallel()
+		assertTarPlantedClimbRejected(t, false, []tarMember{
+			{name: "missing", link: "."},
+			{name: "bar", link: "existing"},
+		})
+	})
+
+	t.Run("replace directory", func(t *testing.T) {
+		t.Parallel()
+		assertTarPlantedClimbRejected(t, true, []tarMember{
+			{name: "a", link: "."},
+		})
+	})
+}
+
+func assertTarPlantedClimbRejected(t *testing.T, withDir bool, members []tarMember) {
+	t.Helper()
+
+	root := t.TempDir()
+	out := filepath.Join(root, "out")
+	victim := filepath.Join(root, "victim")
+
+	require.NoError(t, os.MkdirAll(out, 0o750))
+	require.NoError(t, os.WriteFile(victim, []byte("pwned"), 0o600))
+
+	planted := "missing/../victim"
+
+	if withDir {
+		require.NoError(t, os.MkdirAll(filepath.Join(out, "a"), 0o750))
+
+		planted = "a/../victim"
+	}
+
+	require.NoError(t, os.Symlink(planted, filepath.Join(out, "existing")))
+
+	archive := filepath.Join(root, "planted.tar.gz")
+	require.NoError(t, writeTarGzipMembers(archive, members))
+
+	_, _, err := xtractr.ExtractTarGzip(&xtractr.XFile{
+		FilePath:  archive,
+		OutputDir: out,
+		FileMode:  0o644,
+		DirMode:   0o755,
+	})
+	require.ErrorIs(t, err, xtractr.ErrInvalidPath)
+	assertAbsent(t, filepath.Join(out, "bar"))
+	assertAbsent(t, filepath.Join(out, "missing"))
+
+	info, statErr := os.Lstat(filepath.Join(out, "a"))
+	if statErr == nil {
+		assert.Zero(t, info.Mode()&os.ModeSymlink)
+	}
+
+	resolved, evalErr := filepath.EvalSymlinks(filepath.Join(out, "existing"))
+	if evalErr == nil {
+		assert.NotEqual(t, victim, resolved)
+		assertPathInside(t, out, filepath.Join(out, "existing"))
+	}
+}
+
 // TestTarEmptyLinkSkipped warns and continues when a link target is empty.
 func TestTarEmptyLinkSkipped(t *testing.T) {
 	t.Parallel()

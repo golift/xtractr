@@ -89,3 +89,146 @@ func TestCreateSymlinkRejectsClimbAfterComponent(t *testing.T) {
 	err = xFile.createSymlink(filepath.Join(out, "nested", "link"), "../real.txt")
 	require.NoError(t, err)
 }
+
+// TestCreateSymlinkDoesNotArmPlantedClimb is a link already in OutputDir whose
+// text is "missing/../victim". Pointing an archive entry at it must fail, and
+// creating "missing" -> "." must be rolled back so the planted link stays inside.
+func TestCreateSymlinkDoesNotArmPlantedClimb(t *testing.T) {
+	t.Parallel()
+	skipWithoutSymlinks(t)
+
+	root := t.TempDir()
+	out := filepath.Join(root, "out")
+	victim := filepath.Join(root, "victim")
+
+	require.NoError(t, os.MkdirAll(out, 0o750))
+	require.NoError(t, os.WriteFile(victim, []byte("pwned"), 0o600))
+	require.NoError(t, os.Symlink("missing/../victim", filepath.Join(out, "existing")))
+
+	xFile := &XFile{FilePath: "planted.tar", OutputDir: out}
+
+	err := xFile.createSymlink(filepath.Join(out, "bar"), "existing")
+	require.ErrorIs(t, err, ErrInvalidPath)
+
+	_, statErr := os.Lstat(filepath.Join(out, "bar"))
+	require.ErrorIs(t, statErr, os.ErrNotExist)
+
+	err = xFile.createSymlink(filepath.Join(out, "missing"), ".")
+	require.ErrorIs(t, err, ErrInvalidPath)
+
+	_, statErr = os.Lstat(filepath.Join(out, "missing"))
+	require.ErrorIs(t, statErr, os.ErrNotExist)
+
+	resolved, evalErr := filepath.EvalSymlinks(filepath.Join(out, "existing"))
+	if evalErr == nil {
+		require.NotEqual(t, victim, resolved)
+	}
+}
+
+// TestCreateSymlinkAllowsUnrelatedClimb writes a normal symlink while a
+// dangling climb-after link is already in OutputDir and still resolves inside.
+func TestCreateSymlinkAllowsUnrelatedClimb(t *testing.T) {
+	t.Parallel()
+	skipWithoutSymlinks(t)
+
+	root := t.TempDir()
+	out := filepath.Join(root, "out")
+	victim := filepath.Join(root, "victim")
+
+	require.NoError(t, os.MkdirAll(out, 0o750))
+	require.NoError(t, os.WriteFile(victim, []byte("pwned"), 0o600))
+	require.NoError(t, os.Symlink("missing/../victim", filepath.Join(out, "existing")))
+
+	xFile := &XFile{FilePath: "planted.tar", OutputDir: out}
+	require.NoError(t, xFile.createSymlink(filepath.Join(out, "readme"), "README"))
+
+	got, err := os.Readlink(filepath.Join(out, "readme"))
+	require.NoError(t, err)
+	require.Equal(t, "README", got)
+
+	resolved, evalErr := filepath.EvalSymlinks(filepath.Join(out, "existing"))
+	if evalErr == nil {
+		require.NotEqual(t, victim, resolved)
+	}
+}
+
+// TestCreateSymlinkDoesNotArmPlantedChain is the same escape one hop further
+// out: existing -> other -> missing/../victim.
+func TestCreateSymlinkDoesNotArmPlantedChain(t *testing.T) {
+	t.Parallel()
+	skipWithoutSymlinks(t)
+
+	root := t.TempDir()
+	out := filepath.Join(root, "out")
+	victim := filepath.Join(root, "victim")
+
+	require.NoError(t, os.MkdirAll(out, 0o750))
+	require.NoError(t, os.WriteFile(victim, []byte("pwned"), 0o600))
+	require.NoError(t, os.Symlink("missing/../victim", filepath.Join(out, "other")))
+	require.NoError(t, os.Symlink("other", filepath.Join(out, "existing")))
+
+	xFile := &XFile{FilePath: "planted.tar", OutputDir: out}
+
+	err := xFile.createSymlink(filepath.Join(out, "bar"), "existing")
+	require.ErrorIs(t, err, ErrInvalidPath)
+
+	_, statErr := os.Lstat(filepath.Join(out, "bar"))
+	require.ErrorIs(t, statErr, os.ErrNotExist)
+
+	err = xFile.createSymlink(filepath.Join(out, "missing"), ".")
+	require.ErrorIs(t, err, ErrInvalidPath)
+
+	_, statErr = os.Lstat(filepath.Join(out, "missing"))
+	require.ErrorIs(t, statErr, os.ErrNotExist)
+
+	resolved, evalErr := filepath.EvalSymlinks(filepath.Join(out, "existing"))
+	if evalErr == nil {
+		require.NotEqual(t, victim, resolved)
+	}
+}
+
+// TestCreateHardLinkDoesNotArmPlantedClimb is a hard link to a symlink to "."
+// under the missing name. That arms "missing/../victim" the same way a new
+// symlink would.
+func TestCreateHardLinkDoesNotArmPlantedClimb(t *testing.T) {
+	t.Parallel()
+	skipWithoutSymlinks(t)
+
+	root := t.TempDir()
+	out := filepath.Join(root, "out")
+	victim := filepath.Join(root, "victim")
+
+	require.NoError(t, os.MkdirAll(out, 0o750))
+	require.NoError(t, os.WriteFile(victim, []byte("pwned"), 0o600))
+	require.NoError(t, os.Symlink(".", filepath.Join(out, "shallow")))
+	require.NoError(t, os.Symlink("missing/../victim", filepath.Join(out, "existing")))
+
+	xFile := &XFile{FilePath: "planted.tar", OutputDir: out}
+	err := xFile.createHardLink(filepath.Join(out, "missing"), "shallow")
+	require.ErrorIs(t, err, ErrInvalidPath)
+
+	_, statErr := os.Lstat(filepath.Join(out, "missing"))
+	require.ErrorIs(t, statErr, os.ErrNotExist)
+	_, statErr = os.Lstat(filepath.Join(out, "shallow"))
+	require.NoError(t, statErr)
+
+	resolved, evalErr := filepath.EvalSymlinks(filepath.Join(out, "existing"))
+	if evalErr == nil {
+		require.NotEqual(t, victim, resolved)
+	}
+}
+
+// TestCreateSymlinkIgnoresClimbAlreadyOutside still writes an unrelated
+// symlink when a climb-after link already resolved outside OutputDir.
+func TestCreateSymlinkIgnoresClimbAlreadyOutside(t *testing.T) {
+	t.Parallel()
+	skipWithoutSymlinks(t)
+
+	root := t.TempDir()
+	out := filepath.Join(root, "out")
+	require.NoError(t, os.MkdirAll(out, 0o750))
+	require.NoError(t, os.Symlink("foo/../../victim", filepath.Join(out, "existing")))
+
+	xFile := &XFile{FilePath: "planted.tar", OutputDir: out}
+	require.NoError(t, xFile.createSymlink(filepath.Join(out, "readme"), "README"))
+}

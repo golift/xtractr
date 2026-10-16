@@ -6,12 +6,21 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 )
+
+// symlinkCreate serializes symlink and hard-link creation across workers.
+// Zip, 7z, and ASAR extract those entries concurrently, and the climb check
+// has to see every link created before it.
+//
+//nolint:gochecknoglobals // password retries copy XFile, so this lock cannot live on it.
+var symlinkCreate sync.Mutex
 
 type file struct {
 	Path     string
@@ -705,6 +714,13 @@ func followLinkElem(parent, link string, budget *symlinkBudget) (string, error) 
 		return "", fmt.Errorf("readlink %s: %w", link, err)
 	}
 
+	// The archive entry's own text may be a single name. The ".." that escapes
+	// can live in this existing link, which a later entry can arm by creating
+	// the missing component as a shallower symlink.
+	if linkTargetClimbsAfterComponent(target) {
+		return "", fmt.Errorf("%w: %s", ErrInvalidPath, target)
+	}
+
 	target = slashToSeparator(target)
 	start := parent
 	rest := target
@@ -804,6 +820,13 @@ func (x *XFile) ensureLinkWithinOutput(linkPath, linkName string) error {
 }
 
 func (x *XFile) createSymlink(path, linkName string) error {
+	symlinkCreate.Lock()
+	defer symlinkCreate.Unlock()
+
+	return x.createSymlinkLocked(path, linkName)
+}
+
+func (x *XFile) createSymlinkLocked(path, linkName string) error {
 	if linkName == "" {
 		x.Printf("Warning: skipping symlink with empty target: %s", path)
 
@@ -815,6 +838,11 @@ func (x *XFile) createSymlink(path, linkName string) error {
 		return err
 	}
 
+	before, err := x.climbInside()
+	if err != nil {
+		return err
+	}
+
 	x.Debugf("Writing archived symlink: %s -> %s", path, linkName)
 
 	err = os.Symlink(linkName, path)
@@ -822,16 +850,180 @@ func (x *XFile) createSymlink(path, linkName string) error {
 		return fmt.Errorf("%s: creating symlink: %w: %s -> %s", x.FilePath, err, path, linkName)
 	}
 
+	// Creating this link can arm an older one whose text is "missing/../victim"
+	// without this entry naming it. Roll the new link back when that happens.
+	err = x.finishClimbLinks(before, path)
+	if err != nil {
+		_ = os.Remove(path)
+
+		return err
+	}
+
 	err = x.countExtracted()
 	if err != nil {
 		_ = os.Remove(path)
+		x.dropClimbLink(path)
+
 		return err
 	}
 
 	return nil
 }
 
+// climbInside records whether each stored climb-after symlink currently
+// resolves inside OutputDir. The caller compares this with the tree after the
+// new link exists.
+func (x *XFile) climbInside() (map[string]bool, error) {
+	err := x.collectClimbLinks()
+	if err != nil {
+		return nil, err
+	}
+
+	inside := make(map[string]bool, len(x.climbLinks))
+
+	for _, link := range x.climbLinks {
+		resolvedInside, err := x.linkResolvesInside(link)
+		if err != nil {
+			return nil, err
+		}
+
+		inside[link] = resolvedInside
+	}
+
+	return inside, nil
+}
+
+func (x *XFile) collectClimbLinks() error {
+	if x.climbCollected {
+		return nil
+	}
+
+	root := resolveExisting(x.OutputDir)
+
+	var found []string
+
+	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return fmt.Errorf("walk %s: %w", path, walkErr)
+		}
+
+		if entry.Type()&os.ModeSymlink == 0 {
+			return nil
+		}
+
+		target, err := os.Readlink(path)
+		if err != nil {
+			return fmt.Errorf("readlink %s: %w", path, err)
+		}
+
+		if linkTargetClimbsAfterComponent(target) {
+			found = append(found, path)
+		}
+
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("%s: %w", x.FilePath, err)
+	}
+
+	x.climbLinks = found
+	x.climbCollected = true
+
+	return nil
+}
+
+// finishClimbLinks fails when a climb-after symlink resolves outside OutputDir
+// and did not already do so before this link was created. A link that was
+// already outside is left alone so an unrelated symlink can still be written.
+func (x *XFile) finishClimbLinks(before map[string]bool, newPath string) error {
+	added, err := x.noteClimbLink(newPath)
+	if err != nil {
+		return err
+	}
+
+	for _, link := range x.climbLinks {
+		resolvedInside, err := x.linkResolvesInside(link)
+		if err != nil {
+			if added {
+				x.dropClimbLink(newPath)
+			}
+
+			return err
+		}
+
+		if resolvedInside {
+			continue
+		}
+
+		if wasInside, ok := before[link]; ok && !wasInside {
+			continue
+		}
+
+		if added {
+			x.dropClimbLink(newPath)
+		}
+
+		return fmt.Errorf("%s: %w: %s", x.FilePath, ErrInvalidPath, link)
+	}
+
+	return nil
+}
+
+func (x *XFile) noteClimbLink(path string) (bool, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return false, fmt.Errorf("%s: lstat %s: %w", x.FilePath, path, err)
+	}
+
+	// Hard links to regular files are not symlink text. Readlink rejects them.
+	if info.Mode()&os.ModeSymlink == 0 {
+		return false, nil
+	}
+
+	target, err := os.Readlink(path)
+	if err != nil {
+		return false, fmt.Errorf("%s: readlink %s: %w", x.FilePath, path, err)
+	}
+
+	if !linkTargetClimbsAfterComponent(target) || slices.Contains(x.climbLinks, path) {
+		return false, nil
+	}
+
+	x.climbLinks = append(x.climbLinks, path)
+
+	return true, nil
+}
+
+func (x *XFile) dropClimbLink(path string) {
+	x.climbLinks = slices.DeleteFunc(x.climbLinks, func(link string) bool {
+		return link == path
+	})
+}
+
+func (x *XFile) linkResolvesInside(linkPath string) (bool, error) {
+	target, err := os.Readlink(linkPath)
+	if err != nil {
+		return false, fmt.Errorf("%s: readlink %s: %w", x.FilePath, linkPath, err)
+	}
+
+	resolved, err := walkLinkTarget(linkPath, target)
+	if err != nil {
+		return false, fmt.Errorf("%s: %w", x.FilePath, err)
+	}
+
+	base := resolveExisting(x.OutputDir)
+
+	return pathWithin(base, resolved) && x.resolvedWithinOutput(resolved), nil
+}
+
 func (x *XFile) createHardLink(path, linkName string) error {
+	symlinkCreate.Lock()
+	defer symlinkCreate.Unlock()
+
+	return x.createHardLinkLocked(path, linkName)
+}
+
+func (x *XFile) createHardLinkLocked(path, linkName string) error {
 	if linkName == "" {
 		x.Printf("Warning: skipping hard link with empty target: %s", path)
 
@@ -850,11 +1042,25 @@ func (x *XFile) createHardLink(path, linkName string) error {
 
 	x.Debugf("Writing archived hard link: %s => %s", path, target)
 
-	err := os.Link(target, path)
+	before, err := x.climbInside()
+	if err != nil {
+		return err
+	}
+
+	err = os.Link(target, path)
 	if err == nil {
+		err = x.finishClimbLinks(before, path)
+		if err != nil {
+			_ = os.Remove(path)
+
+			return err
+		}
+
 		countErr := x.countExtracted()
 		if countErr != nil {
 			_ = os.Remove(path)
+			x.dropClimbLink(path)
+
 			return countErr
 		}
 
@@ -872,5 +1078,5 @@ func (x *XFile) createHardLink(path, linkName string) error {
 	// (e.g. target not extracted yet, or the filesystem does not support them).
 	x.Debugf("Hard link failed (%v); falling back to symlink: %s -> %s", linkErr, path, rel)
 
-	return x.createSymlink(path, rel)
+	return x.createSymlinkLocked(path, rel)
 }
