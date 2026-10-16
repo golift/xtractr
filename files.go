@@ -200,10 +200,11 @@ type XFile struct {
 	// refused collects files not moved into place during Extract; it is
 	// copied into Response.Refused by processArchive.
 	refused []RefusedFile
-	// climbLinks are symlinks under OutputDir whose target text climbs after a
-	// component. A later link can make that text resolve outside OutputDir.
-	// Collected once, on the first symlink or hard-link write. Guarded by
-	// symlinkCreate, not a lock in this struct: password retries copy XFile.
+	// climbLinks are symlinks that were already under OutputDir with text that
+	// climbs after a component ("missing/../victim"). A link this extract
+	// creates can make that text resolve outside OutputDir. Collected once, on
+	// the first symlink or hard-link write, and guarded by symlinkCreate rather
+	// than a lock in this struct: password retries copy XFile.
 	climbLinks     []string
 	climbCollected bool
 }

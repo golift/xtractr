@@ -391,31 +391,27 @@ type tarMember struct {
 }
 
 func writeTarGzipMembers(dest string, members []tarMember) error {
+	return writeTarMembers(dest, true, members)
+}
+
+// writeTarMembers writes a tar, gzip-compressed when compress is set. A plain
+// tar is useful with ExtractFile: when a .tar.gz extract fails, ExtractFile
+// falls back to plain gunzip and hides the tar error.
+func writeTarMembers(dest string, compress bool, members []tarMember) error {
 	archiveFile, err := os.Create(dest)
 	if err != nil {
 		return fmt.Errorf("create tar: %w", err)
 	}
 
-	gzipWriter := gzip.NewWriter(archiveFile)
+	var gzipWriter io.WriteCloser = nopWriteCloser{archiveFile}
+	if compress {
+		gzipWriter = gzip.NewWriter(archiveFile)
+	}
+
 	tarWriter := tar.NewWriter(gzipWriter)
 
 	for _, member := range members {
-		header := &tar.Header{
-			Name:    member.name,
-			Mode:    0o755,
-			ModTime: time.Now(),
-		}
-		switch {
-		case member.dir:
-			header.Typeflag = tar.TypeDir
-		case member.link != "":
-			header.Typeflag = tar.TypeSymlink
-			header.Linkname = member.link
-		default:
-			header.Typeflag = tar.TypeReg
-		}
-
-		err = tarWriter.WriteHeader(header)
+		err = tarWriter.WriteHeader(member.header())
 		if err != nil {
 			_ = tarWriter.Close()
 			_ = gzipWriter.Close()
@@ -447,6 +443,29 @@ func writeTarGzipMembers(dest string, members []tarMember) error {
 
 	return nil
 }
+
+func (m tarMember) header() *tar.Header {
+	header := &tar.Header{
+		Name:     m.name,
+		Mode:     0o755,
+		ModTime:  time.Now(),
+		Typeflag: tar.TypeReg,
+	}
+
+	switch {
+	case m.dir:
+		header.Typeflag = tar.TypeDir
+	case m.link != "":
+		header.Typeflag = tar.TypeSymlink
+		header.Linkname = m.link
+	}
+
+	return header
+}
+
+type nopWriteCloser struct{ io.Writer }
+
+func (nopWriteCloser) Close() error { return nil }
 
 // TestTarPlantedSymlinkClimb arms a link that was already in OutputDir.
 // "bar -> existing" follows "missing/../victim", and "missing -> ." makes that
@@ -527,6 +546,70 @@ func assertTarPlantedClimbRejected(t *testing.T, withDir bool, members []tarMemb
 		assert.NotEqual(t, victim, resolved)
 		assertPathInside(t, out, filepath.Join(out, "existing"))
 	}
+}
+
+// TestTarSquashRootLinkEscape is a link that resolves inside OutputDir only
+// by leaving the archive root. SquashRoot moves the root's children up one
+// level, so the same text would then climb out of OutputDir.
+func TestTarSquashRootLinkEscape(t *testing.T) {
+	t.Parallel()
+
+	err := os.Symlink("target", filepath.Join(t.TempDir(), "symlink-probe"))
+	if err != nil {
+		t.Skipf("symlinks unavailable on this platform: %v", err)
+	}
+
+	t.Run("escapes", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		out := filepath.Join(root, "out")
+		victim := filepath.Join(root, "victim")
+
+		require.NoError(t, os.MkdirAll(out, 0o750))
+		require.NoError(t, os.WriteFile(victim, []byte("pwned"), 0o600))
+
+		archive := filepath.Join(root, "squash.tar")
+		require.NoError(t, writeTarMembers(archive, false, []tarMember{
+			{name: "pkg/file.txt"},
+			{name: "pkg/up", link: "../victim"},
+		}))
+
+		_, _, _, err := xtractr.ExtractFile(&xtractr.XFile{
+			FilePath:   archive,
+			OutputDir:  out,
+			FileMode:   0o644,
+			DirMode:    0o755,
+			SquashRoot: true,
+		})
+		require.ErrorIs(t, err, xtractr.ErrInvalidPath)
+		assertAbsent(t, filepath.Join(out, "up"))
+	})
+
+	t.Run("stays inside root", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		out := filepath.Join(root, "out")
+		require.NoError(t, os.MkdirAll(out, 0o750))
+
+		archive := filepath.Join(root, "squash.tar")
+		require.NoError(t, writeTarMembers(archive, false, []tarMember{
+			{name: "pkg/lib/real.txt"},
+			{name: "pkg/bin/link", link: "../lib/real.txt"},
+		}))
+
+		_, _, _, err := xtractr.ExtractFile(&xtractr.XFile{
+			FilePath:   archive,
+			OutputDir:  out,
+			FileMode:   0o644,
+			DirMode:    0o755,
+			SquashRoot: true,
+		})
+		require.NoError(t, err)
+		assertAbsent(t, filepath.Join(out, "pkg"))
+		assertPathInside(t, out, filepath.Join(out, "bin", "link"))
+	})
 }
 
 // TestTarEmptyLinkSkipped warns and continues when a link target is empty.
