@@ -74,7 +74,6 @@ func (x *XFile) uncpioFile(cpioFile *cpio.Header, cpioReader *cpio.Reader) (uint
 		Path:     x.clean(cpioFile.Name),
 		Data:     cpioReader,
 		FileMode: cpioFile.FileInfo().Mode(),
-		DirMode:  x.DirMode,
 		Mtime:    cpioFile.ModTime,
 	}
 
@@ -84,7 +83,7 @@ func (x *XFile) uncpioFile(cpioFile *cpio.Header, cpioReader *cpio.Reader) (uint
 	}
 
 	if cpioFile.Mode.IsDir() || cpioFile.FileInfo().IsDir() {
-		err := x.mkDir(file.Path, cpioFile.FileInfo().Mode(), cpioFile.ModTime)
+		err := x.mkDir(file.Path, cpioFile.ModTime)
 		if err != nil {
 			return 0, fmt.Errorf("making cpio dir: %w", err)
 		}
@@ -95,7 +94,7 @@ func (x *XFile) uncpioFile(cpioFile *cpio.Header, cpioReader *cpio.Reader) (uint
 	// This turns hard links into symlinks.
 	if cpioFile.Linkname != "" {
 		// The link's parent folder may not have its own entry in the archive.
-		err := x.mkDir(filepath.Dir(file.Path), x.DirMode, cpioFile.ModTime)
+		err := x.mkDir(filepath.Dir(file.Path), cpioFile.ModTime)
 		if err != nil {
 			return 0, fmt.Errorf("making cpio link parent dir: %w", err)
 		}

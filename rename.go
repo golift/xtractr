@@ -155,9 +155,7 @@ func moveFilesKnown( //nolint:cyclop,funlen
 		log = NoLogger()
 	}
 
-	if dirMode == 0 {
-		dirMode = DefaultDirMode
-	}
+	dirMode = permMode(dirMode, DefaultDirMode)
 
 	var (
 		newFiles = []string{}

@@ -110,7 +110,7 @@ func (x *XFile) zipPrepareEntries(
 		files = append(files, filepath.Join(x.OutputDir, decodedName))
 
 		if zipFile.FileInfo().IsDir() {
-			err := x.mkDir(cleanPath, zipFile.Mode(), zipFile.Modified)
+			err := x.mkDir(cleanPath, zipFile.Modified)
 			if err != nil {
 				return nil, files, fmt.Errorf("%s: making zipFile dir: %w", x.FilePath, err)
 			}
@@ -135,7 +135,6 @@ func (x *XFile) extractZIPEntry(entry zipFileEntry) (err error) {
 		Path:     x.clean(entry.decodedName),
 		Data:     zFile,
 		FileMode: entry.zipFile.Mode(),
-		DirMode:  x.DirMode,
 		Mtime:    entry.zipFile.Modified,
 		Atime:    time.Now(),
 	}
@@ -162,7 +161,6 @@ func (x *XFile) unzipWithName(zipFile *zip.File, name string) (size uint64, path
 		Path:     x.clean(name),
 		Data:     zFile,
 		FileMode: zipFile.Mode(),
-		DirMode:  x.DirMode,
 		Mtime:    zipFile.Modified,
 		Atime:    time.Now(),
 	}
@@ -176,7 +174,7 @@ func (x *XFile) unzipWithName(zipFile *zip.File, name string) (size uint64, path
 	if zipFile.FileInfo().IsDir() {
 		x.Debugf("Writing archived directory: %s", file.Path)
 
-		err = x.mkDir(file.Path, zipFile.Mode(), zipFile.Modified)
+		err = x.mkDir(file.Path, zipFile.Modified)
 		closeNamed(zFile, &err)
 
 		if err != nil {
