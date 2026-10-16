@@ -71,6 +71,12 @@ func (x *XFile) squashRoot(files []string) ([]string, error) {
 			return files, nil
 		}
 
+		// ExtractFile binds this. A direct ExtractTarGzip (or any other
+		// Extract* call) does not, and a nil moveFiles panics here.
+		// Called through a variable: a direct call to bindMoveFiles closes an
+		// initialization cycle through IsArchiveFile and extension2function.
+		ensureMoveFiles(x)
+
 		return x.moveFiles(from, x.OutputDir, false)
 	}
 

@@ -227,6 +227,64 @@ func TestTarEmptyLinkSkipped(t *testing.T) {
 	assert.Equal(t, "kept", string(data))
 }
 
+// TestExtractTarGzipSquashRoot moves a single archive root up without going
+// through ExtractFile. That path used to panic: only ExtractFile bound moveFiles.
+func TestExtractTarGzipSquashRoot(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	archive := filepath.Join(dir, "one.tar.gz")
+	require.NoError(t, writeGzipTarMember(archive, "pkg/a.txt", []byte("hi")))
+
+	out := filepath.Join(dir, "out")
+	_, files, err := xtractr.ExtractTarGzip(&xtractr.XFile{
+		FilePath:   archive,
+		OutputDir:  out,
+		FileMode:   0o644,
+		DirMode:    0o755,
+		SquashRoot: true,
+	})
+	require.NoError(t, err)
+	require.FileExists(t, filepath.Join(out, "a.txt"))
+
+	_, err = os.Stat(filepath.Join(out, "pkg"))
+	require.ErrorIs(t, err, os.ErrNotExist)
+	require.NotEmpty(t, files)
+}
+
+func writeGzipTarMember(dest, name string, payload []byte) error {
+	archiveFile, err := os.Create(dest)
+	if err != nil {
+		return fmt.Errorf("create tar.gz: %w", err)
+	}
+
+	defer archiveFile.Close()
+
+	gzipWriter := gzip.NewWriter(archiveFile)
+	defer gzipWriter.Close()
+
+	tarWriter := tar.NewWriter(gzipWriter)
+	defer tarWriter.Close()
+
+	err = tarWriter.WriteHeader(&tar.Header{
+		Name:     name,
+		Mode:     0o644,
+		Size:     int64(len(payload)),
+		Typeflag: tar.TypeReg,
+		ModTime:  time.Now(),
+	})
+	if err != nil {
+		return fmt.Errorf("tar header: %w", err)
+	}
+
+	_, err = tarWriter.Write(payload)
+	if err != nil {
+		return fmt.Errorf("tar payload: %w", err)
+	}
+
+	return nil
+}
+
 func mustFileSize(t *testing.T, path string) int64 {
 	t.Helper()
 
