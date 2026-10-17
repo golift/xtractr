@@ -48,7 +48,11 @@ func (x *XFile) squashRoot(files []string) ([]string, error) {
 	roots := map[string]struct{}{}
 
 	for _, path := range files {
-		// Remove the output dir suffix, then split on `/` (or `\`) and get the first item.
+		// Remove the output dir prefix, then split on the separator and get the
+		// first item. Tar records header names, which use "/" on every OS;
+		// without FromSlash, Windows treats "pkg/a.txt" as one root, stats the
+		// file, and skips the move because it is not a directory.
+		path = filepath.FromSlash(path)
 		newRoot := strings.TrimLeft(strings.TrimPrefix(path, x.OutputDir), string(filepath.Separator))
 		roots[strings.SplitN(newRoot, string(filepath.Separator), 2)[0]] = struct{}{} //nolint:mnd
 	}
