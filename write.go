@@ -108,7 +108,7 @@ func (x *XFile) squashRoot(files []string) ([]string, error) {
 		// initialization cycle through IsArchiveFile and extension2function.
 		ensureMoveFiles(x)
 
-		return x.moveSquashRoot(from)
+		return x.moveSquashRoot(from, files)
 	}
 
 	return files, nil
@@ -124,18 +124,33 @@ func (x *XFile) squashRoot(files []string) ([]string, error) {
 // folder when it is done. The write list is rebased to match. A move that
 // fails leaves the aside folder, as it would have left the root: the logged
 // paths name it.
-func (x *XFile) moveSquashRoot(root string) ([]string, error) {
-	// The aside folder is a sibling of the children's destinations, so a
-	// child named like it (foo/foo.xtractr_aside/bar.txt) would be refused
-	// and deleted with it the same way. The filesystem is asked whether a
-	// child answers to the name, so its aliases (case, normalization) count.
-	aside, err := setAside(root, x.Suffix, func(aside string) bool {
-		_, err := os.Lstat(filepath.Join(root, filepath.Base(aside)))
+//
+// The aside name has to be clear. A child of root named like it would find
+// its destination occupied by the aside folder, and be refused and deleted
+// with it the way a child named like the root was; the filesystem is asked
+// whether a child answers to the name, so its aliases (case, normalization)
+// count. A link already in OutputDir whose resolution looked the name up
+// found nothing there; with the root under it, that link would resolve
+// through the moved tree, a layout nothing audits. Neither is worked
+// around: the squash is refused, with the files where the archive put them.
+func (x *XFile) moveSquashRoot(root string, files []string) ([]string, error) {
+	aside := asideName(root, x.Suffix)
 
-		return err == nil
-	})
+	_, err := os.Lstat(filepath.Join(root, filepath.Base(aside)))
+	if err == nil {
+		return files, fmt.Errorf("%s: squash root: %w: %s has a child named %s",
+			x.FilePath, ErrAsideTaken, root, filepath.Base(aside))
+	}
+
+	x.collectPlantedLinks()
+
+	if link := x.plantedVisiting(aside); link != "" {
+		return files, fmt.Errorf("%s: squash root: %w: %s looks up %s", x.FilePath, ErrAsideTaken, link, aside)
+	}
+
+	err = setAside(root, aside)
 	if err != nil {
-		return nil, fmt.Errorf("%s: squash root: %w", x.FilePath, err)
+		return files, fmt.Errorf("%s: squash root: %w", x.FilePath, err)
 	}
 
 	x.moveKnown = rebasePaths(x.moveKnown, root, aside)
@@ -144,47 +159,41 @@ func (x *XFile) moveSquashRoot(root string) ([]string, error) {
 }
 
 // asideTail brands the name an entry is renamed to while this extract needs
-// its path: <name>.<brand>_aside, numbered when that is taken, with the name
-// truncated to fit NAME_MAX, like the copy siblings (siblingStem). The brand
-// is Suffix, so it follows the partial and link siblings; the scavenger does
-// not match this tail, since an aside holds something that was there before
-// the extract, or extracted files a failed move left behind.
+// its path. The scavenger does not match it: an aside holds something that
+// was there before the extract, or extracted files a failed move left.
 const asideTail = "_aside"
 
-// setAside renames path to a free sibling name and returns that name. A name
-// is free when nothing exists at it and taken, when given, does not claim
-// it: callers know names that are empty now and filled in later. The final
-// component is renamed as is: a symlink at path moves, it is not followed.
-func setAside(path, suffix string, taken func(aside string) bool) (string, error) {
-	const attempts = 1001
-
+// asideName is the sibling an entry at path is renamed to: <name>.<brand>_aside,
+// branded by Suffix like the partial and link copy siblings and truncated to
+// fit NAME_MAX (siblingStem). There is one name per entry. A name that is
+// taken is an error (ErrAsideTaken), not a reason to try another: the aside
+// is in place for the length of a link write or a squash move, and whatever
+// claims the name, an entry, an archive member, or a link that looks it up,
+// is not something to work around.
+func asideName(path, suffix string) string {
 	dir, stem, fullTail := siblingStem(path, suffix, asideTail)
 
-	for attempt := range attempts {
-		aside := siblingCandidate(dir, stem, fullTail, attempt)
+	return filepath.Join(dir, stem+fullTail)
+}
 
-		_, err := os.Lstat(aside)
-		if err == nil {
-			continue
-		}
-
-		if !errors.Is(err, os.ErrNotExist) {
-			return "", fmt.Errorf("lstat %s: %w", aside, err)
-		}
-
-		if taken != nil && taken(aside) {
-			continue
-		}
-
-		err = os.Rename(path, aside)
-		if err != nil {
-			return "", fmt.Errorf("setting aside %s: %w", path, err)
-		}
-
-		return aside, nil
+// setAside renames path to aside, which must not exist. The final component
+// is renamed as is: a symlink at path moves, it is not followed.
+func setAside(path, aside string) error {
+	_, err := os.Lstat(aside)
+	if err == nil {
+		return fmt.Errorf("%w: %s", ErrAsideTaken, aside)
 	}
 
-	return "", fmt.Errorf("%w: no free name beside %s", ErrNameTooLong, path)
+	if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("lstat %s: %w", aside, err)
+	}
+
+	err = os.Rename(path, aside)
+	if err != nil {
+		return fmt.Errorf("setting aside %s: %w", path, err)
+	}
+
+	return nil
 }
 
 // rebasePaths returns paths with those under oldBase moved under newBase.
@@ -1421,7 +1430,11 @@ func (x *XFile) replaceEntry(path string) (replacedEntry, error) {
 	case old.mode.IsDir():
 		err = os.Remove(path)
 	default:
-		old.aside, err = setAside(path, x.Suffix, nil)
+		aside := asideName(path, x.Suffix)
+		err = setAside(path, aside)
+		if err == nil {
+			old.aside = aside
+		}
 	}
 
 	if err != nil {
@@ -1521,6 +1534,24 @@ func (x *XFile) collectPlantedLinks() {
 
 		return nil
 	})
+}
+
+// plantedVisiting returns a planted link whose resolution looked up path, or
+// "" when none did. Something placed at path changes what that link resolves
+// to; a caller that is not going to audit the result refuses to place it.
+func (x *XFile) plantedVisiting(path string) string {
+	plantedMu.Lock()
+	defer plantedMu.Unlock()
+
+	path = filepath.Join(resolveExisting(filepath.Dir(path)), filepath.Base(path))
+
+	for idx := range x.planted {
+		if x.planted[idx].visited(path) {
+			return x.planted[idx].path
+		}
+	}
+
+	return ""
 }
 
 // plantedOutside returns the planted links that are not under dir.
@@ -1647,33 +1678,51 @@ func (x *XFile) createHardLinkLocked(path, linkName string) error {
 
 	x.Debugf("Writing archived hard link: %s => %s", path, target)
 
+	// The target is looked up before path is cleared for the link. One that
+	// is not there yet takes the symlink fallback without a link attempt, so
+	// the file replaceEntry sets aside at path is never what os.Link finds
+	// under the target's name: an archive can name the aside as its target,
+	// and the link would keep the old file's data under the new name.
+	_, err := os.Lstat(target)
+	if err != nil {
+		return x.hardLinkAsSymlink(path, target, err)
+	}
+
 	old, err := x.replaceEntry(path)
 	if err != nil {
 		return err
 	}
 
 	err = os.Link(target, path)
-	if err == nil {
-		return x.finishHardLink(path, old)
-	}
-
-	linkErr := err
-
-	rel, relErr := filepath.Rel(filepath.Dir(path), target)
-	if relErr != nil {
+	if err != nil {
+		// The filesystem has no hard links, or the target was the entry at
+		// path itself. The fallback starts over from what was there.
 		old.restore()
 
+		return x.hardLinkAsSymlink(path, target, err)
+	}
+
+	return x.finishHardLink(path, old)
+}
+
+// hardLinkAsSymlink writes a relative symlink where a hard link could not be
+// made: the target is not extracted yet, or the filesystem does not support
+// hard links. The text is checked like any archived symlink.
+func (x *XFile) hardLinkAsSymlink(path, target string, linkErr error) error {
+	rel, err := filepath.Rel(filepath.Dir(path), target)
+	if err != nil {
 		return fmt.Errorf("%s: creating hard link: %w: %s => %s", x.FilePath, linkErr, path, target)
 	}
 
-	// Fall back to a relative symlink when hard links are unavailable
-	// (e.g. target not extracted yet, or the filesystem does not support them).
 	x.Debugf("Hard link failed (%v); falling back to symlink: %s -> %s", linkErr, path, rel)
 
 	err = x.ensureLinkWithinOutput(path, rel)
 	if err != nil {
-		old.restore()
+		return err
+	}
 
+	old, err := x.replaceEntry(path)
+	if err != nil {
 		return err
 	}
 
