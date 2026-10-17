@@ -306,6 +306,7 @@ func ExtractFile(xFile *XFile) (size uint64, filesList, archiveList []string, er
 
 	sName := strings.ToLower(xFile.FilePath)
 	xFile.bindMoveFiles()
+	xFile.startBudget()
 
 	var extensionType string // archive type from matched extension, for error reporting when extraction fails
 
@@ -314,6 +315,8 @@ func ExtractFile(xFile *XFile) (size uint64, filesList, archiveList []string, er
 			continue
 		}
 
+		mark := xFile.markBudget()
+
 		size, filesList, archiveList, err = ext.Fn(xFile)
 		if err == nil {
 			return size, filesList, archiveList, nil
@@ -321,7 +324,15 @@ func ExtractFile(xFile *XFile) (size uint64, filesList, archiveList []string, er
 
 		// A resource cap aborts the extraction; do not re-extract via signature
 		// detection, which would reset the counters and could even report success.
-		if IsLimitError(err) {
+		// The same goes for a failure after a member was placed: the format was
+		// recognized, and that error is the result. A .tar.gz whose tar is
+		// extracted and then refused is still a valid gzip, and the fallback
+		// would gunzip it into OutputDir as a .tar and report success over the
+		// refusal, with the members left as they were. The budget says what this
+		// attempt placed; the return values do not. A shared budget's size counts
+		// the whole job, and a decompressor lists its output before it finds out
+		// the input is not its format.
+		if IsLimitError(err) || xFile.placedSince(mark) {
 			return size, filesList, archiveList, err
 		}
 

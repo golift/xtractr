@@ -2,6 +2,7 @@ package xtractr_test
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
 	"fmt"
 	"io"
@@ -386,8 +387,10 @@ func assertTarRetargetRejected(t *testing.T, members []tarMember) {
 
 type tarMember struct {
 	name string
-	link string
+	link string // symlink text, or the hard link's target when hard is set.
 	dir  bool
+	hard bool
+	data string // regular file content.
 }
 
 func writeTarGzipMembers(dest string, members []tarMember) error {
@@ -412,12 +415,16 @@ func writeTarMembers(dest string, compress bool, members []tarMember) error {
 
 	for _, member := range members {
 		err = tarWriter.WriteHeader(member.header())
+		if err == nil && member.data != "" {
+			_, err = tarWriter.Write([]byte(member.data))
+		}
+
 		if err != nil {
 			_ = tarWriter.Close()
 			_ = gzipWriter.Close()
 			_ = archiveFile.Close()
 
-			return fmt.Errorf("tar header %s: %w", member.name, err)
+			return fmt.Errorf("tar member %s: %w", member.name, err)
 		}
 	}
 
@@ -450,11 +457,15 @@ func (m tarMember) header() *tar.Header {
 		Mode:     0o755,
 		ModTime:  time.Now(),
 		Typeflag: tar.TypeReg,
+		Size:     int64(len(m.data)),
 	}
 
 	switch {
 	case m.dir:
 		header.Typeflag = tar.TypeDir
+	case m.hard:
+		header.Typeflag = tar.TypeLink
+		header.Linkname = m.link
 	case m.link != "":
 		header.Typeflag = tar.TypeSymlink
 		header.Linkname = m.link
@@ -737,10 +748,19 @@ func TestTarDirUnderPlantedClimbStaysInside(t *testing.T) {
 func squashTar(t *testing.T, out string, members []tarMember) error {
 	t.Helper()
 
+	_, err := squashTarFiles(t, out, members)
+
+	return err
+}
+
+// squashTarFiles is squashTar returning the extracted paths as well.
+func squashTarFiles(t *testing.T, out string, members []tarMember) ([]string, error) {
+	t.Helper()
+
 	archive := filepath.Join(filepath.Dir(out), "squash.tar")
 	require.NoError(t, writeTarMembers(archive, false, members))
 
-	_, _, _, err := xtractr.ExtractFile(&xtractr.XFile{ //nolint:dogsled // only the error matters here.
+	_, files, _, err := xtractr.ExtractFile(&xtractr.XFile{
 		FilePath:   archive,
 		OutputDir:  out,
 		FileMode:   0o644,
@@ -748,10 +768,10 @@ func squashTar(t *testing.T, out string, members []tarMember) error {
 		SquashRoot: true,
 	})
 	if err != nil {
-		return fmt.Errorf("extract: %w", err)
+		return files, fmt.Errorf("extract: %w", err)
 	}
 
-	return nil
+	return files, nil
 }
 
 // TestTarSquashRootLinkEscape covers links that are inside OutputDir where the
@@ -837,6 +857,28 @@ func TestTarSquashRootLinkEscape(t *testing.T) {
 		assertAbsent(t, filepath.Join(out, "missing"))
 	})
 
+	// No link in the archive at all. pkg/missing is a directory, and moved
+	// to out/missing it arms the planted out/existing -> missing/../../victim
+	// the way creating it there would; mkdirComponent refuses that, and the
+	// move used to skip the planted links when root held no links.
+	t.Run("directory arms planted link", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		out := filepath.Join(root, "out")
+		victim := filepath.Join(root, "victim")
+
+		require.NoError(t, os.MkdirAll(out, 0o750))
+		require.NoError(t, os.WriteFile(victim, []byte("pwned"), 0o600))
+		require.NoError(t, os.Symlink("missing/../../victim", filepath.Join(out, "existing")))
+
+		err := squashTar(t, out, []tarMember{{name: "pkg/missing/file.txt"}})
+		require.ErrorIs(t, err, xtractr.ErrInvalidPath)
+		assertAbsent(t, filepath.Join(out, "missing"))
+		assertRegularFile(t, filepath.Join(out, "pkg", "missing", "file.txt"))
+		assertNotResolvingTo(t, filepath.Join(out, "existing"), victim)
+	})
+
 	// pkg/link -> b/c/planted goes through the moved pkg/b -> kept into a
 	// planted link that already pointed outside. Treating the not-yet-moved
 	// b as a missing name would pass this lexically.
@@ -915,6 +957,521 @@ func TestTarSquashRootLinkEscape(t *testing.T) {
 		assertAbsent(t, filepath.Join(out, "pkg"))
 		assertPathInside(t, out, filepath.Join(out, "link"))
 	})
+}
+
+// TestTarSquashRootSameNamedChild squashes roots with a child of the same
+// name. The child's destination is the root's own path, which used to be
+// occupied when the move got there; the child was refused, deleted with the
+// root, and the extract came back empty with a nil error. The root is moved
+// aside before its children now, so the child takes the name.
+func TestTarSquashRootSameNamedChild(t *testing.T) {
+	t.Parallel()
+
+	t.Run("directory", func(t *testing.T) {
+		t.Parallel()
+
+		out := filepath.Join(t.TempDir(), "out")
+		require.NoError(t, os.MkdirAll(out, 0o750))
+
+		files, err := squashTarFiles(t, out, []tarMember{{name: "foo/foo/bar.txt"}})
+		require.NoError(t, err)
+		assert.Equal(t, []string{filepath.Join(out, "foo")}, files)
+		assertRegularFile(t, filepath.Join(out, "foo", "bar.txt"))
+		assertDirNames(t, out, "foo")
+	})
+
+	t.Run("file", func(t *testing.T) {
+		t.Parallel()
+
+		out := filepath.Join(t.TempDir(), "out")
+		require.NoError(t, os.MkdirAll(out, 0o750))
+
+		files, err := squashTarFiles(t, out, []tarMember{{name: "foo/foo"}})
+		require.NoError(t, err)
+		assert.Equal(t, []string{filepath.Join(out, "foo")}, files)
+		assertRegularFile(t, filepath.Join(out, "foo"))
+		assertDirNames(t, out, "foo")
+	})
+
+	t.Run("with sibling", func(t *testing.T) {
+		t.Parallel()
+
+		out := filepath.Join(t.TempDir(), "out")
+		require.NoError(t, os.MkdirAll(out, 0o750))
+
+		files, err := squashTarFiles(t, out, []tarMember{
+			{name: "foo/foo/bar.txt"},
+			{name: "foo/other.txt"},
+		})
+		require.NoError(t, err)
+		assert.ElementsMatch(t, []string{filepath.Join(out, "foo"), filepath.Join(out, "other.txt")}, files)
+		assertRegularFile(t, filepath.Join(out, "foo", "bar.txt"))
+		assertRegularFile(t, filepath.Join(out, "other.txt"))
+		assertDirNames(t, out, "foo", "other.txt")
+	})
+
+	// A case-insensitive filesystem finds the root under the child's spelling
+	// too. The child still takes the name once the root is aside.
+	t.Run("other spelling", func(t *testing.T) {
+		t.Parallel()
+
+		out := filepath.Join(t.TempDir(), "out")
+		require.NoError(t, os.MkdirAll(out, 0o750))
+
+		err := squashTar(t, out, []tarMember{{name: "foo/Foo/bar.txt"}})
+		require.NoError(t, err)
+		assertRegularFile(t, filepath.Join(out, "Foo", "bar.txt"))
+		assertDirNames(t, out, "Foo")
+	})
+
+	// The aside folder is a sibling of the children's destinations, so a
+	// child named like it would be refused and deleted with it, the way a
+	// child named like the root was. The squash is refused instead, and the
+	// files stay where the archive put them.
+	t.Run("aside name", func(t *testing.T) {
+		t.Parallel()
+
+		out := filepath.Join(t.TempDir(), "out")
+		require.NoError(t, os.MkdirAll(out, 0o750))
+
+		err := squashTar(t, out, []tarMember{
+			{name: "foo/foo.xtractr_aside/bar.txt"},
+			{name: "foo/other.txt"},
+		})
+		require.ErrorIs(t, err, xtractr.ErrAsideTaken)
+		assertRegularFile(t, filepath.Join(out, "foo", "foo.xtractr_aside", "bar.txt"))
+		assertRegularFile(t, filepath.Join(out, "foo", "other.txt"))
+		assertDirNames(t, out, "foo")
+	})
+
+	// On a case-insensitive filesystem the child answers to the aside name
+	// in another spelling, and the filesystem is what decides that: the
+	// squash is refused there, and goes through where names are distinct.
+	t.Run("aside name other spelling", func(t *testing.T) {
+		t.Parallel()
+
+		out := filepath.Join(t.TempDir(), "out")
+		require.NoError(t, os.MkdirAll(out, 0o750))
+
+		err := squashTar(t, out, []tarMember{{name: "foo/FOO.XTRACTR_ASIDE/bar.txt"}})
+		if caseInsensitiveDir(t, out) {
+			require.ErrorIs(t, err, xtractr.ErrAsideTaken)
+			assertRegularFile(t, filepath.Join(out, "foo", "FOO.XTRACTR_ASIDE", "bar.txt"))
+			assertDirNames(t, out, "foo")
+
+			return
+		}
+
+		require.NoError(t, err)
+		assertRegularFile(t, filepath.Join(out, "FOO.XTRACTR_ASIDE", "bar.txt"))
+		assertDirNames(t, out, "FOO.XTRACTR_ASIDE")
+	})
+
+	// The audit checks a moved link at its destination, and used to resolve
+	// the chain above it on disk as it is now. With a child named like the
+	// root, that chain is the root's own entries: out/foo/sub was the root's
+	// sub -> dir/deep, standing in for the child's sub, a directory, and the
+	// link's ../../evil climbed from the wrong place, past the kept
+	// out/evil -> ../victim. The chain is stepped through the layout now.
+	t.Run("parent through moved child", func(t *testing.T) {
+		t.Parallel()
+		skipWithoutSymlinks(t)
+
+		root := t.TempDir()
+		out := filepath.Join(root, "out")
+		victim := filepath.Join(root, "victim")
+
+		require.NoError(t, os.MkdirAll(out, 0o750))
+		require.NoError(t, os.WriteFile(victim, []byte("pwned"), 0o600))
+		require.NoError(t, os.Symlink("../victim", filepath.Join(out, "evil")))
+
+		err := squashTar(t, out, []tarMember{
+			{name: "foo/dir/deep", dir: true},
+			{name: "foo/sub", link: "dir/deep"},
+			{name: "foo/foo/sub/link", link: "../../evil"},
+		})
+		require.ErrorIs(t, err, xtractr.ErrInvalidPath)
+		assertDirNames(t, out, "evil", "foo")
+		assertNotResolvingTo(t, filepath.Join(out, "foo", "sub", "link"), victim)
+	})
+
+	// The same chain with the child's sub a directory on both sides is fine:
+	// ../../evil from out/foo/sub/link reaches out/evil either way, and here
+	// evil is the root's own file, moved up. The layout walk must not refuse
+	// what the move does leave inside.
+	t.Run("parent through moved child stays inside", func(t *testing.T) {
+		t.Parallel()
+		skipWithoutSymlinks(t)
+
+		out := filepath.Join(t.TempDir(), "out")
+		require.NoError(t, os.MkdirAll(out, 0o750))
+
+		err := squashTar(t, out, []tarMember{
+			{name: "foo/evil", data: "fine"},
+			{name: "foo/sub", link: "dir/deep"},
+			{name: "foo/foo/sub/link", link: "../../evil"},
+		})
+		require.NoError(t, err)
+		assertDirNames(t, out, "evil", "foo", "sub")
+		assertPathInside(t, out, filepath.Join(out, "foo", "sub", "link"))
+
+		data, err := os.ReadFile(filepath.Join(out, "foo", "sub", "link"))
+		require.NoError(t, err)
+		assert.Equal(t, "fine", string(data))
+	})
+
+	// A link already in OutputDir looked up the aside name and found nothing.
+	// Renaming the root to it would make the link resolve through the moved
+	// tree (here, out of OutputDir), a layout nothing audits, and a failed
+	// move would leave it that way. The squash is refused before anything
+	// is renamed.
+	t.Run("aside name looked up", func(t *testing.T) {
+		t.Parallel()
+		skipWithoutSymlinks(t)
+
+		root := t.TempDir()
+		out := filepath.Join(root, "out")
+		victim := filepath.Join(root, "victim")
+
+		require.NoError(t, os.MkdirAll(out, 0o750))
+		require.NoError(t, os.WriteFile(victim, []byte("pwned"), 0o600))
+		require.NoError(t, os.Symlink("foo.xtractr_aside/../../victim", filepath.Join(out, "existing")))
+
+		err := squashTar(t, out, []tarMember{{name: "foo/bar.txt"}})
+		require.ErrorIs(t, err, xtractr.ErrAsideTaken)
+		assertRegularFile(t, filepath.Join(out, "foo", "bar.txt"))
+		assertDirNames(t, out, "existing", "foo")
+		assertNotResolvingTo(t, filepath.Join(out, "existing"), victim)
+	})
+
+	// The link audit models the move. out/Foo is where foo/Foo/up ends up on
+	// any filesystem, and ../../victim from there is outside OutputDir. On a
+	// case-insensitive filesystem the root answers for out/Foo before the
+	// move; counting that as an occupied name would place the link a level
+	// deeper than it lands, and pass it.
+	t.Run("other spelling escapes", func(t *testing.T) {
+		t.Parallel()
+		skipWithoutSymlinks(t)
+
+		root := t.TempDir()
+		out := filepath.Join(root, "out")
+		victim := filepath.Join(root, "victim")
+
+		require.NoError(t, os.MkdirAll(out, 0o750))
+		require.NoError(t, os.WriteFile(victim, []byte("pwned"), 0o600))
+
+		err := squashTar(t, out, []tarMember{
+			{name: "foo/Foo/bar.txt"},
+			{name: "foo/Foo/up", link: "../../victim"},
+		})
+		require.ErrorIs(t, err, xtractr.ErrInvalidPath)
+		assertAbsent(t, filepath.Join(out, "Foo", "up"))
+		assertNotResolvingTo(t, filepath.Join(out, "foo", "Foo", "up"), victim)
+	})
+
+	// An existing entry under OutputDir is still an occupied name.
+	t.Run("keeps existing", func(t *testing.T) {
+		t.Parallel()
+
+		out := filepath.Join(t.TempDir(), "out")
+		require.NoError(t, os.MkdirAll(out, 0o750))
+		require.NoError(t, os.WriteFile(filepath.Join(out, "other.txt"), []byte("mine"), 0o600))
+
+		files, err := squashTarFiles(t, out, []tarMember{
+			{name: "foo/foo/bar.txt"},
+			{name: "foo/other.txt"},
+		})
+		require.NoError(t, err)
+		assert.Equal(t, []string{filepath.Join(out, "foo")}, files)
+		assertRegularFile(t, filepath.Join(out, "foo", "bar.txt"))
+		assertDirNames(t, out, "foo", "other.txt")
+
+		data, err := os.ReadFile(filepath.Join(out, "other.txt"))
+		require.NoError(t, err)
+		assert.Equal(t, "mine", string(data))
+	})
+}
+
+func assertRegularFile(t *testing.T, path string) {
+	t.Helper()
+
+	info, err := os.Lstat(path)
+	require.NoError(t, err)
+	assert.True(t, info.Mode().IsRegular(), "%s: mode %s", path, info.Mode())
+}
+
+// assertDirNames is the exact set of entries in dir: what the extract was
+// meant to leave, and nothing it moved aside or left behind.
+func assertDirNames(t *testing.T, dir string, names ...string) {
+	t.Helper()
+
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+
+	got := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		got = append(got, entry.Name())
+	}
+
+	assert.ElementsMatch(t, names, got, "entries in %s", dir)
+}
+
+// caseInsensitiveDir reports whether dir is on a filesystem that finds a
+// name under other spellings.
+func caseInsensitiveDir(t *testing.T, dir string) bool {
+	t.Helper()
+
+	probe := filepath.Join(dir, "case-probe")
+	require.NoError(t, os.WriteFile(probe, nil, 0o600))
+
+	defer os.Remove(probe)
+
+	_, err := os.Lstat(filepath.Join(dir, "CASE-PROBE"))
+
+	return err == nil
+}
+
+// assertNoAside fails when an entry xtractr moved aside is still under dir.
+func assertNoAside(t *testing.T, dir string) {
+	t.Helper()
+
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+
+	for _, entry := range entries {
+		assert.NotContains(t, entry.Name(), "_aside", "left behind in %s", dir)
+	}
+}
+
+// TestTarRejectedLinkKeepsFile replaces a file with a link that passes the
+// text checks and fails the audit: foo -> . arms the planted
+// existing -> foo/../../victim. The link comes out, and the file goes back.
+// It used to be deleted before the link was written, and stay deleted.
+func TestTarRejectedLinkKeepsFile(t *testing.T) {
+	t.Parallel()
+	skipWithoutSymlinks(t)
+
+	root := t.TempDir()
+	out := filepath.Join(root, "out")
+	victim := filepath.Join(root, "victim")
+	keep := filepath.Join(out, "foo")
+
+	require.NoError(t, os.MkdirAll(out, 0o750))
+	require.NoError(t, os.WriteFile(victim, []byte("pwned"), 0o600))
+	require.NoError(t, os.WriteFile(keep, []byte("mine"), 0o600))
+	require.NoError(t, os.Symlink("foo/../../victim", filepath.Join(out, "existing")))
+
+	archive := filepath.Join(root, "evil.tar.gz")
+	require.NoError(t, writeTarGzipMembers(archive, []tarMember{{name: "foo", link: "."}}))
+
+	_, _, err := xtractr.ExtractTarGzip(&xtractr.XFile{
+		FilePath:  archive,
+		OutputDir: out,
+		FileMode:  0o644,
+		DirMode:   0o755,
+	})
+	require.ErrorIs(t, err, xtractr.ErrInvalidPath)
+
+	assertRegularFile(t, keep)
+	assertNoAside(t, out)
+	assertNotResolvingTo(t, filepath.Join(out, "existing"), victim)
+
+	data, err := os.ReadFile(keep)
+	require.NoError(t, err)
+	assert.Equal(t, "mine", string(data))
+}
+
+// TestExtractFileRefusalSkipsSignatureFallback is a .tar.gz whose tar is
+// extracted and then refused (here, the squash). ExtractFile used to fall
+// back to signature detection on any extension failure; the gzip magic
+// matched, the archive was gunzipped into OutputDir as a .tar, and the call
+// reported success over the refusal. An extractor that placed members
+// recognized the format, so its error is the result. The members are empty:
+// no bytes are written, and the directories and files that stay are what
+// says the tar was recognized.
+func TestExtractFileRefusalSkipsSignatureFallback(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	out := filepath.Join(root, "out")
+	require.NoError(t, os.MkdirAll(out, 0o750))
+
+	archive := filepath.Join(root, "squash.tar.gz")
+	require.NoError(t, writeTarGzipMembers(archive, []tarMember{
+		{name: "foo/foo.xtractr_aside/bar.txt"},
+		{name: "foo/other.txt"},
+	}))
+
+	_, _, _, err := xtractr.ExtractFile(&xtractr.XFile{ //nolint:dogsled // only the error matters here.
+		FilePath:   archive,
+		OutputDir:  out,
+		FileMode:   0o644,
+		DirMode:    0o755,
+		SquashRoot: true,
+	})
+	require.ErrorIs(t, err, xtractr.ErrAsideTaken)
+	assertDirNames(t, out, "foo")
+	assertRegularFile(t, filepath.Join(out, "foo", "foo.xtractr_aside", "bar.txt"))
+	assertRegularFile(t, filepath.Join(out, "foo", "other.txt"))
+}
+
+// TestExtractFileTruncatedTarGzipKeepsTarError is a .tar.gz cut off inside a
+// member. The tar is recognized, and part of the member is written before the
+// data runs out, so that error is the result even though the partial file is
+// removed again. The file is still a complete gzip stream, and the fallback
+// used to gunzip it into OutputDir as a .tar and report success.
+func TestExtractFileTruncatedTarGzipKeepsTarError(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	out := filepath.Join(root, "out")
+	require.NoError(t, os.MkdirAll(out, 0o750))
+
+	archive := filepath.Join(root, "trunc.tar.gz")
+	writeTruncatedTarGzip(t, archive)
+
+	_, _, _, err := xtractr.ExtractFile(&xtractr.XFile{ //nolint:dogsled // only the error matters here.
+		FilePath:  archive,
+		OutputDir: out,
+		FileMode:  0o644,
+		DirMode:   0o755,
+	})
+	require.ErrorIs(t, err, io.ErrUnexpectedEOF)
+	assertDirNames(t, out)
+}
+
+// writeTruncatedTarGzip writes a complete gzip stream of a tar that is cut
+// off halfway through the body of its one member.
+func writeTruncatedTarGzip(t *testing.T, dest string) {
+	t.Helper()
+
+	const (
+		headerSize = 512
+		bodySize   = 2048
+	)
+
+	var tarBuf bytes.Buffer
+
+	tarWriter := tar.NewWriter(&tarBuf)
+	require.NoError(t, tarWriter.WriteHeader(&tar.Header{Name: "big.bin", Mode: 0o644, Size: bodySize}))
+	_, err := tarWriter.Write(bytes.Repeat([]byte("x"), bodySize))
+	require.NoError(t, err)
+	require.NoError(t, tarWriter.Flush())
+
+	archiveFile, err := os.Create(dest)
+	require.NoError(t, err)
+
+	gzipWriter := gzip.NewWriter(archiveFile)
+	_, err = gzipWriter.Write(tarBuf.Bytes()[:headerSize+bodySize/2])
+	require.NoError(t, err)
+	require.NoError(t, gzipWriter.Close())
+	require.NoError(t, archiveFile.Close())
+}
+
+// TestExtractFileReuseStartsOwnBudget calls ExtractFile twice on one XFile.
+// The budget an XFile makes for itself stayed on it, and the next call read
+// its counters as the baseline while the extractor made a new budget that
+// counts from zero. A truncated .tar.gz after a larger extract then looked
+// like it placed nothing and was gunzipped into a .tar, and a squash refusal
+// repeated on the same archive, with its directories already there, was
+// hidden the same way.
+func TestExtractFileReuseStartsOwnBudget(t *testing.T) {
+	t.Parallel()
+
+	t.Run("truncated after larger extract", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		good := filepath.Join(root, "good.tar.gz")
+		require.NoError(t, writeTarGzipMembers(good, []tarMember{
+			{name: "big.txt", data: string(bytes.Repeat([]byte("y"), 4096))},
+		}))
+
+		trunc := filepath.Join(root, "trunc.tar.gz")
+		writeTruncatedTarGzip(t, trunc)
+
+		xFile := &xtractr.XFile{
+			FilePath:  good,
+			OutputDir: filepath.Join(root, "first"),
+			FileMode:  0o644,
+			DirMode:   0o755,
+		}
+		_, _, _, err := xtractr.ExtractFile(xFile)
+		require.NoError(t, err)
+
+		xFile.FilePath = trunc
+		xFile.OutputDir = filepath.Join(root, "second")
+		_, _, _, err = xtractr.ExtractFile(xFile)
+		require.ErrorIs(t, err, io.ErrUnexpectedEOF)
+		assertDirNames(t, xFile.OutputDir)
+	})
+
+	t.Run("refusal repeated", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		out := filepath.Join(root, "out")
+		require.NoError(t, os.MkdirAll(out, 0o750))
+
+		archive := filepath.Join(root, "squash.tar.gz")
+		require.NoError(t, writeTarGzipMembers(archive, []tarMember{
+			{name: "foo/foo.xtractr_aside/bar.txt"},
+			{name: "foo/other.txt"},
+		}))
+
+		xFile := &xtractr.XFile{
+			FilePath:   archive,
+			OutputDir:  out,
+			FileMode:   0o644,
+			DirMode:    0o755,
+			SquashRoot: true,
+		}
+
+		for range 2 {
+			_, _, _, err := xtractr.ExtractFile(xFile)
+			require.ErrorIs(t, err, xtractr.ErrAsideTaken)
+			assertDirNames(t, out, "foo")
+		}
+	})
+}
+
+// TestTarHardLinkToAsideName is a hard link whose target is the name the
+// file at its path is set aside under, with the target extracted after the
+// link. The target is looked up before the file is set aside, so the link
+// takes the symlink fallback and reads the new content once the target is
+// written. It used to link the old file under the aside name, and keep the
+// old data after the aside was discarded.
+func TestTarHardLinkToAsideName(t *testing.T) {
+	t.Parallel()
+	skipWithoutSymlinks(t)
+
+	root := t.TempDir()
+	out := filepath.Join(root, "out")
+	require.NoError(t, os.MkdirAll(out, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(out, "foo"), []byte("old"), 0o600))
+
+	archive := filepath.Join(root, "hard.tar")
+	require.NoError(t, writeTarMembers(archive, false, []tarMember{
+		{name: "foo", link: "foo.xtractr_aside", hard: true},
+		{name: "foo.xtractr_aside", data: "new"},
+	}))
+
+	_, _, err := xtractr.ExtractTar(&xtractr.XFile{
+		FilePath:  archive,
+		OutputDir: out,
+		FileMode:  0o644,
+		DirMode:   0o755,
+	})
+	require.NoError(t, err)
+
+	data, err := os.ReadFile(filepath.Join(out, "foo"))
+	require.NoError(t, err)
+	assert.Equal(t, "new", string(data))
+
+	data, err = os.ReadFile(filepath.Join(out, "foo.xtractr_aside"))
+	require.NoError(t, err)
+	assert.Equal(t, "new", string(data))
+	assertDirNames(t, out, "foo", "foo.xtractr_aside")
 }
 
 // TestTarEmptyLinkSkipped warns and continues when a link target is empty.

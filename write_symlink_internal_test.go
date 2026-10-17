@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 
@@ -358,9 +359,96 @@ func TestCreateSymlinkTracksUnresolvableLink(t *testing.T) {
 	err := xFile.createSymlink(filepath.Join(out, "foo"), ".")
 	require.ErrorIs(t, err, ErrInvalidPath)
 
-	_, statErr := os.Lstat(filepath.Join(out, "foo"))
-	require.ErrorIs(t, statErr, os.ErrNotExist, "the replaced file cannot be put back, and no link may sit there")
+	requireFileRestored(t, filepath.Join(out, "foo"), "file")
 	requireNotResolvingTo(t, filepath.Join(out, "existing"), victim)
+}
+
+// TestSetAside is the one name an entry waits at: branded by Suffix like the
+// copy siblings, an error when taken, and the entry renamed as is, a symlink
+// included.
+func TestSetAside(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	file := filepath.Join(dir, "foo")
+	require.NoError(t, os.WriteFile(file, []byte("mine"), 0o600))
+
+	aside := asideName(file, "")
+	require.Equal(t, filepath.Join(dir, "foo.xtractr_aside"), aside)
+	require.Equal(t, filepath.Join(dir, "foo.unpackerr_aside"), asideName(file, "_unpackerr"),
+		"Suffix brands the name, as it does the partial and link siblings")
+
+	require.NoError(t, setAside(file, aside))
+	require.NoFileExists(t, file)
+
+	data, err := os.ReadFile(aside)
+	require.NoError(t, err)
+	require.Equal(t, "mine", string(data))
+
+	// The name is taken now. The second entry is not moved, and stays.
+	require.NoError(t, os.WriteFile(file, []byte("second"), 0o600))
+
+	err = setAside(file, aside)
+	require.ErrorIs(t, err, ErrAsideTaken)
+	require.FileExists(t, file)
+
+	data, err = os.ReadFile(aside)
+	require.NoError(t, err)
+	require.Equal(t, "mine", string(data), "the entry already aside is untouched")
+
+	// A symlink is moved as is.
+	skipWithoutSymlinks(t)
+	require.NoError(t, os.Remove(aside))
+	require.NoError(t, os.Remove(file))
+	require.NoError(t, os.Symlink("elsewhere", file))
+	require.NoError(t, setAside(file, aside))
+
+	target, err := os.Readlink(aside)
+	require.NoError(t, err)
+	require.Equal(t, "elsewhere", target)
+}
+
+// TestSetAsideLongName is a basename at NAME_MAX, which the tail would push
+// past the limit. The name is truncated to fit, as the copy siblings are,
+// instead of failing with ENAMETOOLONG.
+func TestSetAsideLongName(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	file := filepath.Join(dir, strings.Repeat("a", nameMax))
+	require.NoError(t, os.WriteFile(file, []byte("long"), 0o600))
+
+	aside := asideName(file, "")
+	require.LessOrEqual(t, len(filepath.Base(aside)), nameMax)
+	require.True(t, strings.HasSuffix(aside, ".xtractr_aside"), aside)
+
+	require.NoError(t, setAside(file, aside))
+	require.NoFileExists(t, file)
+
+	data, err := os.ReadFile(aside)
+	require.NoError(t, err)
+	require.Equal(t, "long", string(data))
+}
+
+// requireFileRestored is the regular file a rejected link replaced: back at
+// its path with its content, and nothing left aside beside it.
+func requireFileRestored(t *testing.T, path, content string) {
+	t.Helper()
+
+	info, err := os.Lstat(path)
+	require.NoError(t, err, "the replaced file must be put back")
+	require.True(t, info.Mode().IsRegular(), "mode %s", info.Mode())
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Equal(t, content, string(data))
+
+	entries, err := os.ReadDir(filepath.Dir(path))
+	require.NoError(t, err)
+
+	for _, entry := range entries {
+		require.NotContains(t, entry.Name(), asideTail, "left aside")
+	}
 }
 
 // TestWalkLinkTargetStopsAtFile is ".." applied to a regular file or to a
@@ -415,8 +503,7 @@ func TestCreateSymlinkTracksClimbThroughFile(t *testing.T) {
 	err := xFile.createSymlink(filepath.Join(out, "foo"), ".")
 	require.ErrorIs(t, err, ErrInvalidPath)
 
-	_, statErr := os.Lstat(filepath.Join(out, "foo"))
-	require.ErrorIs(t, statErr, os.ErrNotExist, "the replaced file cannot be put back, and no link may sit there")
+	requireFileRestored(t, filepath.Join(out, "foo"), "file")
 	requireNotResolvingTo(t, filepath.Join(out, "existing"), victim)
 }
 
@@ -493,4 +580,18 @@ func TestCreateSymlinkReplacesEntry(t *testing.T) {
 	got, err = os.Readlink(filepath.Join(out, "empty"))
 	require.NoError(t, err)
 	require.Equal(t, "new", got)
+
+	// A file is set aside while the link is checked, and discarded after.
+	require.NoError(t, xFile.createSymlink(keep, "new"))
+
+	got, err = os.Readlink(keep)
+	require.NoError(t, err)
+	require.Equal(t, "new", got)
+
+	entries, err := os.ReadDir(out)
+	require.NoError(t, err)
+
+	for _, entry := range entries {
+		require.NotContains(t, entry.Name(), asideTail, "left aside after a link replaced the file")
+	}
 }

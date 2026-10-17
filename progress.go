@@ -442,6 +442,54 @@ func (p *progressTracker) wrote() uint64 {
 	return p.Wrote
 }
 
+// startBudget drops the budget an earlier ExtractFile call left on this
+// XFile. A shared budget is the job's and stays. An XFile's own budget
+// describes one call: the extractor makes a new one that counts from zero,
+// and had the old one stayed, markBudget would have read its counters, and
+// continueArchiveProgress carried them into this call's limits. Within a
+// call the budget does carry over, from a failed extension attempt to the
+// signature attempt and through password retries.
+func (x *XFile) startBudget() {
+	if x.prog != nil && !x.prog.shared {
+		x.prog = nil
+	}
+}
+
+// budgetMark is where the counters of an XFile's budget stood.
+type budgetMark struct {
+	wrote uint64
+	files int
+}
+
+// markBudget returns the counters as they stand, or zeros without a budget.
+// A shared budget counts the whole job, so an extractor's return values do
+// not say what one attempt did; placedSince compares against the mark.
+func (x *XFile) markBudget() budgetMark {
+	if x.prog == nil {
+		return budgetMark{}
+	}
+
+	x.prog.mu.Lock()
+	defer x.prog.mu.Unlock()
+
+	return budgetMark{wrote: x.prog.Wrote, files: x.prog.Files}
+}
+
+// placedSince reports whether anything was placed since mark: bytes written,
+// or a file, directory, or link that is still on disk. An output that was
+// opened and removed again, because the input turned out not to be the
+// decompressor's format, is not counted.
+func (x *XFile) placedSince(mark budgetMark) bool {
+	if x.prog == nil {
+		return false
+	}
+
+	x.prog.mu.Lock()
+	defer x.prog.mu.Unlock()
+
+	return x.prog.Wrote > mark.wrote || x.prog.Files > mark.files
+}
+
 func newSharedBudget() *progressTracker {
 	tracker := &progressTracker{shared: true}
 	tracker.send = func() {}

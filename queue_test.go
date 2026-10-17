@@ -388,6 +388,29 @@ func TestDeleteOrigNestedArchiveSameOutput(t *testing.T) {
 	})
 }
 
+// A nested archive named for the wrong format still goes through signature
+// detection. The job's budget already counts the outer archive's writes when
+// the nested one is tried, and that used to read as the nested attempt having
+// extracted something, which keeps the extension extractor's error.
+func TestNestedMisnamedArchiveFallsBack(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	writeZip(t, filepath.Join(dir, "outer.zip"), map[string][]byte{
+		"payload.txt": []byte("outer"),
+		"inner.tar": zipBytes(t, map[string][]byte{
+			"extra.txt": []byte("inner"),
+		}),
+	})
+
+	done := extractDir(t, dir)
+	require.NoError(t, done.Error)
+
+	inner, err := os.ReadFile(filepath.Join(dir, "extra.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, "inner", string(inner))
+}
+
 func TestQueuePreserveExecSurvivesArchivePasses(t *testing.T) {
 	t.Parallel()
 

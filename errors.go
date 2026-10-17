@@ -41,6 +41,11 @@ var (
 	ErrMaxNested = errors.New("nested archive count exceeds maximum")
 	// ErrArchiveSymlink is returned when the archive path is a symbolic link.
 	ErrArchiveSymlink = errors.New("refusing to extract a symbolic link as an archive")
+	// ErrAsideTaken is returned when the name an entry is set aside under, while
+	// an archived link replaces it or a squashed root's children move up, is
+	// already in use: <name>.<brand>_aside exists, is a child of the squashed
+	// root, or is looked up by a link already in the output folder.
+	ErrAsideTaken = errors.New("name for setting an entry aside is in use")
 
 	// CUE sheet.
 

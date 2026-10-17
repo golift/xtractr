@@ -2,11 +2,13 @@ package xtractr
 
 import (
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -609,6 +611,28 @@ func TestMkDirCountsEachMissingComponent(t *testing.T) {
 	require.NoDirExists(t, filepath.Join(out, "a", "b", "c"))
 }
 
+// A member that fails mid-write is removed and gives its MaxFiles slot back,
+// as an undone directory or link does. The bytes stay counted: ExtractFile
+// reads either as the format having been recognized, and a cap stays spent.
+func TestWriteFileRemovedPartialReturnsFilesSlot(t *testing.T) {
+	t.Parallel()
+
+	out := t.TempDir()
+	xFile := &XFile{FilePath: "a.tar", OutputDir: out, FileMode: 0o644, DirMode: 0o755}
+	xFile.newProgress(0, 0, 0)
+
+	const partial = "partial"
+
+	member := filepath.Join(out, "member")
+	data := io.MultiReader(strings.NewReader(partial), iotest.ErrReader(io.ErrUnexpectedEOF))
+
+	_, err := xFile.write(&file{Path: member, Data: data, FileMode: 0o644})
+	require.ErrorIs(t, err, io.ErrUnexpectedEOF)
+	require.NoFileExists(t, member)
+	require.Equal(t, 0, xFile.prog.Files)
+	require.Equal(t, uint64(len(partial)), xFile.prog.Wrote)
+}
+
 func TestMkDirExistingFileIsNotDirectory(t *testing.T) {
 	t.Parallel()
 
@@ -709,6 +733,35 @@ func TestDebDoesNotReextractAsAr(t *testing.T) {
 		return err
 	})
 	require.Equal(t, once, again)
+}
+
+// An XFile's own budget describes one ExtractFile call and is dropped by the
+// next; a shared budget is the job's and stays.
+func TestExtractFileStartsOwnBudgetPerCall(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nope.dat")
+	require.NoError(t, os.WriteFile(path, []byte("not an archive"), 0o600))
+
+	xFile := &XFile{
+		FilePath:  path,
+		OutputDir: filepath.Join(dir, "out"),
+		FileMode:  DefaultFileMode,
+		DirMode:   DefaultDirMode,
+	}
+	xFile.newProgress(0, 0, 0)
+
+	_, _, _, err := ExtractFile(xFile) //nolint:dogsled // only the error matters here.
+	require.ErrorIs(t, err, ErrUnknownArchiveType)
+	require.Nil(t, xFile.prog, "an earlier own budget is dropped")
+
+	shared := newSharedBudget()
+	xFile.prog = shared
+
+	_, _, _, err = ExtractFile(xFile) //nolint:dogsled // only the error matters here.
+	require.ErrorIs(t, err, ErrUnknownArchiveType)
+	require.Same(t, shared, xFile.prog, "a shared budget stays")
 }
 
 func TestUnknownArchiveTypeMentionsPathOnce(t *testing.T) {
