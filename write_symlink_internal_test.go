@@ -439,8 +439,11 @@ func TestOutputFileByNameChecksIdentity(t *testing.T) {
 
 	out := outputFile{path: path, info: info}
 
-	// The pathname now names a different file.
-	require.NoError(t, os.Remove(path))
+	// The pathname now names a different file. The written file stays alive,
+	// moved aside, as it does in the race: a deleted file's inode is reused
+	// at once on Linux, and that would make the two look the same.
+	aside := filepath.Join(dir, "aside.txt")
+	require.NoError(t, os.Rename(path, aside))
 	require.NoError(t, os.WriteFile(path, []byte("someone else's"), 0o600))
 
 	err = out.byName(os.Remove)
@@ -449,15 +452,8 @@ func TestOutputFileByNameChecksIdentity(t *testing.T) {
 
 	// And back to the file that was written.
 	require.NoError(t, os.Remove(path))
+	require.NoError(t, os.Rename(aside, path))
 
-	written, err = os.Create(path)
-	require.NoError(t, err)
-
-	info, err = written.Stat()
-	require.NoError(t, err)
-	require.NoError(t, written.Close())
-
-	out = outputFile{path: path, info: info}
 	out.remove()
 
 	_, err = os.Lstat(path)
