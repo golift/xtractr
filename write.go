@@ -108,10 +108,85 @@ func (x *XFile) squashRoot(files []string) ([]string, error) {
 		// initialization cycle through IsArchiveFile and extension2function.
 		ensureMoveFiles(x)
 
-		return x.moveFiles(from, x.OutputDir, false)
+		return x.moveSquashRoot(from)
 	}
 
 	return files, nil
+}
+
+// moveSquashRoot moves root's children up into OutputDir and removes root.
+//
+// The root's own name is a destination like any other. A child named like
+// the root (foo/foo/bar.txt) used to find that name occupied, by the root,
+// and be refused; the root was then deleted with the child still inside it,
+// and the extract came back empty with no error. The root is renamed aside
+// first, so every child finds its name free, and the move deletes the aside
+// folder when it is done. The write list is rebased to match. A move that
+// fails leaves the aside folder, as it would have left the root: the logged
+// paths name it.
+func (x *XFile) moveSquashRoot(root string) ([]string, error) {
+	aside, err := setAside(root)
+	if err != nil {
+		return nil, fmt.Errorf("%s: squash root: %w", x.FilePath, err)
+	}
+
+	x.moveKnown = rebasePaths(x.moveKnown, root, aside)
+
+	return x.moveFiles(aside, x.OutputDir, false)
+}
+
+// asideTail names an entry this extract moved out of the way, next to where
+// it was. The scavenger does not match it; it is not a copy sibling.
+const asideTail = ".xtractr_aside"
+
+// setAside renames path to an unused sibling name and returns that name.
+// The final component is renamed as is: a symlink at path moves, it is not
+// followed.
+func setAside(path string) (string, error) {
+	const attempts = 100
+
+	for attempt := range attempts {
+		aside := path + asideTail
+		if attempt > 0 {
+			aside = fmt.Sprintf("%s.%d", aside, attempt)
+		}
+
+		_, err := os.Lstat(aside)
+		if err == nil {
+			continue
+		}
+
+		if !errors.Is(err, os.ErrNotExist) {
+			return "", fmt.Errorf("lstat %s: %w", aside, err)
+		}
+
+		err = os.Rename(path, aside)
+		if err != nil {
+			return "", fmt.Errorf("setting aside %s: %w", path, err)
+		}
+
+		return aside, nil
+	}
+
+	return "", fmt.Errorf("%w: no free name beside %s", ErrNameTooLong, path)
+}
+
+// rebasePaths returns paths with those under oldBase moved under newBase.
+func rebasePaths(paths []string, oldBase, newBase string) []string {
+	out := make([]string, len(paths))
+
+	for idx, path := range paths {
+		rel, err := filepath.Rel(oldBase, path)
+		if err != nil || !pathWithin(oldBase, path) {
+			out[idx] = path
+
+			continue
+		}
+
+		out[idx] = filepath.Join(newBase, rel)
+	}
+
+	return out
 }
 
 // Permission triads. FileMode supplies read and write. When PreserveExec is set,
@@ -1155,22 +1230,43 @@ func symlinksUnder(root string) ([]string, error) {
 // children up one level. moveFilesKnown moves the top-level children only and
 // refuses an occupied destination: a name that already exists under OutputDir
 // keeps that entry, and the copy under root is discarded with root (or left
-// there if another move fails). Every other name is whatever is under root.
+// there if another move fails). Every other name is whatever is under root,
+// the root's own name included: the root is moved aside before the children
+// are (moveSquashRoot), so a child named like it takes that name.
 type squashLayout struct {
 	outputDir string
 	resolved  string // resolveExisting(outputDir); walks run in this space.
 	root      string
+	rootInfo  os.FileInfo // Lstat of root, to know it under another spelling.
 }
 
 func newSquashLayout(outputDir, root string) *squashLayout {
-	return &squashLayout{outputDir: outputDir, resolved: resolveExisting(outputDir), root: root}
+	rootInfo, _ := os.Lstat(root)
+
+	return &squashLayout{
+		outputDir: outputDir,
+		resolved:  resolveExisting(outputDir),
+		root:      root,
+		rootInfo:  rootInfo,
+	}
 }
 
 // occupied reports whether the move refuses the top-level child named top.
+// The root itself does not count: it is gone by the time the children move.
+// A case-insensitive filesystem finds it under other spellings of its name,
+// so the entry found is compared with it, not the path.
 func (l *squashLayout) occupied(top string) bool {
-	_, err := os.Lstat(filepath.Join(l.outputDir, top))
+	path := filepath.Join(l.outputDir, top)
+	if path == l.root {
+		return false
+	}
 
-	return err == nil
+	info, err := os.Lstat(path)
+	if err != nil {
+		return false
+	}
+
+	return l.rootInfo == nil || !os.SameFile(info, l.rootInfo)
 }
 
 // destination is where the entry at path, under root, sits after the move.
@@ -1260,24 +1356,30 @@ func (x *XFile) finishLink(path string, old replacedEntry) error {
 		return err
 	}
 
+	old.discard()
+
 	return nil
 }
 
 // replacedEntry is what a link write found at its path. Archives replace a
-// symlink, an empty directory, or a file with a link, so the entry is removed
-// first; a write that then fails puts it back, since a removed symlink changes
-// what resolves through it just as a new one does.
+// symlink, an empty directory, or a file with a link, so the entry is moved
+// out of the way first; a write that then fails puts it back, since a removed
+// symlink changes what resolves through it just as a new one does. A symlink
+// or an empty directory is removed and recreated from what was recorded. A
+// file (or anything else) is renamed aside and renamed back, or deleted once
+// the link is final.
 type replacedEntry struct {
 	path   string
 	found  bool
 	mode   os.FileMode
 	target string // symlink text, when the entry was one.
+	aside  string // where the entry waits, when it was renamed aside.
 }
 
 // replaceEntry collects the planted links, then clears path for a link.
 // Collection comes first: the planted set records where links resolved
 // before this extract changed anything, and removing a symlink here is a
-// change. The text going in has already been checked, so nothing is removed
+// change. The text going in has already been checked, so nothing is moved
 // for an entry that will be rejected.
 func (x *XFile) replaceEntry(path string) (replacedEntry, error) {
 	x.collectPlantedLinks()
@@ -1296,30 +1398,45 @@ func (x *XFile) replaceEntry(path string) (replacedEntry, error) {
 	old.found = true
 	old.mode = info.Mode()
 
-	if old.mode&os.ModeSymlink != 0 {
+	switch {
+	case old.mode&os.ModeSymlink != 0:
 		old.target, _ = os.Readlink(path)
+		err = os.Remove(path)
+	case old.mode.IsDir():
+		err = os.Remove(path)
+	default:
+		old.aside, err = setAside(path)
 	}
 
-	err = os.Remove(path)
 	if err != nil {
-		return old, fmt.Errorf("%s: removing existing path for link: %w: %s", x.FilePath, err, path)
+		return old, fmt.Errorf("%s: clearing existing path for link: %w: %s", x.FilePath, err, path)
 	}
 
 	return old, nil
 }
 
-// restore removes the link written at path and puts back the symlink or
-// empty directory that was there. A regular file is gone; it was replaced by
-// text that passed the checks, and the failure came after that.
+// restore removes the link written at path and puts back what was there: the
+// symlink or empty directory is recreated, the file renamed aside is renamed
+// back.
 func (r replacedEntry) restore() {
 	_ = os.Remove(r.path)
 
 	switch {
 	case !r.found:
+	case r.aside != "":
+		_ = os.Rename(r.aside, r.path)
 	case r.mode&os.ModeSymlink != 0 && r.target != "":
 		_ = os.Symlink(r.target, r.path)
 	case r.mode.IsDir():
 		_ = os.Mkdir(r.path, r.mode.Perm())
+	}
+}
+
+// discard deletes the file renamed aside, once the link that replaced it is
+// final. A symlink or directory was already removed.
+func (r replacedEntry) discard() {
+	if r.aside != "" {
+		_ = os.Remove(r.aside)
 	}
 }
 

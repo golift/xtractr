@@ -358,9 +358,29 @@ func TestCreateSymlinkTracksUnresolvableLink(t *testing.T) {
 	err := xFile.createSymlink(filepath.Join(out, "foo"), ".")
 	require.ErrorIs(t, err, ErrInvalidPath)
 
-	_, statErr := os.Lstat(filepath.Join(out, "foo"))
-	require.ErrorIs(t, statErr, os.ErrNotExist, "the replaced file cannot be put back, and no link may sit there")
+	requireFileRestored(t, filepath.Join(out, "foo"), "file")
 	requireNotResolvingTo(t, filepath.Join(out, "existing"), victim)
+}
+
+// requireFileRestored is the regular file a rejected link replaced: back at
+// its path with its content, and nothing left aside beside it.
+func requireFileRestored(t *testing.T, path, content string) {
+	t.Helper()
+
+	info, err := os.Lstat(path)
+	require.NoError(t, err, "the replaced file must be put back")
+	require.True(t, info.Mode().IsRegular(), "mode %s", info.Mode())
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Equal(t, content, string(data))
+
+	entries, err := os.ReadDir(filepath.Dir(path))
+	require.NoError(t, err)
+
+	for _, entry := range entries {
+		require.NotContains(t, entry.Name(), asideTail, "left aside")
+	}
 }
 
 // TestWalkLinkTargetStopsAtFile is ".." applied to a regular file or to a
@@ -415,8 +435,7 @@ func TestCreateSymlinkTracksClimbThroughFile(t *testing.T) {
 	err := xFile.createSymlink(filepath.Join(out, "foo"), ".")
 	require.ErrorIs(t, err, ErrInvalidPath)
 
-	_, statErr := os.Lstat(filepath.Join(out, "foo"))
-	require.ErrorIs(t, statErr, os.ErrNotExist, "the replaced file cannot be put back, and no link may sit there")
+	requireFileRestored(t, filepath.Join(out, "foo"), "file")
 	requireNotResolvingTo(t, filepath.Join(out, "existing"), victim)
 }
 
@@ -493,4 +512,18 @@ func TestCreateSymlinkReplacesEntry(t *testing.T) {
 	got, err = os.Readlink(filepath.Join(out, "empty"))
 	require.NoError(t, err)
 	require.Equal(t, "new", got)
+
+	// A file is set aside while the link is checked, and discarded after.
+	require.NoError(t, xFile.createSymlink(keep, "new"))
+
+	got, err = os.Readlink(keep)
+	require.NoError(t, err)
+	require.Equal(t, "new", got)
+
+	entries, err := os.ReadDir(out)
+	require.NoError(t, err)
+
+	for _, entry := range entries {
+		require.NotContains(t, entry.Name(), asideTail, "left aside after a link replaced the file")
+	}
 }
