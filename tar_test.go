@@ -1327,6 +1327,24 @@ func TestExtractFileTruncatedTarGzipKeepsTarError(t *testing.T) {
 	out := filepath.Join(root, "out")
 	require.NoError(t, os.MkdirAll(out, 0o750))
 
+	archive := filepath.Join(root, "trunc.tar.gz")
+	writeTruncatedTarGzip(t, archive)
+
+	_, _, _, err := xtractr.ExtractFile(&xtractr.XFile{ //nolint:dogsled // only the error matters here.
+		FilePath:  archive,
+		OutputDir: out,
+		FileMode:  0o644,
+		DirMode:   0o755,
+	})
+	require.ErrorIs(t, err, io.ErrUnexpectedEOF)
+	assertDirNames(t, out)
+}
+
+// writeTruncatedTarGzip writes a complete gzip stream of a tar that is cut
+// off halfway through the body of its one member.
+func writeTruncatedTarGzip(t *testing.T, dest string) {
+	t.Helper()
+
 	const (
 		headerSize = 512
 		bodySize   = 2048
@@ -1340,8 +1358,7 @@ func TestExtractFileTruncatedTarGzipKeepsTarError(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, tarWriter.Flush())
 
-	archive := filepath.Join(root, "trunc.tar.gz")
-	archiveFile, err := os.Create(archive)
+	archiveFile, err := os.Create(dest)
 	require.NoError(t, err)
 
 	gzipWriter := gzip.NewWriter(archiveFile)
@@ -1349,15 +1366,73 @@ func TestExtractFileTruncatedTarGzipKeepsTarError(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, gzipWriter.Close())
 	require.NoError(t, archiveFile.Close())
+}
 
-	_, _, _, err = xtractr.ExtractFile(&xtractr.XFile{ //nolint:dogsled // only the error matters here.
-		FilePath:  archive,
-		OutputDir: out,
-		FileMode:  0o644,
-		DirMode:   0o755,
+// TestExtractFileReuseStartsOwnBudget calls ExtractFile twice on one XFile.
+// The budget an XFile makes for itself stayed on it, and the next call read
+// its counters as the baseline while the extractor made a new budget that
+// counts from zero. A truncated .tar.gz after a larger extract then looked
+// like it placed nothing and was gunzipped into a .tar, and a squash refusal
+// repeated on the same archive, with its directories already there, was
+// hidden the same way.
+func TestExtractFileReuseStartsOwnBudget(t *testing.T) {
+	t.Parallel()
+
+	t.Run("truncated after larger extract", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		good := filepath.Join(root, "good.tar.gz")
+		require.NoError(t, writeTarGzipMembers(good, []tarMember{
+			{name: "big.txt", data: string(bytes.Repeat([]byte("y"), 4096))},
+		}))
+
+		trunc := filepath.Join(root, "trunc.tar.gz")
+		writeTruncatedTarGzip(t, trunc)
+
+		xFile := &xtractr.XFile{
+			FilePath:  good,
+			OutputDir: filepath.Join(root, "first"),
+			FileMode:  0o644,
+			DirMode:   0o755,
+		}
+		_, _, _, err := xtractr.ExtractFile(xFile)
+		require.NoError(t, err)
+
+		xFile.FilePath = trunc
+		xFile.OutputDir = filepath.Join(root, "second")
+		_, _, _, err = xtractr.ExtractFile(xFile)
+		require.ErrorIs(t, err, io.ErrUnexpectedEOF)
+		assertDirNames(t, xFile.OutputDir)
 	})
-	require.ErrorIs(t, err, io.ErrUnexpectedEOF)
-	assertDirNames(t, out)
+
+	t.Run("refusal repeated", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		out := filepath.Join(root, "out")
+		require.NoError(t, os.MkdirAll(out, 0o750))
+
+		archive := filepath.Join(root, "squash.tar.gz")
+		require.NoError(t, writeTarGzipMembers(archive, []tarMember{
+			{name: "foo/foo.xtractr_aside/bar.txt"},
+			{name: "foo/other.txt"},
+		}))
+
+		xFile := &xtractr.XFile{
+			FilePath:   archive,
+			OutputDir:  out,
+			FileMode:   0o644,
+			DirMode:    0o755,
+			SquashRoot: true,
+		}
+
+		for range 2 {
+			_, _, _, err := xtractr.ExtractFile(xFile)
+			require.ErrorIs(t, err, xtractr.ErrAsideTaken)
+			assertDirNames(t, out, "foo")
+		}
+	})
 }
 
 // TestTarHardLinkToAsideName is a hard link whose target is the name the

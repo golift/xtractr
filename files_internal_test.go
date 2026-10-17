@@ -735,6 +735,35 @@ func TestDebDoesNotReextractAsAr(t *testing.T) {
 	require.Equal(t, once, again)
 }
 
+// An XFile's own budget describes one ExtractFile call and is dropped by the
+// next; a shared budget is the job's and stays.
+func TestExtractFileStartsOwnBudgetPerCall(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nope.dat")
+	require.NoError(t, os.WriteFile(path, []byte("not an archive"), 0o600))
+
+	xFile := &XFile{
+		FilePath:  path,
+		OutputDir: filepath.Join(dir, "out"),
+		FileMode:  DefaultFileMode,
+		DirMode:   DefaultDirMode,
+	}
+	xFile.newProgress(0, 0, 0)
+
+	_, _, _, err := ExtractFile(xFile) //nolint:dogsled // only the error matters here.
+	require.ErrorIs(t, err, ErrUnknownArchiveType)
+	require.Nil(t, xFile.prog, "an earlier own budget is dropped")
+
+	shared := newSharedBudget()
+	xFile.prog = shared
+
+	_, _, _, err = ExtractFile(xFile) //nolint:dogsled // only the error matters here.
+	require.ErrorIs(t, err, ErrUnknownArchiveType)
+	require.Same(t, shared, xFile.prog, "a shared budget stays")
+}
+
 func TestUnknownArchiveTypeMentionsPathOnce(t *testing.T) {
 	t.Parallel()
 

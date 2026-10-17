@@ -306,6 +306,7 @@ func ExtractFile(xFile *XFile) (size uint64, filesList, archiveList []string, er
 
 	sName := strings.ToLower(xFile.FilePath)
 	xFile.bindMoveFiles()
+	xFile.startBudget()
 
 	var extensionType string // archive type from matched extension, for error reporting when extraction fails
 
