@@ -116,7 +116,21 @@ func (x *Xtractr) renameExtracted(fromPath, toPath string, overwrite bool, known
 	return moveFilesKnown(x.config, x.config.DirMode, fromPath, toPath, overwrite, x.config.Suffix, known)
 }
 
-// bindMoveFiles wires ExtractFile to this job's logger and DirMode.
+// ensureMoveFiles is bindMoveFiles, stored in a variable so squashRoot can
+// call it without an initialization cycle. extension2function's extractor
+// funcs reach squashRoot, and bindMoveFiles reaches IsArchiveFile, which
+// reads extension2function.
+//
+//nolint:gochecknoglobals // breaks the extension2function init cycle, see above.
+var ensureMoveFiles = func(*XFile) {}
+
+func init() { //nolint:gochecknoinits // must not be a var initializer; see ensureMoveFiles.
+	ensureMoveFiles = (*XFile).bindMoveFiles
+}
+
+// bindMoveFiles wires the squash move to this job's logger and DirMode.
+// ExtractFile calls it up front. squashRoot calls it through ensureMoveFiles
+// so a direct Extract* with SquashRoot set does not hit a nil moveFiles.
 // The old parseConfig(&Config{Logger: x.log}) path allocated a throwaway
 // Xtractr (and its done channel) per extract. A pre-set stub is left in
 // place so tests can inject one.
