@@ -386,6 +386,8 @@ func TestScavengePartialsExactMatches(t *testing.T) {
 		".xtractr_partial",             // empty stem is never generated
 		"a.mkv.other_partial",          // different brand
 		"a.mkv.xtractr_partial.old.1",  // tail not final
+		"a.mkv.xtractr_aside",          // set aside by a link write or squash; holds data
+		"a.mkv.xtractr_aside.1",
 	}
 
 	for _, name := range append(append([]string{}, remove...), keep...) {

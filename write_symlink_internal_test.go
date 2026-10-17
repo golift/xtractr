@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 
@@ -360,6 +361,90 @@ func TestCreateSymlinkTracksUnresolvableLink(t *testing.T) {
 
 	requireFileRestored(t, filepath.Join(out, "foo"), "file")
 	requireNotResolvingTo(t, filepath.Join(out, "existing"), victim)
+}
+
+// TestSetAside is the name an entry waits at: branded by Suffix like the
+// copy siblings, numbered past names that exist or that the caller claims,
+// and truncated to fit NAME_MAX. The entry is renamed, not followed.
+func TestSetAside(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	file := filepath.Join(dir, "foo")
+	require.NoError(t, os.WriteFile(file, []byte("mine"), 0o600))
+
+	aside, err := setAside(file, "", nil)
+	require.NoError(t, err)
+	require.Equal(t, filepath.Join(dir, "foo.xtractr_aside"), aside)
+	require.NoFileExists(t, file)
+
+	data, err := os.ReadFile(aside)
+	require.NoError(t, err)
+	require.Equal(t, "mine", string(data))
+
+	// The bare name is taken by the first; the next waits at .1.
+	require.NoError(t, os.WriteFile(file, []byte("second"), 0o600))
+
+	aside, err = setAside(file, "", nil)
+	require.NoError(t, err)
+	require.Equal(t, filepath.Join(dir, "foo.xtractr_aside.1"), aside)
+
+	// The caller claims .2 as well; the next waits at .3.
+	require.NoError(t, os.WriteFile(file, []byte("third"), 0o600))
+
+	aside, err = setAside(file, "", func(aside string) bool {
+		return filepath.Base(aside) == "foo.xtractr_aside.2"
+	})
+	require.NoError(t, err)
+	require.Equal(t, filepath.Join(dir, "foo.xtractr_aside.3"), aside)
+
+	// Suffix brands the name, as it does the partial and link siblings.
+	require.NoError(t, os.WriteFile(file, []byte("branded"), 0o600))
+
+	aside, err = setAside(file, "_unpackerr", nil)
+	require.NoError(t, err)
+	require.Equal(t, filepath.Join(dir, "foo.unpackerr_aside"), aside)
+
+	// A symlink is moved as is.
+	skipWithoutSymlinks(t)
+	require.NoError(t, os.Symlink("foo.xtractr_aside", file))
+
+	aside, err = setAside(file, "", nil)
+	require.NoError(t, err)
+	require.Equal(t, filepath.Join(dir, "foo.xtractr_aside.2"), aside)
+
+	target, err := os.Readlink(aside)
+	require.NoError(t, err)
+	require.Equal(t, "foo.xtractr_aside", target)
+}
+
+// TestSetAsideLongName is a basename at NAME_MAX, which the tail would push
+// past the limit. The name is truncated to fit, as the copy siblings are,
+// instead of failing with ENAMETOOLONG.
+func TestSetAsideLongName(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	file := filepath.Join(dir, strings.Repeat("a", nameMax))
+	require.NoError(t, os.WriteFile(file, []byte("long"), 0o600))
+
+	aside, err := setAside(file, "", nil)
+	require.NoError(t, err)
+	require.LessOrEqual(t, len(filepath.Base(aside)), nameMax)
+	require.True(t, strings.HasSuffix(aside, ".xtractr_aside"), aside)
+	require.NoFileExists(t, file)
+
+	data, err := os.ReadFile(aside)
+	require.NoError(t, err)
+	require.Equal(t, "long", string(data))
+
+	// Numbered names fit too.
+	require.NoError(t, os.WriteFile(file, []byte("long.1"), 0o600))
+
+	aside, err = setAside(file, "", nil)
+	require.NoError(t, err)
+	require.LessOrEqual(t, len(filepath.Base(aside)), nameMax)
+	require.True(t, strings.HasSuffix(aside, ".xtractr_aside.1"), aside)
 }
 
 // requireFileRestored is the regular file a rejected link replaced: back at

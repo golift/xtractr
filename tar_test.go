@@ -944,7 +944,7 @@ func TestTarSquashRootSameNamedChild(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, []string{filepath.Join(out, "foo")}, files)
 		assertRegularFile(t, filepath.Join(out, "foo", "bar.txt"))
-		assertNoAside(t, out)
+		assertDirNames(t, out, "foo")
 	})
 
 	t.Run("file", func(t *testing.T) {
@@ -957,7 +957,7 @@ func TestTarSquashRootSameNamedChild(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, []string{filepath.Join(out, "foo")}, files)
 		assertRegularFile(t, filepath.Join(out, "foo"))
-		assertNoAside(t, out)
+		assertDirNames(t, out, "foo")
 	})
 
 	t.Run("with sibling", func(t *testing.T) {
@@ -974,7 +974,7 @@ func TestTarSquashRootSameNamedChild(t *testing.T) {
 		assert.ElementsMatch(t, []string{filepath.Join(out, "foo"), filepath.Join(out, "other.txt")}, files)
 		assertRegularFile(t, filepath.Join(out, "foo", "bar.txt"))
 		assertRegularFile(t, filepath.Join(out, "other.txt"))
-		assertNoAside(t, out)
+		assertDirNames(t, out, "foo", "other.txt")
 	})
 
 	// A case-insensitive filesystem finds the root under the child's spelling
@@ -988,7 +988,47 @@ func TestTarSquashRootSameNamedChild(t *testing.T) {
 		err := squashTar(t, out, []tarMember{{name: "foo/Foo/bar.txt"}})
 		require.NoError(t, err)
 		assertRegularFile(t, filepath.Join(out, "Foo", "bar.txt"))
-		assertNoAside(t, out)
+		assertDirNames(t, out, "Foo")
+	})
+
+	// The aside folder is a sibling of the children's destinations, so a
+	// child named like it would be refused and deleted with it, the way a
+	// child named like the root was. The aside name skips the children's
+	// names; here the bare name and .1 are both children, so the root waits
+	// at .2 and both children arrive.
+	t.Run("aside name", func(t *testing.T) {
+		t.Parallel()
+
+		out := filepath.Join(t.TempDir(), "out")
+		require.NoError(t, os.MkdirAll(out, 0o750))
+
+		files, err := squashTarFiles(t, out, []tarMember{
+			{name: "foo/foo.xtractr_aside/bar.txt"},
+			{name: "foo/foo.xtractr_aside.1"},
+		})
+		require.NoError(t, err)
+		assert.ElementsMatch(t, []string{
+			filepath.Join(out, "foo.xtractr_aside"),
+			filepath.Join(out, "foo.xtractr_aside.1"),
+		}, files)
+		assertRegularFile(t, filepath.Join(out, "foo.xtractr_aside", "bar.txt"))
+		assertRegularFile(t, filepath.Join(out, "foo.xtractr_aside.1"))
+		assertDirNames(t, out, "foo.xtractr_aside", "foo.xtractr_aside.1")
+	})
+
+	// On a case-insensitive filesystem the child answers to the aside name
+	// in another spelling, and the filesystem is what decides that.
+	t.Run("aside name other spelling", func(t *testing.T) {
+		t.Parallel()
+
+		out := filepath.Join(t.TempDir(), "out")
+		require.NoError(t, os.MkdirAll(out, 0o750))
+
+		files, err := squashTarFiles(t, out, []tarMember{{name: "foo/FOO.XTRACTR_ASIDE/bar.txt"}})
+		require.NoError(t, err)
+		assert.Equal(t, []string{filepath.Join(out, "FOO.XTRACTR_ASIDE")}, files)
+		assertRegularFile(t, filepath.Join(out, "FOO.XTRACTR_ASIDE", "bar.txt"))
+		assertDirNames(t, out, "FOO.XTRACTR_ASIDE")
 	})
 
 	// The link audit models the move. out/Foo is where foo/Foo/up ends up on
@@ -1031,7 +1071,7 @@ func TestTarSquashRootSameNamedChild(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, []string{filepath.Join(out, "foo")}, files)
 		assertRegularFile(t, filepath.Join(out, "foo", "bar.txt"))
-		assertNoAside(t, out)
+		assertDirNames(t, out, "foo", "other.txt")
 
 		data, err := os.ReadFile(filepath.Join(out, "other.txt"))
 		require.NoError(t, err)
@@ -1047,6 +1087,22 @@ func assertRegularFile(t *testing.T, path string) {
 	assert.True(t, info.Mode().IsRegular(), "%s: mode %s", path, info.Mode())
 }
 
+// assertDirNames is the exact set of entries in dir: what the extract was
+// meant to leave, and nothing it moved aside or left behind.
+func assertDirNames(t *testing.T, dir string, names ...string) {
+	t.Helper()
+
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+
+	got := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		got = append(got, entry.Name())
+	}
+
+	assert.ElementsMatch(t, names, got, "entries in %s", dir)
+}
+
 // assertNoAside fails when an entry xtractr moved aside is still under dir.
 func assertNoAside(t *testing.T, dir string) {
 	t.Helper()
@@ -1055,7 +1111,7 @@ func assertNoAside(t *testing.T, dir string) {
 	require.NoError(t, err)
 
 	for _, entry := range entries {
-		assert.NotContains(t, entry.Name(), ".xtractr_aside", "left behind in %s", dir)
+		assert.NotContains(t, entry.Name(), "_aside", "left behind in %s", dir)
 	}
 }
 

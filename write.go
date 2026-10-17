@@ -125,7 +125,15 @@ func (x *XFile) squashRoot(files []string) ([]string, error) {
 // fails leaves the aside folder, as it would have left the root: the logged
 // paths name it.
 func (x *XFile) moveSquashRoot(root string) ([]string, error) {
-	aside, err := setAside(root)
+	// The aside folder is a sibling of the children's destinations, so a
+	// child named like it (foo/foo.xtractr_aside/bar.txt) would be refused
+	// and deleted with it the same way. The filesystem is asked whether a
+	// child answers to the name, so its aliases (case, normalization) count.
+	aside, err := setAside(root, x.Suffix, func(aside string) bool {
+		_, err := os.Lstat(filepath.Join(root, filepath.Base(aside)))
+
+		return err == nil
+	})
 	if err != nil {
 		return nil, fmt.Errorf("%s: squash root: %w", x.FilePath, err)
 	}
@@ -135,21 +143,25 @@ func (x *XFile) moveSquashRoot(root string) ([]string, error) {
 	return x.moveFiles(aside, x.OutputDir, false)
 }
 
-// asideTail names an entry this extract moved out of the way, next to where
-// it was. The scavenger does not match it; it is not a copy sibling.
-const asideTail = ".xtractr_aside"
+// asideTail brands the name an entry is renamed to while this extract needs
+// its path: <name>.<brand>_aside, numbered when that is taken, with the name
+// truncated to fit NAME_MAX, like the copy siblings (siblingStem). The brand
+// is Suffix, so it follows the partial and link siblings; the scavenger does
+// not match this tail, since an aside holds something that was there before
+// the extract, or extracted files a failed move left behind.
+const asideTail = "_aside"
 
-// setAside renames path to an unused sibling name and returns that name.
-// The final component is renamed as is: a symlink at path moves, it is not
-// followed.
-func setAside(path string) (string, error) {
-	const attempts = 100
+// setAside renames path to a free sibling name and returns that name. A name
+// is free when nothing exists at it and taken, when given, does not claim
+// it: callers know names that are empty now and filled in later. The final
+// component is renamed as is: a symlink at path moves, it is not followed.
+func setAside(path, suffix string, taken func(aside string) bool) (string, error) {
+	const attempts = 1001
+
+	dir, stem, fullTail := siblingStem(path, suffix, asideTail)
 
 	for attempt := range attempts {
-		aside := path + asideTail
-		if attempt > 0 {
-			aside = fmt.Sprintf("%s.%d", aside, attempt)
-		}
+		aside := siblingCandidate(dir, stem, fullTail, attempt)
 
 		_, err := os.Lstat(aside)
 		if err == nil {
@@ -158,6 +170,10 @@ func setAside(path string) (string, error) {
 
 		if !errors.Is(err, os.ErrNotExist) {
 			return "", fmt.Errorf("lstat %s: %w", aside, err)
+		}
+
+		if taken != nil && taken(aside) {
+			continue
 		}
 
 		err = os.Rename(path, aside)
@@ -1405,7 +1421,7 @@ func (x *XFile) replaceEntry(path string) (replacedEntry, error) {
 	case old.mode.IsDir():
 		err = os.Remove(path)
 	default:
-		old.aside, err = setAside(path)
+		old.aside, err = setAside(path, x.Suffix, nil)
 	}
 
 	if err != nil {
