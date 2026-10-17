@@ -856,6 +856,28 @@ func TestTarSquashRootLinkEscape(t *testing.T) {
 		assertAbsent(t, filepath.Join(out, "missing"))
 	})
 
+	// No link in the archive at all. pkg/missing is a directory, and moved
+	// to out/missing it arms the planted out/existing -> missing/../../victim
+	// the way creating it there would; mkdirComponent refuses that, and the
+	// move used to skip the planted links when root held no links.
+	t.Run("directory arms planted link", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		out := filepath.Join(root, "out")
+		victim := filepath.Join(root, "victim")
+
+		require.NoError(t, os.MkdirAll(out, 0o750))
+		require.NoError(t, os.WriteFile(victim, []byte("pwned"), 0o600))
+		require.NoError(t, os.Symlink("missing/../../victim", filepath.Join(out, "existing")))
+
+		err := squashTar(t, out, []tarMember{{name: "pkg/missing/file.txt"}})
+		require.ErrorIs(t, err, xtractr.ErrInvalidPath)
+		assertAbsent(t, filepath.Join(out, "missing"))
+		assertRegularFile(t, filepath.Join(out, "pkg", "missing", "file.txt"))
+		assertNotResolvingTo(t, filepath.Join(out, "existing"), victim)
+	})
+
 	// pkg/link -> b/c/planted goes through the moved pkg/b -> kept into a
 	// planted link that already pointed outside. Treating the not-yet-moved
 	// b as a missing name would pass this lexically.

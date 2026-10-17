@@ -1187,14 +1187,15 @@ func (x *XFile) ensureLinkWithinOutput(linkPath, linkName string) error {
 // occupied under OutputDir follows that entry, since the move keeps it; a
 // moved link to "." arms a planted "missing/../victim" the same way creating
 // it there would, so the climb-after links are audited against the layout too.
+//
+// The planted links are walked against the layout even when root holds no
+// links: a directory the move fills in under OutputDir arms a planted
+// "missing/../../victim" exactly as creating it there would, and
+// mkdirComponent audits that; the move has to as well.
 func (x *XFile) ensureLinksWithin(root string) error {
 	links, err := symlinksUnder(root)
 	if err != nil {
 		return fmt.Errorf("squash root: %w", err)
-	}
-
-	if len(links) == 0 {
-		return nil // Files and directories resolve where they are put.
 	}
 
 	// Extraction has finished, so no write races this. The scan is a no-op
