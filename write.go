@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -785,6 +786,16 @@ func stepLinkElem(current, elem string, walk *linkWalk) (string, error) {
 	case "", ".":
 		return current, nil
 	case "..":
+		// The kernel climbs out of directories only; ".." after a regular
+		// file is ENOTDIR and the link does not resolve. Climbing anyway
+		// reports a path for text like file/../../victim, outside OutputDir,
+		// and the planted-link collection would drop that link as already
+		// outside instead of keeping it for the write that replaces the file.
+		err := climbableDir(walk.disk(current))
+		if err != nil {
+			return "", err
+		}
+
 		// filepath.Dir(".") stays "." and filepath.Dir("..") stays ".", so a
 		// relative OutputDir would drop climbs and then look contained.
 		// Join preserves them: Join(".", "..") is ".." and Join("..", "..")
@@ -809,6 +820,26 @@ func stepLinkElem(current, elem string, walk *linkWalk) (string, error) {
 	}
 
 	return followLinkElem(current, next, walk)
+}
+
+// climbableDir fails when path exists and is not a directory. A missing path
+// passes: a component that does not exist yet is climbed lexically, and the
+// climb-after rule and the planted-link lookups cover what is created there.
+func climbableDir(path string) error {
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+
+	if err != nil {
+		return fmt.Errorf("lstat %s: %w", path, err)
+	}
+
+	if !info.IsDir() {
+		return fmt.Errorf("climb from %s: %w", path, syscall.ENOTDIR)
+	}
+
+	return nil
 }
 
 func followLinkElem(parent, link string, walk *linkWalk) (string, error) {

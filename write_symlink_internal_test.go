@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -352,6 +353,53 @@ func TestCreateSymlinkTracksUnresolvableLink(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(out, "foo"), []byte("file"), 0o600))
 	require.NoError(t, os.WriteFile(victim, []byte("pwned"), 0o600))
 	require.NoError(t, os.Symlink("foo/bar/../../victim", filepath.Join(out, "existing")))
+
+	xFile := &XFile{FilePath: "planted.tar", OutputDir: out}
+	err := xFile.createSymlink(filepath.Join(out, "foo"), ".")
+	require.ErrorIs(t, err, ErrInvalidPath)
+
+	_, statErr := os.Lstat(filepath.Join(out, "foo"))
+	require.ErrorIs(t, statErr, os.ErrNotExist, "the replaced file cannot be put back, and no link may sit there")
+	requireNotResolvingTo(t, filepath.Join(out, "existing"), victim)
+}
+
+// TestWalkLinkTargetStopsAtFile is ".." applied to a regular file. The kernel
+// gives ENOTDIR; the walk must not climb and report a path.
+func TestWalkLinkTargetStopsAtFile(t *testing.T) {
+	t.Parallel()
+
+	// The walk starts from the resolved parent; macOS puts TempDir under /var -> /private/var.
+	out, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(out, "foo"), []byte("file"), 0o600))
+
+	walk := &linkWalk{}
+	_, err = walkLinkTarget(filepath.Join(out, "existing"), "foo/../../victim", walk)
+	require.ErrorIs(t, err, syscall.ENOTDIR)
+	require.Equal(t, []string{filepath.Join(out, "foo")}, walk.visits, "the file is still a lookup")
+
+	resolved, err := walkLinkTarget(filepath.Join(out, "existing"), "missing/../victim", &linkWalk{})
+	require.NoError(t, err, "a component that does not exist yet is climbed lexically")
+	require.Equal(t, filepath.Join(out, "victim"), resolved)
+}
+
+// TestCreateSymlinkTracksClimbThroughFile is a planted link whose ".." sits
+// right after a regular file: existing -> foo/../../victim with a file at foo.
+// A walk that climbs anyway lands outside OutputDir, and collection would drop
+// the link as already outside. Replacing foo with foo -> . then makes it
+// resolve outside for real.
+func TestCreateSymlinkTracksClimbThroughFile(t *testing.T) {
+	t.Parallel()
+	skipWithoutSymlinks(t)
+
+	root := t.TempDir()
+	out := filepath.Join(root, "dir", "out")
+	victim := filepath.Join(root, "victim")
+
+	require.NoError(t, os.MkdirAll(out, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(out, "foo"), []byte("file"), 0o600))
+	require.NoError(t, os.WriteFile(victim, []byte("pwned"), 0o600))
+	require.NoError(t, os.Symlink("foo/../../victim", filepath.Join(out, "existing")))
 
 	xFile := &XFile{FilePath: "planted.tar", OutputDir: out}
 	err := xFile.createSymlink(filepath.Join(out, "foo"), ".")
