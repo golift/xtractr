@@ -321,7 +321,12 @@ func ExtractFile(xFile *XFile) (size uint64, filesList, archiveList []string, er
 
 		// A resource cap aborts the extraction; do not re-extract via signature
 		// detection, which would reset the counters and could even report success.
-		if IsLimitError(err) {
+		// The same goes for any failure after members were written: the format
+		// was recognized, and that error is the result. A .tar.gz whose tar is
+		// extracted and then refused is still a valid gzip, and the fallback
+		// would gunzip it into OutputDir as a .tar and report success over the
+		// refusal, with the members left as they were.
+		if IsLimitError(err) || size > 0 || len(filesList) > 0 {
 			return size, filesList, archiveList, err
 		}
 

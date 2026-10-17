@@ -1280,6 +1280,38 @@ func TestTarRejectedLinkKeepsFile(t *testing.T) {
 	assert.Equal(t, "mine", string(data))
 }
 
+// TestExtractFileRefusalSkipsSignatureFallback is a .tar.gz whose tar is
+// extracted and then refused (here, the squash). ExtractFile used to fall
+// back to signature detection on any extension failure; the gzip magic
+// matched, the archive was gunzipped into OutputDir as a .tar, and the call
+// reported success over the refusal. An extractor that wrote members
+// recognized the format, so its error is the result.
+func TestExtractFileRefusalSkipsSignatureFallback(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	out := filepath.Join(root, "out")
+	require.NoError(t, os.MkdirAll(out, 0o750))
+
+	archive := filepath.Join(root, "squash.tar.gz")
+	require.NoError(t, writeTarGzipMembers(archive, []tarMember{
+		{name: "foo/foo.xtractr_aside/bar.txt"},
+		{name: "foo/other.txt"},
+	}))
+
+	_, _, _, err := xtractr.ExtractFile(&xtractr.XFile{ //nolint:dogsled // only the error matters here.
+		FilePath:   archive,
+		OutputDir:  out,
+		FileMode:   0o644,
+		DirMode:    0o755,
+		SquashRoot: true,
+	})
+	require.ErrorIs(t, err, xtractr.ErrAsideTaken)
+	assertDirNames(t, out, "foo")
+	assertRegularFile(t, filepath.Join(out, "foo", "foo.xtractr_aside", "bar.txt"))
+	assertRegularFile(t, filepath.Join(out, "foo", "other.txt"))
+}
+
 // TestTarHardLinkToAsideName is a hard link whose target is the name the
 // file at its path is set aside under, with the target extracted after the
 // link. The target is looked up before the file is set aside, so the link
