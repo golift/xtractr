@@ -363,8 +363,9 @@ func TestCreateSymlinkTracksUnresolvableLink(t *testing.T) {
 	requireNotResolvingTo(t, filepath.Join(out, "existing"), victim)
 }
 
-// TestWalkLinkTargetStopsAtFile is ".." applied to a regular file. The kernel
-// gives ENOTDIR; the walk must not climb and report a path.
+// TestWalkLinkTargetStopsAtFile is ".." applied to a regular file or to a
+// name that does not exist. The kernel gives ENOTDIR or ENOENT; the walk must
+// not climb and report a path, and must keep the lookup it made.
 func TestWalkLinkTargetStopsAtFile(t *testing.T) {
 	t.Parallel()
 
@@ -378,9 +379,18 @@ func TestWalkLinkTargetStopsAtFile(t *testing.T) {
 	require.ErrorIs(t, err, syscall.ENOTDIR)
 	require.Equal(t, []string{filepath.Join(out, "foo")}, walk.visits, "the file is still a lookup")
 
-	resolved, err := walkLinkTarget(filepath.Join(out, "existing"), "missing/../victim", &linkWalk{})
-	require.NoError(t, err, "a component that does not exist yet is climbed lexically")
-	require.Equal(t, filepath.Join(out, "victim"), resolved)
+	walk = &linkWalk{}
+	_, err = walkLinkTarget(filepath.Join(out, "existing"), "missing/../victim", walk)
+	require.ErrorIs(t, err, os.ErrNotExist)
+	require.Equal(t, []string{filepath.Join(out, "missing")}, walk.visits, "the missing name is still a lookup")
+
+	resolved, err := walkLinkTarget(filepath.Join(out, "existing"), "missing/later", &linkWalk{})
+	require.NoError(t, err, "a component that does not exist yet is kept when nothing climbs out of it")
+	require.Equal(t, filepath.Join(out, "missing", "later"), resolved)
+
+	resolved, err = walkLinkTarget(filepath.Join(out, "nested", "link"), "../real.txt", &linkWalk{})
+	require.NoError(t, err, "the link's own parent chain is made before the link and is climbed")
+	require.Equal(t, filepath.Join(out, "real.txt"), resolved)
 }
 
 // TestCreateSymlinkTracksClimbThroughFile is a planted link whose ".." sits
@@ -408,6 +418,50 @@ func TestCreateSymlinkTracksClimbThroughFile(t *testing.T) {
 	_, statErr := os.Lstat(filepath.Join(out, "foo"))
 	require.ErrorIs(t, statErr, os.ErrNotExist, "the replaced file cannot be put back, and no link may sit there")
 	requireNotResolvingTo(t, filepath.Join(out, "existing"), victim)
+}
+
+// TestOutputFileByNameChecksIdentity is the guard on the pathname operations
+// that follow an open: between the open and the remove or Chtimes, a link
+// write can point a parent elsewhere, briefly or for good. The operation must
+// land on the file that was opened or not at all.
+func TestOutputFileByNameChecksIdentity(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "a.txt")
+
+	written, err := os.Create(path)
+	require.NoError(t, err)
+
+	info, err := written.Stat()
+	require.NoError(t, err)
+	require.NoError(t, written.Close())
+
+	out := outputFile{path: path, info: info}
+
+	// The pathname now names a different file.
+	require.NoError(t, os.Remove(path))
+	require.NoError(t, os.WriteFile(path, []byte("someone else's"), 0o600))
+
+	err = out.byName(os.Remove)
+	require.ErrorIs(t, err, ErrInvalidPath)
+	require.FileExists(t, path, "a file that is not the one written must not be removed")
+
+	// And back to the file that was written.
+	require.NoError(t, os.Remove(path))
+
+	written, err = os.Create(path)
+	require.NoError(t, err)
+
+	info, err = written.Stat()
+	require.NoError(t, err)
+	require.NoError(t, written.Close())
+
+	out = outputFile{path: path, info: info}
+	out.remove()
+
+	_, err = os.Lstat(path)
+	require.ErrorIs(t, err, os.ErrNotExist)
 }
 
 // TestCreateSymlinkReplacesEntry is the replacement archives rely on: a

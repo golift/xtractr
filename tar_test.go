@@ -630,6 +630,107 @@ func TestTarRejectedLinkKeepsExisting(t *testing.T) {
 	assert.Equal(t, "mine", string(data))
 }
 
+// plantDanglingClimb lays out OutputDir with foo -> missing and
+// existing -> foo/../../victim, which resolves nowhere until a directory
+// named missing appears and then resolves to victim, beside OutputDir.
+func plantDanglingClimb(t *testing.T) (string, string) {
+	t.Helper()
+
+	root := t.TempDir()
+	out := filepath.Join(root, "out")
+	victim := filepath.Join(root, "victim")
+
+	require.NoError(t, os.MkdirAll(out, 0o750))
+	require.NoError(t, os.WriteFile(victim, []byte("pwned"), 0o600))
+	require.NoError(t, os.Symlink("missing", filepath.Join(out, "foo")))
+	require.NoError(t, os.Symlink("foo/../../victim", filepath.Join(out, "existing")))
+
+	_, err := filepath.EvalSymlinks(filepath.Join(out, "existing"))
+	require.Error(t, err, "existing must dangle before the extract")
+
+	return out, victim
+}
+
+// assertNotResolvingTo passes when link does not resolve, or resolves to
+// something other than victim. Both sides are resolved: macOS keeps TempDir
+// under /var -> /private/var.
+func assertNotResolvingTo(t *testing.T, link, victim string) {
+	t.Helper()
+
+	realVictim, err := filepath.EvalSymlinks(victim)
+	require.NoError(t, err)
+
+	resolved, err := filepath.EvalSymlinks(link)
+	if err == nil {
+		assert.NotEqual(t, realVictim, resolved, "%s resolves to the victim", link)
+	}
+}
+
+// TestTarDirArmsPlantedClimb is a directory member, not a link, that arms a
+// planted link: foo -> missing dangles, existing -> foo/../../victim resolves
+// nowhere, and a plain missing/ makes it resolve beside OutputDir. The
+// directory has to be audited like a link would be, whether it is its own
+// member, a file's parent, or followed by a link (which used to collect the
+// planted links only then, with missing already in place).
+func TestTarDirArmsPlantedClimb(t *testing.T) {
+	t.Parallel()
+	skipWithoutSymlinks(t)
+
+	for name, members := range map[string][]tarMember{
+		"directory member": {{name: "missing/", dir: true}},
+		"file parent":      {{name: "missing/a.txt"}},
+		"then a link":      {{name: "missing/", dir: true}, {name: "other", link: "missing"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			out, victim := plantDanglingClimb(t)
+
+			archive := filepath.Join(filepath.Dir(out), "evil.tar.gz")
+			require.NoError(t, writeTarGzipMembers(archive, members))
+
+			_, _, err := xtractr.ExtractTarGzip(&xtractr.XFile{
+				FilePath:  archive,
+				OutputDir: out,
+				FileMode:  0o644,
+				DirMode:   0o755,
+			})
+			require.ErrorIs(t, err, xtractr.ErrInvalidPath)
+
+			assertAbsent(t, filepath.Join(out, "missing"))
+			assertNotResolvingTo(t, filepath.Join(out, "existing"), victim)
+		})
+	}
+}
+
+// TestTarDirUnderPlantedClimbStaysInside is the other side: a directory at a
+// path a planted link looked up is fine when the link still lands inside.
+// existing -> missing/../keep resolves nowhere, then to OutputDir/keep.
+func TestTarDirUnderPlantedClimbStaysInside(t *testing.T) {
+	t.Parallel()
+	skipWithoutSymlinks(t)
+
+	root := t.TempDir()
+	out := filepath.Join(root, "out")
+
+	require.NoError(t, os.MkdirAll(out, 0o750))
+	require.NoError(t, os.Symlink("missing/../keep", filepath.Join(out, "existing")))
+
+	archive := filepath.Join(root, "fine.tar.gz")
+	require.NoError(t, writeTarGzipMembers(archive, []tarMember{{name: "missing/a.txt"}, {name: "keep"}}))
+
+	_, files, err := xtractr.ExtractTarGzip(&xtractr.XFile{
+		FilePath:  archive,
+		OutputDir: out,
+		FileMode:  0o644,
+		DirMode:   0o755,
+	})
+	require.NoError(t, err)
+	assert.Len(t, files, 2)
+	require.FileExists(t, filepath.Join(out, "missing", "a.txt"))
+	assertPathInside(t, out, filepath.Join(out, "existing"))
+}
+
 // squashTar writes members to a plain tar beside out and extracts it into out
 // with SquashRoot. Plain tar, because ExtractFile falls back to gunzip when a
 // .tar.gz fails, which hides the tar error.

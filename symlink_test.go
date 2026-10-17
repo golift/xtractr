@@ -411,6 +411,27 @@ func TestZipRejectedLinkKeepsExisting(t *testing.T) {
 	}
 }
 
+// TestZipDirArmsPlantedClimb is TestTarDirArmsPlantedClimb through the zip
+// writers: a file's parent directory is made under the shared side of the
+// link lock, by parallel workers when there are two.
+func TestZipDirArmsPlantedClimb(t *testing.T) {
+	t.Parallel()
+	skipWithoutSymlinks(t)
+
+	for _, workers := range []int{1, 2} {
+		out, victim := plantDanglingClimb(t)
+
+		archive := filepath.Join(filepath.Dir(out), "evil.zip")
+		writeOuterZip(t, archive, map[string][]byte{"missing/a.txt": []byte("a"), "b.txt": []byte("b")}, nil)
+
+		err := extractZipWorkers(archive, out, workers)
+		require.ErrorIs(t, err, xtractr.ErrInvalidPath, "workers: %d", workers)
+
+		assertAbsent(t, filepath.Join(out, "missing"))
+		assertNotResolvingTo(t, filepath.Join(out, "existing"), victim)
+	}
+}
+
 // TestZipShortenedPlantedClimb is TestTarShortenedPlantedClimb through the zip
 // writers: the replacement is rolled back and the deeper link put back, and
 // error cleanup must leave it there.

@@ -26,6 +26,13 @@ import (
 //nolint:gochecknoglobals // password retries copy XFile, so this lock cannot live on it.
 var linkWrite sync.RWMutex
 
+// plantedMu guards XFile.planted and plantedCollected. Link writes audit them
+// under linkWrite, but directory creation audits them too, from file workers
+// that share linkWrite or hold nothing. Taken after linkWrite, never before.
+//
+//nolint:gochecknoglobals // see linkWrite.
+var plantedMu sync.Mutex
+
 type file struct {
 	Path     string
 	Data     io.Reader
@@ -181,7 +188,19 @@ func openStatFile(path string) (*os.File, os.FileInfo, error) {
 
 // mkDir creates a folder (and parents) with safe permissions.
 // It refuses to leave the output folder through a pre-existing symlink.
+//
+// It runs while no link is being written (linkWrite): a link write replaces
+// an entry first and audits afterwards, and a mkdir or Chtimes by pathname in
+// that window would follow a link the audit then rolls back.
 func (x *XFile) mkDir(path string, mtime time.Time) error {
+	linkWrite.RLock()
+	defer linkWrite.RUnlock()
+
+	return x.mkDirLocked(path, mtime)
+}
+
+// mkDirLocked is mkDir for a caller that holds linkWrite.
+func (x *XFile) mkDirLocked(path string, mtime time.Time) error {
 	// Check before creating so we do not mkdir (or Chtimes) through a symlink
 	// that already points outside OutputDir.
 	if !x.resolvedWithinOutput(path) {
@@ -217,7 +236,14 @@ func (x *XFile) mkdirAllCounted(path string) error {
 		return fmt.Errorf("creating output directory: %w", err)
 	}
 
-	for _, dir := range dirComponentsUnder(base, path) {
+	dirs := dirComponentsUnder(base, path)
+	if len(dirs) > 0 {
+		// Before the first directory this extract creates, while the planted
+		// links still resolve as they did before it. See mkdirComponent.
+		x.collectPlantedLinks()
+	}
+
+	for _, dir := range dirs {
 		err := x.mkdirComponent(dir, perm)
 		if err != nil {
 			return err
@@ -231,6 +257,11 @@ func (x *XFile) mkdirAllCounted(path string) error {
 // rolled back on EEXIST (another worker or a pre-existing path) so parallel
 // ZIP/7z extracts cannot leave an over-limit directory that can no longer be
 // removed. A non-directory occupying the path is an error.
+//
+// A new directory is audited like a new link: a planted link that looked the
+// path up and found nothing (foo -> missing, existing -> foo/../../victim)
+// resolves nowhere until a directory is there, and then climbs out of it. The
+// directory is removed again when that happens.
 func (x *XFile) mkdirComponent(dir string, perm os.FileMode) error {
 	err := x.countExtracted()
 	if err != nil {
@@ -246,6 +277,15 @@ func (x *XFile) mkdirComponent(dir string, perm os.FileMode) error {
 			x.uncountExtracted()
 
 			return fmt.Errorf("%s: %w: %s resolves outside the output folder", x.FilePath, ErrInvalidPath, dir)
+		}
+
+		err = x.plantedLinksInside(dir)
+		if err != nil {
+			_ = os.Remove(dir)
+
+			x.uncountExtracted()
+
+			return err
 		}
 
 		return nil
@@ -333,17 +373,18 @@ func (x *XFile) writeFile(file *file, parallel bool) (uint64, error) {
 		return 0, err
 	}
 
-	fout, pathUsed, err := x.openOutputFile(file)
+	fout, out, err := x.openOutputFile(file)
 	if err != nil {
 		return 0, err
 	}
 
-	file.Path = pathUsed
+	file.Path = out.path
 
 	progWriter, err := x.wrapExtractWriter(fout, parallel)
 	if err != nil {
 		_ = fout.Close()
-		_ = os.Remove(file.Path)
+
+		out.remove()
 
 		return 0, err
 	}
@@ -352,21 +393,19 @@ func (x *XFile) writeFile(file *file, parallel bool) (uint64, error) {
 	closeErr := fout.Close()
 
 	if err != nil {
-		_ = os.Remove(file.Path)
+		out.remove()
 
 		return uint64(size), fmt.Errorf("copying archived file '%s' io: %w", file.Path, err)
 	}
 
 	if closeErr != nil {
-		_ = os.Remove(file.Path)
+		out.remove()
 
 		return uint64(size), fmt.Errorf("closing archived file '%s': %w", file.Path, closeErr)
 	}
 
 	x.noteArchiveOutput(file.Path, uint64(size))
-
-	// The error is ignored because it's not critical and pops up on OSes like Windows.
-	_ = os.Chtimes(file.Path, file.Atime, file.Mtime)
+	out.chtimes(file.Atime, file.Mtime)
 
 	return uint64(size), nil
 }
@@ -375,16 +414,68 @@ func (x *XFile) writeFile(file *file, parallel bool) (uint64, error) {
 // being written (linkWrite). mkDir checks that the parents resolve inside
 // OutputDir; the open follows whatever the parents are at that moment, so the
 // two have to see the same links.
-func (x *XFile) openOutputFile(file *file) (*os.File, string, error) {
+func (x *XFile) openOutputFile(file *file) (*os.File, outputFile, error) {
 	linkWrite.RLock()
 	defer linkWrite.RUnlock()
 
-	err := x.mkDir(filepath.Dir(file.Path), file.Mtime)
+	err := x.mkDirLocked(filepath.Dir(file.Path), file.Mtime)
 	if err != nil {
-		return nil, "", fmt.Errorf("writing archived file '%s' parent folder: %w", filepath.Base(file.Path), err)
+		return nil, outputFile{}, fmt.Errorf("writing archived file '%s' parent folder: %w", filepath.Base(file.Path), err)
 	}
 
-	return openExtractFile(file.Path, x.fileMode(file.FileMode))
+	fout, used, err := openExtractFile(file.Path, x.fileMode(file.FileMode))
+	if err != nil {
+		return nil, outputFile{}, err
+	}
+
+	info, err := fout.Stat()
+	if err != nil {
+		_ = fout.Close()
+		_ = os.Remove(used) // still under linkWrite: the pathname is the file.
+
+		return nil, outputFile{}, fmt.Errorf("stat extract file: %w", err)
+	}
+
+	return fout, outputFile{path: used, info: info}, nil
+}
+
+// outputFile is a regular file this extract opened, by the pathname it was
+// opened with. The pathname is needed again after the open, to remove a
+// partial write or to set its times, and by then a parent can be a different
+// link: a link write replaces an entry and audits afterwards, and its rollback
+// does not undo what a pathname operation did through the temporary link. So
+// those operations run while no link write is in flight, and only if the
+// pathname still names this file.
+type outputFile struct {
+	path string
+	info os.FileInfo
+}
+
+func (f outputFile) remove() {
+	_ = f.byName(os.Remove)
+}
+
+func (f outputFile) chtimes(atime, mtime time.Time) {
+	// The error is ignored because it's not critical and pops up on OSes like Windows.
+	_ = f.byName(func(path string) error { return os.Chtimes(path, atime, mtime) })
+}
+
+// byName runs operate on the pathname under the shared side of linkWrite,
+// after checking that the pathname still names the file that was opened.
+func (f outputFile) byName(operate func(path string) error) error {
+	linkWrite.RLock()
+	defer linkWrite.RUnlock()
+
+	info, err := os.Lstat(f.path)
+	if err != nil {
+		return fmt.Errorf("lstat %s: %w", f.path, err)
+	}
+
+	if !os.SameFile(info, f.info) {
+		return fmt.Errorf("%w: %s no longer names the file written", ErrInvalidPath, f.path)
+	}
+
+	return operate(f.path)
 }
 
 // extractOpenAttempts bounds the create/replace loop so a tight symlink-plant
@@ -716,6 +807,11 @@ type linkWalk struct {
 	// right now. SquashRoot checks links at the position they will have after
 	// the move while the entries are still under the root. See squashLayout.
 	onDisk func(path string) string
+	// missing is set while the position reached was looked up and not found.
+	// Nothing climbs out of it: the kernel stops there (ENOENT), and the
+	// directory that would let it continue is audited when it is created.
+	// The link's own parent chain is never marked; it is made before the link.
+	missing bool
 }
 
 func (w *linkWalk) consume() error {
@@ -794,10 +890,15 @@ func stepLinkElem(current, elem string, walk *linkWalk) (string, error) {
 		return current, nil
 	case "..":
 		// The kernel climbs out of directories only; ".." after a regular
-		// file is ENOTDIR and the link does not resolve. Climbing anyway
-		// reports a path for text like file/../../victim, outside OutputDir,
-		// and the planted-link collection would drop that link as already
-		// outside instead of keeping it for the write that replaces the file.
+		// file is ENOTDIR, after a name that is not there ENOENT, and the
+		// link does not resolve. Climbing anyway reports a path for text like
+		// file/../../victim or missing/../../victim, outside OutputDir, and
+		// the planted-link collection would drop that link as already outside
+		// instead of keeping it for the write that puts a directory there.
+		if walk.missing {
+			return "", fmt.Errorf("climb from %s: %w", current, os.ErrNotExist)
+		}
+
 		err := climbableDir(walk.disk(current))
 		if err != nil {
 			return "", err
@@ -815,12 +916,16 @@ func stepLinkElem(current, elem string, walk *linkWalk) (string, error) {
 
 	info, err := os.Lstat(walk.disk(next))
 	if errors.Is(err, os.ErrNotExist) {
+		walk.missing = true
+
 		return next, nil
 	}
 
 	if err != nil {
 		return "", fmt.Errorf("lstat %s: %w", next, err)
 	}
+
+	walk.missing = false
 
 	if info.Mode()&os.ModeSymlink == 0 {
 		return next, nil
@@ -829,9 +934,10 @@ func stepLinkElem(current, elem string, walk *linkWalk) (string, error) {
 	return followLinkElem(current, next, walk)
 }
 
-// climbableDir fails when path exists and is not a directory. A missing path
-// passes: a component that does not exist yet is climbed lexically, and the
-// climb-after rule and the planted-link lookups cover what is created there.
+// climbableDir fails when path is on disk and is not a directory. A path that
+// is not on disk passes: by the time this runs for one, it is the link's own
+// parent chain, which is made before the link (a looked-up name that was not
+// found is refused by the caller through linkWalk.missing).
 func climbableDir(path string) error {
 	info, err := os.Lstat(path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -991,8 +1097,9 @@ func (x *XFile) ensureLinksWithin(root string) error {
 		return nil // Files and directories resolve where they are put.
 	}
 
-	// Extraction has finished, so no link write races this. The scan is a
-	// no-op when the archive wrote a link; links already under root need it.
+	// Extraction has finished, so no write races this. The scan is a no-op
+	// when the archive wrote a link or made a directory; an archive of
+	// top-level files with links already under root needs it.
 	x.collectPlantedLinks()
 
 	layout := newSquashLayout(x.OutputDir, root)
@@ -1001,16 +1108,9 @@ func (x *XFile) ensureLinksWithin(root string) error {
 		OutputDir:        x.OutputDir,
 		plantedCollected: true,
 		onDisk:           layout.onDisk,
-	}
-
-	// Links under root are checked below, at the position the move gives
-	// them. The planted links elsewhere are walked under the layout.
-	moved := resolveExisting(root)
-
-	for _, link := range x.planted {
-		if !pathWithin(moved, link.path) {
-			scope.planted = append(scope.planted, link)
-		}
+		// Links under root are checked below, at the position the move gives
+		// them. The planted links elsewhere are walked under the layout.
+		planted: x.plantedOutside(resolveExisting(root)),
 	}
 
 	for _, path := range links {
@@ -1269,6 +1369,9 @@ func uniqueVisits(visits []string) []string {
 // skipped; the walk is a best-effort defense against an attacker who could
 // already write into OutputDir.
 func (x *XFile) collectPlantedLinks() {
+	plantedMu.Lock()
+	defer plantedMu.Unlock()
+
 	if x.plantedCollected {
 		return
 	}
@@ -1285,6 +1388,22 @@ func (x *XFile) collectPlantedLinks() {
 
 		return nil
 	})
+}
+
+// plantedOutside returns the planted links that are not under dir.
+func (x *XFile) plantedOutside(dir string) []plantedLink {
+	plantedMu.Lock()
+	defer plantedMu.Unlock()
+
+	var links []plantedLink
+
+	for _, link := range x.planted {
+		if !pathWithin(dir, link.path) {
+			links = append(links, link)
+		}
+	}
+
+	return links
 }
 
 // plantedLinkAt resolves the symlink at path the way the kernel would and
@@ -1315,9 +1434,9 @@ func plantedLinkAt(root, path string) (plantedLink, bool) {
 }
 
 // plantedLinksInside fails when a planted link now resolves outside
-// OutputDir. A link written at path only moves the links whose resolution
-// looked that path up, so only those are walked again; path == "" walks them
-// all, for SquashRoot, which changes many names at once.
+// OutputDir. A link or directory written at path only moves the links whose
+// resolution looked that path up, so only those are walked again; path == ""
+// walks them all, for SquashRoot, which changes many names at once.
 //
 // A link this extract removed is skipped. One it rewrote was checked as text
 // and is walked with the new text. Text that no longer walks (a cycle, the
@@ -1326,6 +1445,9 @@ func plantedLinkAt(root, path string) (plantedLink, bool) {
 // recorded only when every link passes: on failure the caller puts the
 // replaced entry back, and the old lookups describe that layout.
 func (x *XFile) plantedLinksInside(path string) error {
+	plantedMu.Lock()
+	defer plantedMu.Unlock()
+
 	if len(x.planted) == 0 {
 		return nil
 	}
