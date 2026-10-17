@@ -1066,6 +1066,59 @@ func TestTarSquashRootSameNamedChild(t *testing.T) {
 		assertDirNames(t, out, "FOO.XTRACTR_ASIDE")
 	})
 
+	// The audit checks a moved link at its destination, and used to resolve
+	// the chain above it on disk as it is now. With a child named like the
+	// root, that chain is the root's own entries: out/foo/sub was the root's
+	// sub -> dir/deep, standing in for the child's sub, a directory, and the
+	// link's ../../evil climbed from the wrong place, past the kept
+	// out/evil -> ../victim. The chain is stepped through the layout now.
+	t.Run("parent through moved child", func(t *testing.T) {
+		t.Parallel()
+		skipWithoutSymlinks(t)
+
+		root := t.TempDir()
+		out := filepath.Join(root, "out")
+		victim := filepath.Join(root, "victim")
+
+		require.NoError(t, os.MkdirAll(out, 0o750))
+		require.NoError(t, os.WriteFile(victim, []byte("pwned"), 0o600))
+		require.NoError(t, os.Symlink("../victim", filepath.Join(out, "evil")))
+
+		err := squashTar(t, out, []tarMember{
+			{name: "foo/dir/deep", dir: true},
+			{name: "foo/sub", link: "dir/deep"},
+			{name: "foo/foo/sub/link", link: "../../evil"},
+		})
+		require.ErrorIs(t, err, xtractr.ErrInvalidPath)
+		assertDirNames(t, out, "evil", "foo")
+		assertNotResolvingTo(t, filepath.Join(out, "foo", "sub", "link"), victim)
+	})
+
+	// The same chain with the child's sub a directory on both sides is fine:
+	// ../../evil from out/foo/sub/link reaches out/evil either way, and here
+	// evil is the root's own file, moved up. The layout walk must not refuse
+	// what the move does leave inside.
+	t.Run("parent through moved child stays inside", func(t *testing.T) {
+		t.Parallel()
+		skipWithoutSymlinks(t)
+
+		out := filepath.Join(t.TempDir(), "out")
+		require.NoError(t, os.MkdirAll(out, 0o750))
+
+		err := squashTar(t, out, []tarMember{
+			{name: "foo/evil", data: "fine"},
+			{name: "foo/sub", link: "dir/deep"},
+			{name: "foo/foo/sub/link", link: "../../evil"},
+		})
+		require.NoError(t, err)
+		assertDirNames(t, out, "evil", "foo", "sub")
+		assertPathInside(t, out, filepath.Join(out, "foo", "sub", "link"))
+
+		data, err := os.ReadFile(filepath.Join(out, "foo", "sub", "link"))
+		require.NoError(t, err)
+		assert.Equal(t, "fine", string(data))
+	})
+
 	// A link already in OutputDir looked up the aside name and found nothing.
 	// Renaming the root to it would make the link resolve through the moved
 	// tree (here, out of OutputDir), a layout nothing audits, and a failed

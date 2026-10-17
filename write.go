@@ -907,6 +907,12 @@ type linkWalk struct {
 	// right now. SquashRoot checks links at the position they will have after
 	// the move while the entries are still under the root. See squashLayout.
 	onDisk func(path string) string
+	// from, when set, is the resolved directory the link's text is walked
+	// from. Otherwise that is the link's parent as the filesystem resolves it
+	// now. SquashRoot sets it for a moved link: the names above its
+	// destination hold the root's own entries until the move, and the layout
+	// says what is there after. See squashLayout.parentAfterMove.
+	from string
 	// missing is set while the position reached was looked up and not found.
 	// Nothing climbs out of it: the kernel stops there (ENOENT), and the
 	// directory that would let it continue is audited when it is created.
@@ -961,7 +967,12 @@ func linkTargetStart(parent, target string) (string, string, error) {
 // following links that already exist. A component that does not exist yet is
 // kept as written.
 func walkLinkTarget(linkPath, linkName string, walk *linkWalk) (string, error) {
-	start, rest, err := linkTargetStart(resolveExisting(filepath.Dir(linkPath)), linkName)
+	parent := walk.from
+	if parent == "" {
+		parent = resolveExisting(filepath.Dir(linkPath))
+	}
+
+	start, rest, err := linkTargetStart(parent, linkName)
 	if err != nil {
 		return "", err
 	}
@@ -1151,6 +1162,13 @@ func linkTargetClimbsAfterComponent(linkName string) bool {
 // later entry from creating a component this text climbs through. The walk
 // is what the kernel will do with the links on disk right now.
 func (x *XFile) ensureLinkWithinOutput(linkPath, linkName string) error {
+	return x.ensureLinkWithinOutputFrom(linkPath, linkName, "")
+}
+
+// ensureLinkWithinOutputFrom is ensureLinkWithinOutput with the resolved
+// directory the text is walked from already known; "" is the link's parent
+// as the filesystem resolves it now. See linkWalk.from.
+func (x *XFile) ensureLinkWithinOutputFrom(linkPath, linkName, from string) error {
 	if linkTargetClimbsAfterComponent(linkName) {
 		return fmt.Errorf("%s: %w: %s", x.FilePath, ErrInvalidPath, linkName)
 	}
@@ -1164,7 +1182,7 @@ func (x *XFile) ensureLinkWithinOutput(linkPath, linkName string) error {
 		return fmt.Errorf("%s: %w: %s (from: %s)", x.FilePath, ErrInvalidPath, lexical, linkName)
 	}
 
-	resolved, err := walkLinkTarget(linkPath, linkName, &linkWalk{rejectClimbs: true, onDisk: x.onDisk})
+	resolved, err := walkLinkTarget(linkPath, linkName, &linkWalk{rejectClimbs: true, onDisk: x.onDisk, from: from})
 	if err != nil {
 		return fmt.Errorf("%s: %w: %s: %w", x.FilePath, ErrInvalidPath, linkName, err)
 	}
@@ -1220,7 +1238,14 @@ func (x *XFile) ensureLinksWithin(root string) error {
 			return fmt.Errorf("squash root: readlink: %w", err)
 		}
 
-		err = scope.ensureLinkWithinOutput(layout.destination(path), target)
+		dest := layout.destination(path)
+
+		from, err := layout.parentAfterMove(path, dest)
+		if err != nil {
+			return fmt.Errorf("squash root: %w: %s: %w", ErrInvalidPath, dest, err)
+		}
+
+		err = scope.ensureLinkWithinOutputFrom(dest, target, from)
 		if err != nil {
 			return fmt.Errorf("squash root: %w", err)
 		}
@@ -1307,6 +1332,28 @@ func (l *squashLayout) destination(path string) string {
 	}
 
 	return filepath.Join(l.outputDir, rel)
+}
+
+// parentAfterMove is the resolved directory a moved link's text is walked
+// from: the chain above its destination, stepped through the layout like
+// target text. Resolving it on disk finds the root's own entries under those
+// names, not what the move leaves there. With a child named like the root,
+// out/foo/sub is the root's sub (say, a link to dir/deep) until the move and
+// the child's sub (a directory) after; a link under it walked from the
+// root's would climb from the wrong place. A link that stays, under an
+// occupied name, is walked from its parent as the filesystem resolves it
+// (""), since nothing above it changes.
+func (l *squashLayout) parentAfterMove(path, dest string) (string, error) {
+	if dest == path {
+		return "", nil
+	}
+
+	rel, err := filepath.Rel(l.outputDir, filepath.Dir(dest))
+	if err != nil {
+		return "", fmt.Errorf("parent of %s: %w", dest, err)
+	}
+
+	return walkLinkElems(l.resolved, splitElems(rel), &linkWalk{rejectClimbs: true, onDisk: l.onDisk})
 }
 
 // onDisk is the linkWalk hook: a path under OutputDir whose top-level name the
@@ -1432,6 +1479,7 @@ func (x *XFile) replaceEntry(path string) (replacedEntry, error) {
 		err = os.Remove(path)
 	default:
 		aside := asideName(path, x.Suffix)
+
 		err = setAside(path, aside)
 		if err == nil {
 			old.aside = aside
