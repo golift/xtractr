@@ -3,7 +3,6 @@ package xtractr
 import (
 	"archive/zip"
 	"fmt"
-	"os"
 	"path/filepath"
 	"time"
 )
@@ -144,8 +143,7 @@ func (x *XFile) extractZIPEntry(entry zipFileEntry) (err error) {
 	closeNamed(zFile, &err)
 
 	if err != nil {
-		_ = os.Remove(fileInfo.Path)
-
+		// writeFile removed any partial; see its doc for why not here.
 		return fmt.Errorf("%s: %w: %s (from: %s)",
 			entry.zipFile.FileInfo().Name(), err, fileInfo.Path, entry.decodedName)
 	}
@@ -193,8 +191,7 @@ func (x *XFile) unzipWithName(zipFile *zip.File, name string) (size uint64, path
 	closeNamed(zFile, &err)
 
 	if err != nil {
-		_ = os.Remove(file.Path)
-
+		// writeFile removed any partial; see its doc for why not here.
 		return size, file.Path, fmt.Errorf("%s: %w: %s (from: %s)", zipFile.FileInfo().Name(), err, file.Path, name)
 	}
 

@@ -336,6 +336,138 @@ func TestSymlinkThroughPlantedDirRejected(t *testing.T) {
 	require.ErrorIs(t, statErr, os.ErrNotExist)
 }
 
+// extractZipWorkers extracts archive into out with the given worker count and
+// returns the error. Zip entries are written by parallel workers when
+// FileWorkers > 1, which is the path with its own error cleanup.
+func extractZipWorkers(archive, out string, workers int) error {
+	_, _, err := xtractr.ExtractZIP(&xtractr.XFile{
+		FilePath:    archive,
+		OutputDir:   out,
+		FileMode:    0o644,
+		DirMode:     0o755,
+		FileWorkers: workers,
+	})
+	if err != nil {
+		return fmt.Errorf("extract zip: %w", err)
+	}
+
+	return nil
+}
+
+// TestZipRejectedFileKeepsOutside is a member under a planted link that
+// points outside OutputDir. The write is refused, and the file the link
+// points at must survive: error cleanup used to os.Remove the member path,
+// which follows the link.
+func TestZipRejectedFileKeepsOutside(t *testing.T) {
+	t.Parallel()
+	skipWithoutSymlinks(t)
+
+	for _, workers := range []int{1, 2} {
+		root := t.TempDir()
+		out := filepath.Join(root, "out")
+		elsewhere := filepath.Join(root, "elsewhere")
+		passwd := filepath.Join(elsewhere, "passwd")
+
+		require.NoError(t, os.MkdirAll(out, 0o750))
+		require.NoError(t, os.MkdirAll(elsewhere, 0o750))
+		require.NoError(t, os.WriteFile(passwd, []byte("root:x"), 0o600))
+		require.NoError(t, os.Symlink("../elsewhere", filepath.Join(out, "existing")))
+
+		archive := filepath.Join(root, "evil.zip")
+		writeOuterZip(t, archive, map[string][]byte{"existing/passwd": []byte("owned")}, nil)
+
+		err := extractZipWorkers(archive, out, workers)
+		require.ErrorIs(t, err, xtractr.ErrInvalidPath, "workers: %d", workers)
+
+		data, err := os.ReadFile(passwd)
+		require.NoError(t, err, "workers: %d", workers)
+		assert.Equal(t, "root:x", string(data))
+	}
+}
+
+// TestZipRejectedLinkKeepsExisting is a link entry whose text is refused, at
+// the path of a link already in OutputDir. The existing link stays; error
+// cleanup must not remove it.
+func TestZipRejectedLinkKeepsExisting(t *testing.T) {
+	t.Parallel()
+	skipWithoutSymlinks(t)
+
+	for _, workers := range []int{1, 2} {
+		root := t.TempDir()
+		out := filepath.Join(root, "out")
+
+		require.NoError(t, os.MkdirAll(out, 0o750))
+		require.NoError(t, os.Symlink("old", filepath.Join(out, "link")))
+
+		archive := filepath.Join(root, "evil.zip")
+		writeOuterZip(t, archive, nil, map[string]string{"link": "../../etc/passwd"})
+
+		err := extractZipWorkers(archive, out, workers)
+		require.ErrorIs(t, err, xtractr.ErrInvalidPath, "workers: %d", workers)
+
+		got, err := os.Readlink(filepath.Join(out, "link"))
+		require.NoError(t, err, "workers: %d", workers)
+		assert.Equal(t, "old", got)
+	}
+}
+
+// TestZipDirArmsPlantedClimb is TestTarDirArmsPlantedClimb through the zip
+// writers: a file's parent directory is made under the shared side of the
+// link lock, by parallel workers when there are two.
+func TestZipDirArmsPlantedClimb(t *testing.T) {
+	t.Parallel()
+	skipWithoutSymlinks(t)
+
+	for _, workers := range []int{1, 2} {
+		out, victim := plantDanglingClimb(t)
+
+		archive := filepath.Join(filepath.Dir(out), "evil.zip")
+		writeOuterZip(t, archive, map[string][]byte{"missing/a.txt": []byte("a"), "b.txt": []byte("b")}, nil)
+
+		err := extractZipWorkers(archive, out, workers)
+		require.ErrorIs(t, err, xtractr.ErrInvalidPath, "workers: %d", workers)
+
+		assertAbsent(t, filepath.Join(out, "missing"))
+		assertNotResolvingTo(t, filepath.Join(out, "existing"), victim)
+	}
+}
+
+// TestZipShortenedPlantedClimb is TestTarShortenedPlantedClimb through the zip
+// writers: the replacement is rolled back and the deeper link put back, and
+// error cleanup must leave it there.
+func TestZipShortenedPlantedClimb(t *testing.T) {
+	t.Parallel()
+	skipWithoutSymlinks(t)
+
+	for _, workers := range []int{1, 2} {
+		root := t.TempDir()
+		out := filepath.Join(root, "out")
+		victim := filepath.Join(root, "victim")
+
+		require.NoError(t, os.MkdirAll(filepath.Join(out, "sub", "deep"), 0o750))
+		require.NoError(t, os.WriteFile(victim, []byte("pwned"), 0o600))
+		require.NoError(t, os.Symlink("sub/deep", filepath.Join(out, "foo")))
+		require.NoError(t, os.Symlink("foo/../../victim", filepath.Join(out, "existing")))
+
+		archive := filepath.Join(root, "planted.zip")
+		writeOuterZip(t, archive, nil, map[string]string{"foo": "sub"})
+
+		err := extractZipWorkers(archive, out, workers)
+		require.ErrorIs(t, err, xtractr.ErrInvalidPath, "workers: %d", workers)
+
+		got, err := os.Readlink(filepath.Join(out, "foo"))
+		require.NoError(t, err, "workers: %d", workers)
+		// Windows os.Symlink stores the text with backslashes.
+		assert.Equal(t, filepath.FromSlash("sub/deep"), got)
+
+		resolved, evalErr := filepath.EvalSymlinks(filepath.Join(out, "existing"))
+		if evalErr == nil {
+			assert.NotEqual(t, victim, resolved)
+			assertPathInside(t, out, filepath.Join(out, "existing"))
+		}
+	}
+}
+
 func createSymlinkZip(dest string) error {
 	archiveFile, err := os.Create(dest)
 	if err != nil {

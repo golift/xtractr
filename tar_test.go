@@ -193,6 +193,730 @@ func TestTarSymlinkEscape(t *testing.T) {
 	}
 }
 
+// TestTarSymlinkCleanBypass is the chained-link case also covered for cpio.
+// createSymlink is shared, so tar must reject it too: foo/bar -> ".." makes
+// foo/bar/../victim look inside OutputDir after filepath.Clean, and the kernel
+// resolves it outside.
+func TestTarSymlinkCleanBypass(t *testing.T) {
+	t.Parallel()
+
+	err := os.Symlink("target", filepath.Join(t.TempDir(), "symlink-probe"))
+	if err != nil {
+		t.Skipf("symlinks unavailable on this platform: %v", err)
+	}
+
+	t.Run("existing", func(t *testing.T) {
+		t.Parallel()
+		assertTarCleanBypassRejected(t, true)
+	})
+
+	t.Run("dangling", func(t *testing.T) {
+		t.Parallel()
+		assertTarCleanBypassRejected(t, false)
+	})
+}
+
+func assertTarCleanBypassRejected(t *testing.T, victimExists bool) {
+	t.Helper()
+
+	root := t.TempDir()
+	out := filepath.Join(root, "out")
+	victim := filepath.Join(root, "victim")
+
+	if victimExists {
+		require.NoError(t, os.MkdirAll(victim, 0o750))
+	}
+
+	archive := filepath.Join(root, "bypass.tar.gz")
+	require.NoError(t, writeTarGzipSymlinkBypass(archive))
+
+	_, _, err := xtractr.ExtractTarGzip(&xtractr.XFile{
+		FilePath:  archive,
+		OutputDir: out,
+		FileMode:  0o644,
+		DirMode:   0o755,
+	})
+	require.ErrorIs(t, err, xtractr.ErrInvalidPath)
+
+	got, err := os.Readlink(filepath.Join(out, "foo", "bar"))
+	require.NoError(t, err)
+	assert.Equal(t, "..", got)
+	assertPathInside(t, out, filepath.Join(out, "foo", "bar"))
+
+	assertAbsent(t, filepath.Join(out, "baz"))
+	assertAbsent(t, filepath.Join(victim, "pwned"))
+
+	if !victimExists {
+		assertAbsent(t, victim)
+	}
+}
+
+func writeTarGzipSymlinkBypass(dest string) error {
+	archiveFile, err := os.Create(dest)
+	if err != nil {
+		return fmt.Errorf("create tar: %w", err)
+	}
+
+	gzipWriter := gzip.NewWriter(archiveFile)
+	tarWriter := tar.NewWriter(gzipWriter)
+
+	links := []struct {
+		name   string
+		target string
+	}{
+		{name: "foo/bar", target: ".."},
+		{name: "baz", target: "foo/bar/../victim"},
+	}
+	for _, link := range links {
+		err = tarWriter.WriteHeader(&tar.Header{
+			Name:     link.name,
+			Linkname: link.target,
+			Mode:     0o777,
+			Typeflag: tar.TypeSymlink,
+			ModTime:  time.Now(),
+		})
+		if err != nil {
+			_ = tarWriter.Close()
+			_ = gzipWriter.Close()
+			_ = archiveFile.Close()
+
+			return fmt.Errorf("tar link %s: %w", link.name, err)
+		}
+	}
+
+	payload := []byte("pwned")
+
+	err = tarWriter.WriteHeader(&tar.Header{
+		Name:     "baz/pwned",
+		Mode:     0o644,
+		Size:     int64(len(payload)),
+		Typeflag: tar.TypeReg,
+		ModTime:  time.Now(),
+	})
+	if err != nil {
+		_ = tarWriter.Close()
+		_ = gzipWriter.Close()
+		_ = archiveFile.Close()
+
+		return fmt.Errorf("tar file header: %w", err)
+	}
+
+	_, err = tarWriter.Write(payload)
+	if err != nil {
+		_ = tarWriter.Close()
+		_ = gzipWriter.Close()
+		_ = archiveFile.Close()
+
+		return fmt.Errorf("tar file payload: %w", err)
+	}
+
+	err = tarWriter.Close()
+	if err != nil {
+		_ = gzipWriter.Close()
+		_ = archiveFile.Close()
+
+		return fmt.Errorf("close tar: %w", err)
+	}
+
+	err = gzipWriter.Close()
+	if err != nil {
+		_ = archiveFile.Close()
+
+		return fmt.Errorf("close gzip: %w", err)
+	}
+
+	err = archiveFile.Close()
+	if err != nil {
+		return fmt.Errorf("close tar file: %w", err)
+	}
+
+	return nil
+}
+
+// TestTarSymlinkRetargetEscape is a link that stays inside OutputDir only while
+// an earlier symlink is deep. Replacing that symlink leaves the first one
+// pointing at a sibling of OutputDir. "foo/../victim" still cleans inside, so
+// the lexical check alone does not reject it.
+func TestTarSymlinkRetargetEscape(t *testing.T) {
+	t.Parallel()
+
+	err := os.Symlink("target", filepath.Join(t.TempDir(), "symlink-probe"))
+	if err != nil {
+		t.Skipf("symlinks unavailable on this platform: %v", err)
+	}
+
+	t.Run("shorten deep link", func(t *testing.T) {
+		t.Parallel()
+		assertTarRetargetRejected(t, []tarMember{
+			{name: "sub", dir: true},
+			{name: "sub/deep", dir: true},
+			{name: "foo", link: "sub/deep"},
+			{name: "bar", link: "foo/../../victim"},
+			{name: "foo", link: "sub"},
+		})
+	})
+
+	t.Run("climb before link exists", func(t *testing.T) {
+		t.Parallel()
+		assertTarRetargetRejected(t, []tarMember{
+			{name: "bar", link: "foo/../victim"},
+			{name: "foo", link: "."},
+		})
+	})
+}
+
+func assertTarRetargetRejected(t *testing.T, members []tarMember) {
+	t.Helper()
+
+	root := t.TempDir()
+	out := filepath.Join(root, "out")
+	archive := filepath.Join(root, "retarget.tar.gz")
+	require.NoError(t, writeTarGzipMembers(archive, members))
+
+	_, _, err := xtractr.ExtractTarGzip(&xtractr.XFile{
+		FilePath:  archive,
+		OutputDir: out,
+		FileMode:  0o644,
+		DirMode:   0o755,
+	})
+	require.ErrorIs(t, err, xtractr.ErrInvalidPath)
+	assertAbsent(t, filepath.Join(out, "bar"))
+	assertAbsent(t, filepath.Join(root, "victim"))
+}
+
+type tarMember struct {
+	name string
+	link string
+	dir  bool
+}
+
+func writeTarGzipMembers(dest string, members []tarMember) error {
+	return writeTarMembers(dest, true, members)
+}
+
+// writeTarMembers writes a tar, gzip-compressed when compress is set. A plain
+// tar is useful with ExtractFile: when a .tar.gz extract fails, ExtractFile
+// falls back to plain gunzip and hides the tar error.
+func writeTarMembers(dest string, compress bool, members []tarMember) error {
+	archiveFile, err := os.Create(dest)
+	if err != nil {
+		return fmt.Errorf("create tar: %w", err)
+	}
+
+	var gzipWriter io.WriteCloser = nopWriteCloser{archiveFile}
+	if compress {
+		gzipWriter = gzip.NewWriter(archiveFile)
+	}
+
+	tarWriter := tar.NewWriter(gzipWriter)
+
+	for _, member := range members {
+		err = tarWriter.WriteHeader(member.header())
+		if err != nil {
+			_ = tarWriter.Close()
+			_ = gzipWriter.Close()
+			_ = archiveFile.Close()
+
+			return fmt.Errorf("tar header %s: %w", member.name, err)
+		}
+	}
+
+	err = tarWriter.Close()
+	if err != nil {
+		_ = gzipWriter.Close()
+		_ = archiveFile.Close()
+
+		return fmt.Errorf("close tar: %w", err)
+	}
+
+	err = gzipWriter.Close()
+	if err != nil {
+		_ = archiveFile.Close()
+
+		return fmt.Errorf("close gzip: %w", err)
+	}
+
+	err = archiveFile.Close()
+	if err != nil {
+		return fmt.Errorf("close tar file: %w", err)
+	}
+
+	return nil
+}
+
+func (m tarMember) header() *tar.Header {
+	header := &tar.Header{
+		Name:     m.name,
+		Mode:     0o755,
+		ModTime:  time.Now(),
+		Typeflag: tar.TypeReg,
+	}
+
+	switch {
+	case m.dir:
+		header.Typeflag = tar.TypeDir
+	case m.link != "":
+		header.Typeflag = tar.TypeSymlink
+		header.Linkname = m.link
+	}
+
+	return header
+}
+
+type nopWriteCloser struct{ io.Writer }
+
+func (nopWriteCloser) Close() error { return nil }
+
+// TestTarPlantedSymlinkClimb arms a link that was already in OutputDir.
+// "bar -> existing" follows "missing/../victim", and "missing -> ." makes that
+// text resolve outside. Replacing an existing directory with the shallower
+// link does the same.
+func TestTarPlantedSymlinkClimb(t *testing.T) {
+	t.Parallel()
+
+	err := os.Symlink("target", filepath.Join(t.TempDir(), "symlink-probe"))
+	if err != nil {
+		t.Skipf("symlinks unavailable on this platform: %v", err)
+	}
+
+	t.Run("follow planted link", func(t *testing.T) {
+		t.Parallel()
+		assertTarPlantedClimbRejected(t, false, []tarMember{
+			{name: "bar", link: "existing"},
+			{name: "missing", link: "."},
+		})
+	})
+
+	t.Run("arm planted link first", func(t *testing.T) {
+		t.Parallel()
+		assertTarPlantedClimbRejected(t, false, []tarMember{
+			{name: "missing", link: "."},
+			{name: "bar", link: "existing"},
+		})
+	})
+
+	t.Run("replace directory", func(t *testing.T) {
+		t.Parallel()
+		assertTarPlantedClimbRejected(t, true, []tarMember{
+			{name: "a", link: "."},
+		})
+	})
+}
+
+func assertTarPlantedClimbRejected(t *testing.T, withDir bool, members []tarMember) {
+	t.Helper()
+
+	root := t.TempDir()
+	out := filepath.Join(root, "out")
+	victim := filepath.Join(root, "victim")
+
+	require.NoError(t, os.MkdirAll(out, 0o750))
+	require.NoError(t, os.WriteFile(victim, []byte("pwned"), 0o600))
+
+	planted := "missing/../victim"
+
+	if withDir {
+		require.NoError(t, os.MkdirAll(filepath.Join(out, "a"), 0o750))
+
+		planted = "a/../victim"
+	}
+
+	require.NoError(t, os.Symlink(planted, filepath.Join(out, "existing")))
+
+	archive := filepath.Join(root, "planted.tar.gz")
+	require.NoError(t, writeTarGzipMembers(archive, members))
+
+	_, _, err := xtractr.ExtractTarGzip(&xtractr.XFile{
+		FilePath:  archive,
+		OutputDir: out,
+		FileMode:  0o644,
+		DirMode:   0o755,
+	})
+	require.ErrorIs(t, err, xtractr.ErrInvalidPath)
+	assertAbsent(t, filepath.Join(out, "bar"))
+	assertAbsent(t, filepath.Join(out, "missing"))
+
+	if withDir {
+		// The directory the refused link replaced is put back.
+		info, statErr := os.Lstat(filepath.Join(out, "a"))
+		require.NoError(t, statErr)
+		assert.True(t, info.IsDir())
+	}
+
+	resolved, evalErr := filepath.EvalSymlinks(filepath.Join(out, "existing"))
+	if evalErr == nil {
+		assert.NotEqual(t, victim, resolved)
+		assertPathInside(t, out, filepath.Join(out, "existing"))
+	}
+}
+
+// TestTarShortenedPlantedClimb is a planted link whose text cleans to a
+// path outside OutputDir but resolves inside through a deeper link. The
+// archive replaces that link with a shorter one, with or without an earlier
+// link entry; the extract fails and the deeper link is put back.
+func TestTarShortenedPlantedClimb(t *testing.T) {
+	t.Parallel()
+	skipWithoutSymlinks(t)
+
+	for name, members := range map[string][]tarMember{
+		"after another link": {{name: "readme", link: "README"}, {name: "foo", link: "sub"}},
+		"as the first link":  {{name: "foo", link: "sub"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			root := t.TempDir()
+			out := filepath.Join(root, "out")
+			victim := filepath.Join(root, "victim")
+
+			require.NoError(t, os.MkdirAll(filepath.Join(out, "sub", "deep"), 0o750))
+			require.NoError(t, os.WriteFile(victim, []byte("pwned"), 0o600))
+			require.NoError(t, os.Symlink("sub/deep", filepath.Join(out, "foo")))
+			require.NoError(t, os.Symlink("foo/../../victim", filepath.Join(out, "existing")))
+
+			archive := filepath.Join(root, "planted.tar.gz")
+			require.NoError(t, writeTarGzipMembers(archive, members))
+
+			_, _, err := xtractr.ExtractTarGzip(&xtractr.XFile{
+				FilePath:  archive,
+				OutputDir: out,
+				FileMode:  0o644,
+				DirMode:   0o755,
+			})
+			require.ErrorIs(t, err, xtractr.ErrInvalidPath)
+
+			got, err := os.Readlink(filepath.Join(out, "foo"))
+			require.NoError(t, err)
+			// Windows os.Symlink stores the text with backslashes.
+			assert.Equal(t, filepath.FromSlash("sub/deep"), got)
+
+			resolved, evalErr := filepath.EvalSymlinks(filepath.Join(out, "existing"))
+			if evalErr == nil {
+				assert.NotEqual(t, victim, resolved)
+				assertPathInside(t, out, filepath.Join(out, "existing"))
+			}
+		})
+	}
+}
+
+// TestTarRejectedLinkKeepsExisting is a link entry at the path of a file that
+// was already in OutputDir. The text is rejected, and the file stays.
+func TestTarRejectedLinkKeepsExisting(t *testing.T) {
+	t.Parallel()
+	skipWithoutSymlinks(t)
+
+	root := t.TempDir()
+	out := filepath.Join(root, "out")
+	keep := filepath.Join(out, "keep.txt")
+
+	require.NoError(t, os.MkdirAll(out, 0o750))
+	require.NoError(t, os.WriteFile(keep, []byte("mine"), 0o600))
+
+	archive := filepath.Join(root, "evil.tar.gz")
+	require.NoError(t, writeTarGzipMembers(archive, []tarMember{
+		{name: "keep.txt", link: "../../etc/passwd"},
+	}))
+
+	_, _, err := xtractr.ExtractTarGzip(&xtractr.XFile{
+		FilePath:  archive,
+		OutputDir: out,
+		FileMode:  0o644,
+		DirMode:   0o755,
+	})
+	require.ErrorIs(t, err, xtractr.ErrInvalidPath)
+
+	data, err := os.ReadFile(keep)
+	require.NoError(t, err)
+	assert.Equal(t, "mine", string(data))
+}
+
+// plantDanglingClimb lays out OutputDir with foo -> missing and
+// existing -> foo/../../victim, which resolves nowhere until a directory
+// named missing appears and then resolves to victim, beside OutputDir.
+func plantDanglingClimb(t *testing.T) (string, string) {
+	t.Helper()
+
+	root := t.TempDir()
+	out := filepath.Join(root, "out")
+	victim := filepath.Join(root, "victim")
+
+	require.NoError(t, os.MkdirAll(out, 0o750))
+	require.NoError(t, os.WriteFile(victim, []byte("pwned"), 0o600))
+	require.NoError(t, os.Symlink("missing", filepath.Join(out, "foo")))
+	require.NoError(t, os.Symlink("foo/../../victim", filepath.Join(out, "existing")))
+
+	_, err := filepath.EvalSymlinks(filepath.Join(out, "existing"))
+	require.Error(t, err, "existing must dangle before the extract")
+
+	return out, victim
+}
+
+// assertNotResolvingTo passes when link does not resolve, or resolves to
+// something other than victim. Both sides are resolved: macOS keeps TempDir
+// under /var -> /private/var.
+func assertNotResolvingTo(t *testing.T, link, victim string) {
+	t.Helper()
+
+	realVictim, err := filepath.EvalSymlinks(victim)
+	require.NoError(t, err)
+
+	resolved, err := filepath.EvalSymlinks(link)
+	if err == nil {
+		assert.NotEqual(t, realVictim, resolved, "%s resolves to the victim", link)
+	}
+}
+
+// TestTarDirArmsPlantedClimb is a directory member, not a link, that arms a
+// planted link: foo -> missing dangles, existing -> foo/../../victim resolves
+// nowhere, and a plain missing/ makes it resolve beside OutputDir. The
+// directory has to be audited like a link would be, whether it is its own
+// member, a file's parent, or followed by a link (which used to collect the
+// planted links only then, with missing already in place).
+func TestTarDirArmsPlantedClimb(t *testing.T) {
+	t.Parallel()
+	skipWithoutSymlinks(t)
+
+	for name, members := range map[string][]tarMember{
+		"directory member": {{name: "missing/", dir: true}},
+		"file parent":      {{name: "missing/a.txt"}},
+		"then a link":      {{name: "missing/", dir: true}, {name: "other", link: "missing"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			out, victim := plantDanglingClimb(t)
+
+			archive := filepath.Join(filepath.Dir(out), "evil.tar.gz")
+			require.NoError(t, writeTarGzipMembers(archive, members))
+
+			_, _, err := xtractr.ExtractTarGzip(&xtractr.XFile{
+				FilePath:  archive,
+				OutputDir: out,
+				FileMode:  0o644,
+				DirMode:   0o755,
+			})
+			require.ErrorIs(t, err, xtractr.ErrInvalidPath)
+
+			assertAbsent(t, filepath.Join(out, "missing"))
+			assertNotResolvingTo(t, filepath.Join(out, "existing"), victim)
+		})
+	}
+}
+
+// TestTarDirUnderPlantedClimbStaysInside is the other side: a directory at a
+// path a planted link looked up is fine when the link still lands inside.
+// existing -> missing/../keep resolves nowhere, then to OutputDir/keep.
+func TestTarDirUnderPlantedClimbStaysInside(t *testing.T) {
+	t.Parallel()
+	skipWithoutSymlinks(t)
+
+	root := t.TempDir()
+	out := filepath.Join(root, "out")
+
+	require.NoError(t, os.MkdirAll(out, 0o750))
+	require.NoError(t, os.Symlink("missing/../keep", filepath.Join(out, "existing")))
+
+	archive := filepath.Join(root, "fine.tar.gz")
+	require.NoError(t, writeTarGzipMembers(archive, []tarMember{{name: "missing/a.txt"}, {name: "keep"}}))
+
+	_, files, err := xtractr.ExtractTarGzip(&xtractr.XFile{
+		FilePath:  archive,
+		OutputDir: out,
+		FileMode:  0o644,
+		DirMode:   0o755,
+	})
+	require.NoError(t, err)
+	assert.Len(t, files, 2)
+	require.FileExists(t, filepath.Join(out, "missing", "a.txt"))
+	assertPathInside(t, out, filepath.Join(out, "existing"))
+}
+
+// squashTar writes members to a plain tar beside out and extracts it into out
+// with SquashRoot. Plain tar, because ExtractFile falls back to gunzip when a
+// .tar.gz fails, which hides the tar error.
+func squashTar(t *testing.T, out string, members []tarMember) error {
+	t.Helper()
+
+	archive := filepath.Join(filepath.Dir(out), "squash.tar")
+	require.NoError(t, writeTarMembers(archive, false, members))
+
+	_, _, _, err := xtractr.ExtractFile(&xtractr.XFile{ //nolint:dogsled // only the error matters here.
+		FilePath:   archive,
+		OutputDir:  out,
+		FileMode:   0o644,
+		DirMode:    0o755,
+		SquashRoot: true,
+	})
+	if err != nil {
+		return fmt.Errorf("extract: %w", err)
+	}
+
+	return nil
+}
+
+// TestTarSquashRootLinkEscape covers links that are inside OutputDir where the
+// archive put them and outside it once SquashRoot moves the root's children up
+// one level: the text gets a component shorter, and the names filled in under
+// OutputDir change what other links resolve to. Each case has a victim beside
+// OutputDir, so a miss shows up as a link that resolves to it.
+func TestTarSquashRootLinkEscape(t *testing.T) {
+	t.Parallel()
+	skipWithoutSymlinks(t)
+
+	t.Run("escapes", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		out := filepath.Join(root, "out")
+		require.NoError(t, os.MkdirAll(out, 0o750))
+		require.NoError(t, os.WriteFile(filepath.Join(root, "victim"), []byte("pwned"), 0o600))
+
+		err := squashTar(t, out, []tarMember{
+			{name: "pkg/file.txt"},
+			{name: "pkg/up", link: "../victim"},
+		})
+		require.ErrorIs(t, err, xtractr.ErrInvalidPath)
+		assertAbsent(t, filepath.Join(out, "up"))
+	})
+
+	// ../pkg/victim cleans back inside the root and the walk re-enters the
+	// root while it exists. After the move, out/up -> ../pkg/victim is a
+	// sibling of OutputDir.
+	t.Run("climbs back into root", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		out := filepath.Join(root, "out")
+		require.NoError(t, os.MkdirAll(filepath.Join(root, "pkg"), 0o750))
+		require.NoError(t, os.MkdirAll(out, 0o750))
+		require.NoError(t, os.WriteFile(filepath.Join(root, "pkg", "victim"), []byte("pwned"), 0o600))
+
+		err := squashTar(t, out, []tarMember{
+			{name: "pkg/file.txt"},
+			{name: "pkg/up", link: "../pkg/victim"},
+		})
+		require.ErrorIs(t, err, xtractr.ErrInvalidPath)
+		assertAbsent(t, filepath.Join(out, "up"))
+	})
+
+	// out/target already exists, so the move refuses pkg/target and keeps the
+	// planted link; pkg/link -> target moves and follows it.
+	t.Run("follows kept entry", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		out := filepath.Join(root, "out")
+		require.NoError(t, os.MkdirAll(out, 0o750))
+		require.NoError(t, os.WriteFile(filepath.Join(root, "victim"), []byte("pwned"), 0o600))
+		require.NoError(t, os.Symlink("../victim", filepath.Join(out, "target")))
+
+		err := squashTar(t, out, []tarMember{
+			{name: "pkg/target/file"},
+			{name: "pkg/link", link: "target"},
+		})
+		require.ErrorIs(t, err, xtractr.ErrInvalidPath)
+		assertAbsent(t, filepath.Join(out, "link"))
+	})
+
+	// pkg/missing -> "." is fine where it is created. Moved to out/missing it
+	// arms the planted out/existing -> missing/../victim.
+	t.Run("arms planted link", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		out := filepath.Join(root, "out")
+		require.NoError(t, os.MkdirAll(out, 0o750))
+		require.NoError(t, os.WriteFile(filepath.Join(root, "victim"), []byte("pwned"), 0o600))
+		require.NoError(t, os.Symlink("missing/../victim", filepath.Join(out, "existing")))
+
+		err := squashTar(t, out, []tarMember{
+			{name: "pkg/file.txt"},
+			{name: "pkg/missing", link: "."},
+		})
+		require.ErrorIs(t, err, xtractr.ErrInvalidPath)
+		assertAbsent(t, filepath.Join(out, "missing"))
+	})
+
+	// pkg/link -> b/c/planted goes through the moved pkg/b -> kept into a
+	// planted link that already pointed outside. Treating the not-yet-moved
+	// b as a missing name would pass this lexically.
+	t.Run("follows moved link into kept one", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		out := filepath.Join(root, "out")
+		require.NoError(t, os.MkdirAll(filepath.Join(out, "kept", "c"), 0o750))
+		require.NoError(t, os.WriteFile(filepath.Join(root, "victim"), []byte("pwned"), 0o600))
+		require.NoError(t, os.Symlink("../../../victim", filepath.Join(out, "kept", "c", "planted")))
+
+		err := squashTar(t, out, []tarMember{
+			{name: "pkg/b", link: "kept"},
+			{name: "pkg/link", link: "b/c/planted"},
+		})
+		require.ErrorIs(t, err, xtractr.ErrInvalidPath)
+		assertAbsent(t, filepath.Join(out, "link"))
+	})
+
+	// The only entry is a symlink to a directory already in OutputDir. The
+	// move would follow it and relocate that directory's contents, including
+	// a link that only pointed inside from where it was. Nothing moves.
+	t.Run("symlink root", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		out := filepath.Join(root, "out")
+		require.NoError(t, os.MkdirAll(filepath.Join(out, "real"), 0o750))
+		require.NoError(t, os.WriteFile(filepath.Join(root, "victim"), []byte("pwned"), 0o600))
+		require.NoError(t, os.Symlink("../victim", filepath.Join(out, "real", "up")))
+
+		err := squashTar(t, out, []tarMember{{name: "pkg", link: "real"}})
+		require.NoError(t, err)
+		assertAbsent(t, filepath.Join(out, "up"))
+
+		got, err := os.Readlink(filepath.Join(out, "pkg"))
+		require.NoError(t, err)
+		assert.Equal(t, "real", got)
+
+		_, err = os.Lstat(filepath.Join(out, "real", "up"))
+		require.NoError(t, err)
+	})
+
+	t.Run("stays inside root", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		out := filepath.Join(root, "out")
+		require.NoError(t, os.MkdirAll(out, 0o750))
+
+		err := squashTar(t, out, []tarMember{
+			{name: "pkg/lib/real.txt"},
+			{name: "pkg/bin/link", link: "../lib/real.txt"},
+		})
+		require.NoError(t, err)
+		assertAbsent(t, filepath.Join(out, "pkg"))
+		assertPathInside(t, out, filepath.Join(out, "bin", "link"))
+	})
+
+	// A moved link through another moved link is resolved against the root's
+	// copy of b, not refused because out/b does not exist yet.
+	t.Run("follows moved link", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		out := filepath.Join(root, "out")
+		require.NoError(t, os.MkdirAll(out, 0o750))
+
+		err := squashTar(t, out, []tarMember{
+			{name: "pkg/sub/real.txt"},
+			{name: "pkg/b", link: "sub"},
+			{name: "pkg/link", link: "b/real.txt"},
+		})
+		require.NoError(t, err)
+		assertAbsent(t, filepath.Join(out, "pkg"))
+		assertPathInside(t, out, filepath.Join(out, "link"))
+	})
+}
+
 // TestTarEmptyLinkSkipped warns and continues when a link target is empty.
 func TestTarEmptyLinkSkipped(t *testing.T) {
 	t.Parallel()
