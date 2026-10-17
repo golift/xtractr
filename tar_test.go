@@ -2,6 +2,7 @@ package xtractr_test
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
 	"fmt"
 	"io"
@@ -1284,8 +1285,10 @@ func TestTarRejectedLinkKeepsFile(t *testing.T) {
 // extracted and then refused (here, the squash). ExtractFile used to fall
 // back to signature detection on any extension failure; the gzip magic
 // matched, the archive was gunzipped into OutputDir as a .tar, and the call
-// reported success over the refusal. An extractor that wrote members
-// recognized the format, so its error is the result.
+// reported success over the refusal. An extractor that placed members
+// recognized the format, so its error is the result. The members are empty:
+// no bytes are written, and the directories and files that stay are what
+// says the tar was recognized.
 func TestExtractFileRefusalSkipsSignatureFallback(t *testing.T) {
 	t.Parallel()
 
@@ -1310,6 +1313,51 @@ func TestExtractFileRefusalSkipsSignatureFallback(t *testing.T) {
 	assertDirNames(t, out, "foo")
 	assertRegularFile(t, filepath.Join(out, "foo", "foo.xtractr_aside", "bar.txt"))
 	assertRegularFile(t, filepath.Join(out, "foo", "other.txt"))
+}
+
+// TestExtractFileTruncatedTarGzipKeepsTarError is a .tar.gz cut off inside a
+// member. The tar is recognized, and part of the member is written before the
+// data runs out, so that error is the result even though the partial file is
+// removed again. The file is still a complete gzip stream, and the fallback
+// used to gunzip it into OutputDir as a .tar and report success.
+func TestExtractFileTruncatedTarGzipKeepsTarError(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	out := filepath.Join(root, "out")
+	require.NoError(t, os.MkdirAll(out, 0o750))
+
+	const (
+		headerSize = 512
+		bodySize   = 2048
+	)
+
+	var tarBuf bytes.Buffer
+
+	tarWriter := tar.NewWriter(&tarBuf)
+	require.NoError(t, tarWriter.WriteHeader(&tar.Header{Name: "big.bin", Mode: 0o644, Size: bodySize}))
+	_, err := tarWriter.Write(bytes.Repeat([]byte("x"), bodySize))
+	require.NoError(t, err)
+	require.NoError(t, tarWriter.Flush())
+
+	archive := filepath.Join(root, "trunc.tar.gz")
+	archiveFile, err := os.Create(archive)
+	require.NoError(t, err)
+
+	gzipWriter := gzip.NewWriter(archiveFile)
+	_, err = gzipWriter.Write(tarBuf.Bytes()[:headerSize+bodySize/2])
+	require.NoError(t, err)
+	require.NoError(t, gzipWriter.Close())
+	require.NoError(t, archiveFile.Close())
+
+	_, _, _, err = xtractr.ExtractFile(&xtractr.XFile{ //nolint:dogsled // only the error matters here.
+		FilePath:  archive,
+		OutputDir: out,
+		FileMode:  0o644,
+		DirMode:   0o755,
+	})
+	require.ErrorIs(t, err, io.ErrUnexpectedEOF)
+	assertDirNames(t, out)
 }
 
 // TestTarHardLinkToAsideName is a hard link whose target is the name the

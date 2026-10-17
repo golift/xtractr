@@ -454,7 +454,9 @@ func (x *XFile) writeParallel(file *file) (uint64, error) {
 // writeFile writes one archive member. A partial file is removed here, and
 // callers must not remove file.Path on error themselves: the path may be a
 // symlink entry that was left or put back, or a path whose parent resolves
-// outside OutputDir, which os.Remove would follow.
+// outside OutputDir, which os.Remove would follow. The removed file gives its
+// MaxFiles slot back, as an undone directory or link does; the bytes it had
+// stay counted.
 func (x *XFile) writeFile(file *file, parallel bool) (uint64, error) {
 	// ZIP/RAR/7z (and similar) store symlink targets as the member payload with
 	// ModeSymlink set. Writing them as regular files leaves a text stub instead
@@ -494,12 +496,14 @@ func (x *XFile) writeFile(file *file, parallel bool) (uint64, error) {
 
 	if err != nil {
 		out.remove()
+		x.uncountExtracted()
 
 		return uint64(size), fmt.Errorf("copying archived file '%s' io: %w", file.Path, err)
 	}
 
 	if closeErr != nil {
 		out.remove()
+		x.uncountExtracted()
 
 		return uint64(size), fmt.Errorf("closing archived file '%s': %w", file.Path, closeErr)
 	}

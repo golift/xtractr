@@ -228,6 +228,15 @@ func TestExtractFileMismatchedExtension(t *testing.T) {
 		extractWithWrongExt(t, "archive.gz", buf.Bytes())
 	})
 
+	// gzip rejects the header when its reader is made; bzip2 does not look at
+	// the input until the first read, after the output file is opened and
+	// counted. The refusal-keeping check used to read that as bzip2 having
+	// extracted something, and the fallback was skipped.
+	t.Run("zip_with_bz2_extension", func(t *testing.T) {
+		t.Parallel()
+		extractWithWrongExt(t, "archive.bz2", zipBytes(t, map[string][]byte{"hello.txt": []byte("zip content")}))
+	})
+
 	t.Run("gzip_with_unknown_extension", func(t *testing.T) {
 		t.Parallel()
 		extractWithWrongExt(t, "archive.foobar", makeGzipData(t, "data in unknown ext"))
