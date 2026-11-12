@@ -6,7 +6,7 @@ toolchain go1.27.4
 
 require (
 	github.com/Unpackerr/iso9660 v0.0.3
-	github.com/andybalholm/brotli v1.2.8
+	github.com/andybalholm/brotli v1.3.0
 	github.com/bodgit/sevenzip v1.6.5
 	github.com/cavaliergopher/cpio v1.0.1
 	github.com/cavaliergopher/rpm v1.3.0
