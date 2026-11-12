@@ -24,7 +24,7 @@ require (
 	golang.org/x/text v0.43.0
 	golift.io/ape v0.2.0
 	golift.io/asar v0.1.0
-	golift.io/udf v0.1.0
+	golift.io/udf v0.2.0
 )
 
 require (
