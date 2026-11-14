@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"strings"
 
@@ -65,8 +66,13 @@ func extractRAR(xFile *XFile) (uint64, []string, []string, error) {
 		return 0, nil, nil, fmt.Errorf("rardecode.OpenReader: %w", err)
 	}
 
-	tracker, headerErr := xFile.archiveProgress(getUncompressedRarSize(rarReader, xFile))
-	defer tracker.done() // getUncompressedRarSize closed rarReader
+	total, compressed, count, err := getUncompressedRarSize(rarReader, xFile) // closes rarReader
+	if err != nil {
+		return 0, nil, nil, err
+	}
+
+	tracker, headerErr := xFile.archiveProgress(total, compressed, count)
+	defer tracker.done()
 
 	if headerErr != nil {
 		return 0, nil, nil, headerErr
@@ -89,22 +95,42 @@ func extractRAR(xFile *XFile) (uint64, []string, []string, error) {
 	return xFile.prog.Wrote, files, normalizeVolumes(rarReader.Volumes(), xFile.FilePath), nil
 }
 
-func getUncompressedRarSize(rarReader *rardecode.ReadCloser, xFile *XFile) (total, compressed uint64, count int) {
+// getUncompressedRarSize reads every file header, which walks every volume.
+// Only io.EOF ends the archive. Any other error is returned: summing the
+// volumes read so far would compare the claimed size against part of the
+// archive and could report a false compression ratio cap hit.
+func getUncompressedRarSize(
+	rarReader *rardecode.ReadCloser, xFile *XFile,
+) (total, compressed uint64, count int, err error) {
 	defer rarReader.Close()
 
 	for {
-		header, err := rarReader.Next()
-		if err != nil {
+		header, nextErr := rarReader.Next()
+		if nextErr != nil {
 			volumes := normalizeVolumes(rarReader.Volumes(), xFile.FilePath)
 			// Before the header ratio check. Sibling volumes are not FilePath.
 			xFile.omitNoted(volumes...)
 			compressed = archiveFileSizes(volumes...)
 
-			return total, compressed, count
+			return total, compressed, count, rarHeaderError(nextErr)
 		}
 
 		total += uint64(header.UnPackedSize)
 		count++
+	}
+}
+
+// rarHeaderError is nil at the end of the archive. rardecode opens the next
+// volume while it reads headers, so a volume that does not exist (yet) shows
+// up as fs.ErrNotExist; that becomes ErrMissingVolume.
+func rarHeaderError(err error) error {
+	switch {
+	case errors.Is(err, io.EOF):
+		return nil
+	case errors.Is(err, fs.ErrNotExist):
+		return fmt.Errorf("%w: %w", ErrMissingVolume, err)
+	default:
+		return fmt.Errorf("rarReader.Next: %w", err)
 	}
 }
 
