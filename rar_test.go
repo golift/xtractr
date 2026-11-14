@@ -2,6 +2,7 @@ package xtractr_test
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sync/atomic"
@@ -175,5 +176,77 @@ func TestExtractRARMultiVolumeOldScheme(t *testing.T) {
 
 	for _, want := range wantVolumes {
 		assert.Contains(t, archives, want, "old-scheme volume %s must be present in the archive list", want)
+	}
+}
+
+// TestExtractRARMissingVolume covers a multi-volume set whose later volumes
+// have not arrived yet, for example while a sync tool is still copying it.
+// The header scan used to treat the failed volume open as the end of the
+// archive, so the claimed size was compared to only the volumes it could
+// open and a configured MaxRatio reported a compression ratio cap hit. That
+// is a limit error, which callers treat as final, although the archive is
+// fine and a later attempt succeeds.
+func TestExtractRARMissingVolume(t *testing.T) {
+	t.Parallel()
+
+	const volumes = 4 // test_data/multivol.part1.rar to part4.rar
+
+	// The complete fixture set unpacks to less than its packed size (ratio about 0.93),
+	// so a MaxRatio of 1 passes it. Only a size measured against too few volumes trips it.
+	_, _, archives, err := xtractr.ExtractRAR(rarRatioFile(t, filepath.Join("test_data", "multivol.part1.rar")))
+	require.NoError(t, err, "the complete set must pass the ratio cap")
+	require.Len(t, archives, volumes)
+
+	for _, scheme := range []string{"new", "old"} {
+		for skip := 1; skip < volumes; skip++ {
+			t.Run(scheme+"/"+rarVolumeName(scheme, skip), func(t *testing.T) {
+				t.Parallel()
+
+				dir := t.TempDir()
+
+				for idx := range volumes {
+					if idx == skip {
+						continue
+					}
+
+					data, err := os.ReadFile(filepath.Join("test_data", rarVolumeName("new", idx)))
+					require.NoError(t, err)
+
+					dest := filepath.Join(dir, rarVolumeName(scheme, idx))
+					require.NoError(t, os.WriteFile(dest, data, 0o600)) //nolint:gosec // fixed names in a temp dir.
+				}
+
+				_, _, archives, err := xtractr.ExtractRAR(rarRatioFile(t, filepath.Join(dir, rarVolumeName(scheme, 0))))
+				require.ErrorIs(t, err, xtractr.ErrMissingVolume)
+				require.ErrorIs(t, err, fs.ErrNotExist, "the volume open error must be kept")
+				assert.False(t, xtractr.IsLimitError(err), "a missing volume is not a configured limit: %v", err)
+				assert.Empty(t, archives)
+			})
+		}
+	}
+}
+
+// rarVolumeName is the name of volume idx (from 0) in the new (.partN.rar)
+// or old (.rar, .r00, .r01, ...) naming scheme.
+func rarVolumeName(scheme string, idx int) string {
+	switch {
+	case scheme == "new":
+		return fmt.Sprintf("multivol.part%d.rar", idx+1)
+	case idx == 0:
+		return "multivol.rar"
+	default:
+		return fmt.Sprintf("multivol.r%02d", idx-1)
+	}
+}
+
+func rarRatioFile(t *testing.T, path string) *xtractr.XFile {
+	t.Helper()
+
+	return &xtractr.XFile{
+		FilePath:  path,
+		OutputDir: t.TempDir(),
+		FileMode:  xtractr.DefaultFileMode,
+		DirMode:   xtractr.DefaultDirMode,
+		MaxRatio:  1,
 	}
 }
