@@ -39,6 +39,11 @@ var (
 	ErrMaxRatio = errors.New("extracted size exceeds maximum compression ratio")
 	// ErrMaxNested is returned when archives found in extract output exceed MaxNested.
 	ErrMaxNested = errors.New("nested archive count exceeds maximum")
+	// ErrMissingVolume is returned when a multi-volume archive cannot be read to
+	// its end because one of its volumes does not exist, for example while the
+	// set is still being copied. It is not a limit error: a later attempt can
+	// succeed once every volume is present.
+	ErrMissingVolume = errors.New("archive volume missing")
 	// ErrArchiveSymlink is returned when the archive path is a symbolic link.
 	ErrArchiveSymlink = errors.New("refusing to extract a symbolic link as an archive")
 	// ErrAsideTaken is returned when the name an entry is set aside under, while
