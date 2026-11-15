@@ -38,9 +38,10 @@ type Filter struct {
 	// Observe, if set, is called for every entry in each directory Find reads,
 	// before any filtering: dot files, folders, and non-archives included. info
 	// is the entry's Lstat, or nil when it could not be read. Find does not read
-	// dot folders or symlinked folders, MaxDepth and MaxArchives can end the
-	// walk early, and a Path that is a file has no listing. A queued Xtract
-	// calls it on a queue worker for the initial search only, not the extras pass.
+	// dot folders or symlinked folders it finds during the walk; Path itself is
+	// read even when it is one. MaxDepth and MaxArchives can end the walk early,
+	// and a Path that is a file has no listing. A queued Xtract calls it on a
+	// queue worker for the initial search only, not the extras pass.
 	Observe func(path string, info os.FileInfo)
 }
 

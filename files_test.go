@@ -367,6 +367,44 @@ func TestFindCompressedFilesObserveUnreadPaths(t *testing.T) {
 	assert.Empty(t, observed, "a file passed in as the search path has no listing")
 }
 
+// TestFindCompressedFilesObserveSearchPath: a dot folder or a symlinked folder
+// is read when it is the search path, and only listed when a walk finds it.
+func TestFindCompressedFilesObserveSearchPath(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	hidden := filepath.Join(base, ".hidden")
+	link := filepath.Join(base, "link")
+
+	require.NoError(t, os.Mkdir(hidden, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(hidden, "show.rar"), []byte("content"), 0o600))
+
+	var observed []string
+
+	observe := func(path string, _ os.FileInfo) { observed = append(observed, path) }
+
+	found := xtractr.FindCompressedFiles(xtractr.Filter{Path: hidden, Observe: observe})
+	assert.Equal(t, 1, found.Count())
+	assert.Equal(t, []string{filepath.Join(hidden, "show.rar")}, observed, "a dot folder is read as the search path")
+
+	err := os.Symlink(hidden, link)
+	if err != nil {
+		t.Skipf("symlinks unavailable on this platform: %v", err)
+	}
+
+	observed = nil
+
+	found = xtractr.FindCompressedFiles(xtractr.Filter{Path: link, Observe: observe})
+	assert.Equal(t, 1, found.Count())
+	assert.Equal(t, []string{filepath.Join(link, "show.rar")}, observed, "a symlinked folder is read as the search path")
+
+	observed = nil
+
+	found = xtractr.FindCompressedFiles(xtractr.Filter{Path: base, Observe: observe})
+	assert.Empty(t, found)
+	assert.ElementsMatch(t, []string{hidden, link}, observed, "found during a walk, both are listed and not read")
+}
+
 // TestFindCompressedFilesObserveUnreadableEntry: an entry Find can list and
 // cannot stat is observed with a nil info, and is not returned.
 func TestFindCompressedFilesObserveUnreadableEntry(t *testing.T) {
