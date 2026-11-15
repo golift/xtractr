@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"testing"
@@ -283,6 +284,115 @@ func TestFindCompressedFilesSkipsDotFiles(t *testing.T) {
 	for _, file := range paths.List() {
 		assert.NotEqual(t, '.', rune(filepath.Base(file)[0]), "dot-prefixed file should not be in results: "+file)
 	}
+}
+
+// TestFindCompressedFilesObserve shows the observer every entry of every folder
+// Find reads, including the dot files Find itself drops.
+func TestFindCompressedFilesObserve(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	tempFile := "E01/.syncthing.e01.r00.tmp"
+	// These are in folders Find reads.
+	read := []string{"show.rar", "notes.txt", "._show.rar", ".syncthing.show.r00.tmp", "E01/e01.rar", tempFile}
+	// Find lists a dot folder, and does not read it.
+	unread := ".stversions/old.rar"
+
+	for _, name := range append([]string{unread}, read...) {
+		path := filepath.Join(base, name)
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
+		require.NoError(t, os.WriteFile(path, []byte("content"), 0o600))
+	}
+
+	calls := make(map[string]int)
+	infos := make(map[string]os.FileInfo)
+	found := xtractr.FindCompressedFiles(xtractr.Filter{
+		Path: base,
+		Observe: func(path string, info os.FileInfo) {
+			calls[path]++
+			infos[path] = info
+		},
+	})
+
+	want := map[string]int{filepath.Join(base, "E01"): 1, filepath.Join(base, ".stversions"): 1}
+	for _, name := range read {
+		want[filepath.Join(base, name)] = 1
+	}
+
+	require.Equal(t, want, calls, "each entry of a folder Find reads is observed once, and a dot folder is not read")
+
+	for path, info := range infos {
+		require.NotNil(t, info, "a readable entry is observed with its Lstat: "+path)
+		assert.Equal(t, filepath.Base(path), info.Name())
+	}
+
+	assert.True(t, infos[filepath.Join(base, "E01")].IsDir())
+	assert.Equal(t, int64(len("content")), infos[filepath.Join(base, tempFile)].Size())
+	assert.Equal(t, xtractr.FindCompressedFiles(xtractr.Filter{Path: base}), found,
+		"an observer must not change which archives are found")
+	assert.Equal(t, 2, found.Count(), "an observed dot file is still not returned as an archive")
+}
+
+// TestFindCompressedFilesObserveUnreadPaths: a folder Find lists and does not
+// read has no entries to observe, and neither does a search path that is a file.
+func TestFindCompressedFilesObserveUnreadPaths(t *testing.T) {
+	t.Parallel()
+
+	base := t.TempDir()
+	deep := filepath.Join(base, "one", "two")
+	archive := filepath.Join(deep, "deep.rar")
+	video := filepath.Join(deep, "video.mkv")
+
+	require.NoError(t, os.MkdirAll(deep, 0o700))
+	require.NoError(t, os.WriteFile(archive, []byte("content"), 0o600))
+	require.NoError(t, os.WriteFile(video, []byte("content"), 0o600))
+
+	var observed []string
+
+	observe := func(path string, _ os.FileInfo) { observed = append(observed, path) }
+
+	// MaxDepth 1 stops below the first level of child folders.
+	found := xtractr.FindCompressedFiles(xtractr.Filter{Path: base, MaxDepth: 1, Observe: observe})
+	assert.Empty(t, found)
+	assert.Equal(t, []string{filepath.Join(base, "one"), deep}, observed, "the folder past MaxDepth is listed, not read")
+
+	observed = nil
+
+	found = xtractr.FindCompressedFiles(xtractr.Filter{Path: archive, Observe: observe})
+	assert.Equal(t, 1, found.Count())
+	assert.Empty(t, observed, "an archive passed in as the search path has no listing")
+
+	found = xtractr.FindCompressedFiles(xtractr.Filter{Path: video, Observe: observe})
+	assert.Empty(t, found)
+	assert.Empty(t, observed, "a file passed in as the search path has no listing")
+}
+
+// TestFindCompressedFilesObserveUnreadableEntry: an entry Find can list and
+// cannot stat is observed with a nil info, and is not returned.
+func TestFindCompressedFilesObserveUnreadableEntry(t *testing.T) {
+	t.Parallel()
+
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("needs a folder this user can list and cannot search")
+	}
+
+	locked := filepath.Join(t.TempDir(), "locked")
+	archive := filepath.Join(locked, "show.rar")
+
+	require.NoError(t, os.Mkdir(locked, 0o700))
+	require.NoError(t, os.WriteFile(archive, []byte("content"), 0o600))
+	// Read without search: the names can be listed, the entries cannot be stated.
+	require.NoError(t, os.Chmod(locked, 0o400))
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o700) }) //nolint:gosec // TempDir cannot remove it without search.
+
+	observed := make(map[string]os.FileInfo)
+	found := xtractr.FindCompressedFiles(xtractr.Filter{
+		Path:    locked,
+		Observe: func(path string, info os.FileInfo) { observed[path] = info },
+	})
+
+	assert.Empty(t, found)
+	assert.Equal(t, map[string]os.FileInfo{archive: nil}, observed)
 }
 
 func TestDifference(t *testing.T) {

@@ -332,6 +332,44 @@ func TestQueueExtrasMaxDepthOverrideExtractsDeep(t *testing.T) {
 	require.FileExists(t, filepath.Join(out, "near.txt"))
 }
 
+// TestQueueObserveInitialSearchOnly: a queued job's observer sees the folder it
+// was asked to search, and not the extract output the extras pass walks.
+func TestQueueObserveInitialSearchOnly(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	src := filepath.Join(dir, "outer.zip")
+	writeOuterZip(t, src, map[string][]byte{
+		"inner.zip": tinyZipBytes(t, "hello.txt", "from-inner"),
+	}, nil)
+
+	queue := xtractr.NewQueue(&xtractr.Config{
+		Logger:   xtractr.NoLogger(),
+		FileMode: 0o600,
+		DirMode:  0o700,
+	})
+	defer queue.Stop()
+
+	// The queue worker writes this before it sends the response read below.
+	var observed []string
+
+	job := &xtractr.Xtract{
+		Filter: xtractr.Filter{
+			Path:    dir,
+			Observe: func(path string, _ os.FileInfo) { observed = append(observed, path) },
+		},
+		TempFolder: true,
+		CBChannel:  make(chan *xtractr.Response, 2),
+	}
+	_, err := queue.Extract(job)
+	require.NoError(t, err)
+
+	resp := waitExtract(t, job.CBChannel)
+	require.NoError(t, resp.Error)
+	require.Equal(t, 1, resp.Extras.Count(), "the extras pass must have found the inner archive")
+	require.Equal(t, []string{src}, observed, "only the initial search is observed")
+}
+
 func extractQueueJob(t *testing.T, dir string, maxNested, extrasMaxDepth int) *xtractr.Response {
 	t.Helper()
 

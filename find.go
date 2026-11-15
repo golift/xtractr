@@ -35,6 +35,13 @@ type Filter struct {
 	// Accept, if set, is called when Find is about to add an archive.
 	// Return false to skip it; skipped paths do not count toward MaxArchives.
 	Accept func(ArchiveCandidate) bool
+	// Observe, if set, is called for every entry in each directory Find reads,
+	// before any filtering: dot files, folders, and non-archives included. info
+	// is the entry's Lstat, or nil when it could not be read. Find does not read
+	// dot folders or symlinked folders, MaxDepth and MaxArchives can end the
+	// walk early, and a Path that is a file has no listing. A queued Xtract
+	// calls it on a queue worker for the initial search only, not the extras pass.
+	Observe func(path string, info os.FileInfo)
 }
 
 // ArchiveCandidate is passed to Filter.Accept when Find is about to list a path.
@@ -88,7 +95,7 @@ func findCompressedFiles(path string, filter *Filter, depth int) ArchiveList {
 		return findDirectArchive(path, filter)
 	}
 
-	fileList := getFilteredFileList(path, dir)
+	fileList := getFilteredFileList(path, dir, filter)
 	if len(fileList) == 0 {
 		return nil
 	}
@@ -114,18 +121,32 @@ func findDirectArchive(path string, filter *Filter) ArchiveList {
 }
 
 // getFilteredFileList reads the directory and returns a list of readable files that are not dot files.
-func getFilteredFileList(path string, dir *os.File) []os.FileInfo {
+// Every entry is passed to filter.Observe first, when that is set.
+func getFilteredFileList(path string, dir *os.File, filter *Filter) []os.FileInfo {
 	names, _ := dir.Readdirnames(-1)
 	fileList := make([]os.FileInfo, 0, len(names))
 
 	for _, name := range names {
-		if name == "" || name[0] == '.' {
-			continue // skip dot files (including AppleDouble ._* entries)
+		if name == "" {
+			continue
 		}
 
-		info, err := os.Lstat(filepath.Join(path, name))
-		if err != nil {
-			continue // skip entries we can't stat
+		// Dot files (including AppleDouble ._* entries) are never returned,
+		// and are only read when there is an observer to show them to.
+		dotFile := name[0] == '.'
+		if dotFile && filter.Observe == nil {
+			continue
+		}
+
+		entry := filepath.Join(path, name)
+		info, err := os.Lstat(entry)
+
+		if filter.Observe != nil {
+			filter.Observe(entry, info)
+		}
+
+		if err != nil || dotFile {
+			continue // skip dot files and entries we can't stat
 		}
 
 		fileList = append(fileList, info)
