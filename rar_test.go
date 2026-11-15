@@ -274,17 +274,17 @@ func TestExtractRARCorruptHeader(t *testing.T) {
 
 			dir := t.TempDir()
 			path := filepath.Join(dir, "corrupt.rar")
-			require.NoError(t, os.WriteFile(path, data, 0o600))
+			require.NoError(t, os.WriteFile(path, data, 0o600)) //nolint:gosec // fixed name in a temp dir.
 
 			xFile := rarRatioFile(t, path)
 			xFile.MaxRatio = maxRatio
 
 			size, files, archives, err := xtractr.ExtractRAR(xFile)
 			require.Error(t, err)
-			assert.NotErrorIs(t, err, xtractr.ErrMissingVolume, "a damaged header is not a missing volume")
-			assert.NotErrorIs(t, err, fs.ErrNotExist)
+			require.NotErrorIs(t, err, xtractr.ErrMissingVolume, "a damaged header is not a missing volume")
+			require.NotErrorIs(t, err, fs.ErrNotExist)
 			assert.False(t, xtractr.IsLimitError(err), "a damaged header is not a configured limit: %v", err)
-			assert.ErrorContains(t, err, "rarReader.Next", "the header read error must be kept")
+			require.ErrorContains(t, err, "rarReader.Next", "the header read error must be kept")
 			assert.Zero(t, size)
 			assert.Empty(t, files)
 			assert.Empty(t, archives)
