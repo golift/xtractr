@@ -248,6 +248,8 @@ Extraction caps (`0` means unlimited):
 
 On a queue job (`Xtract`/`Config`) these apply **per top-level archive**. Two sibling rips in one folder each get a full cap. Extras from that folder share the **tighter leftover** (smallest remaining byte/ratio room, then files). `MaxRatio` keeps the parent archive size, not child compressed sizes. Bytes of an intermediate archive that same tracker wrote are left out of the ratio numerator when that archive is extracted; `MaxBytes` still counts them. Standalone `XFile` stays per-archive.
 
+A multi-volume RAR whose later volumes are not there yet (for example while a sync tool is still copying the set) returns `ErrMissingVolume`. It is not a cap error and `IsLimitError` is false for it: the archive is fine, and a later attempt succeeds once every volume is present.
+
 Queue extras caps on `Xtract` and `Config` (`0` inherits `Config`, then unlimited):
 
 - `MaxNested` — archives extracted from one source folder's extras pass

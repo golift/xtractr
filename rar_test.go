@@ -250,3 +250,48 @@ func rarRatioFile(t *testing.T, path string) *xtractr.XFile {
 		MaxRatio:  1,
 	}
 }
+
+// TestExtractRARCorruptHeader checks that a header failure other than a
+// missing volume keeps the original error, writes nothing, and is not
+// reported as a missing volume or a compression ratio cap hit, whether or not
+// MaxRatio is set. The header scan used to swallow every error, so a damaged
+// header could fall through to a misleading ratio check or a partial extract.
+func TestExtractRARCorruptHeader(t *testing.T) {
+	t.Parallel()
+
+	data, err := os.ReadFile(filepath.Join("test_data", "multivol.part1.rar"))
+	require.NoError(t, err)
+
+	// Flip a byte inside the first file header, after the signature and main
+	// header, so the archive opens but reading the header fails its checksum.
+	const headerByte = 0x20
+
+	data[headerByte] ^= 0xff
+
+	for name, maxRatio := range map[string]float64{"no ratio cap": 0, "ratio cap": 1} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			path := filepath.Join(dir, "corrupt.rar")
+			require.NoError(t, os.WriteFile(path, data, 0o600))
+
+			xFile := rarRatioFile(t, path)
+			xFile.MaxRatio = maxRatio
+
+			size, files, archives, err := xtractr.ExtractRAR(xFile)
+			require.Error(t, err)
+			assert.NotErrorIs(t, err, xtractr.ErrMissingVolume, "a damaged header is not a missing volume")
+			assert.NotErrorIs(t, err, fs.ErrNotExist)
+			assert.False(t, xtractr.IsLimitError(err), "a damaged header is not a configured limit: %v", err)
+			assert.ErrorContains(t, err, "rarReader.Next", "the header read error must be kept")
+			assert.Zero(t, size)
+			assert.Empty(t, files)
+			assert.Empty(t, archives)
+
+			written, readErr := os.ReadDir(xFile.OutputDir)
+			require.NoError(t, readErr)
+			assert.Empty(t, written, "nothing may be extracted from a damaged archive")
+		})
+	}
+}
