@@ -8,7 +8,9 @@ Can also be used ad-hoc for direct decompression and extraction. See [GoDoc](htt
 - Works on Linux, Windows, FreeBSD and macOS **without Cgo**.
 - Supports 32 and 64 bit architectures.
 - Decrypts RAR and 7-Zip archives with passwords.
-- Extracts ISO images (ISO9660 and UDF volumes) and Electron ASAR archives.
+- Extracts ISO images (ISO9660 and UDF volumes, `.iso` and `.img`) and Electron ASAR archives.
+  A folder search lists a `.img` only when the file has an ISO 9660 or UDF signature.
+  `ExtractFile` on a `.img` always tries.
 - Splits FLAC+CUE and APE+CUE sheets into tracks. APE output can be APE, WAV, or FLAC.
 - `ConvertAPE` writes one APE file to APE, WAV, or FLAC when there is no CUE sheet.
 - Detects non-UTF8 zip filenames automatically.
@@ -123,7 +125,7 @@ know the file type you may call the direct method instead:
 - `ExtractZIP(*XFile)`, `ExtractRAR(*XFile)`, `Extract7z(*XFile)`
 - `ExtractTar(*XFile)`, `ExtractTarGzip(*XFile)`, `ExtractTarBzip(*XFile)`, `ExtractTarXZ(*XFile)`
 - `ExtractGzip(*XFile)`, `ExtractBzip(*XFile)`, `ExtractXZ(*XFile)`, `ExtractZstandard(*XFile)`
-- `ExtractISO(*XFile)`, `ExtractASAR(*XFile)`, `ExtractRPM(*XFile)`, `ExtractCPIO(*XFile)`
+- `ExtractISO(*XFile)` for `.iso` and `.img`, `ExtractASAR(*XFile)`, `ExtractRPM(*XFile)`, `ExtractCPIO(*XFile)`
 - `ExtractCUE(*XFile)` for a `.cue` or `.cue.txt` next to a FLAC or APE image
 - `ConvertAPE(*XFile)` for one APE file and no CUE sheet
 
@@ -221,6 +223,10 @@ type XFile struct {
 	// PreserveExec keeps archive execute bits for each class FileMode already
 	// grants. Off, FileMode is the mode passed to open. Umask still applies.
 	PreserveExec bool
+	// DisableSparse writes zero bytes instead of holes. Off, a run of 32 KiB
+	// of zeros is stored as a hole. A hole at the end of a file is closed with
+	// one zero byte so the file keeps its size.
+	DisableSparse bool
 	// Progress is called periodically during file extraction.
 	// Contains info about the progress of the extraction.
 	// This is not called if an Updates channel is also provided.

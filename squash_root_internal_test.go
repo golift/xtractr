@@ -30,6 +30,7 @@ func TestSquashRootCountsEmptyTopDir(t *testing.T) {
 	xFile.bindMoveFiles()
 
 	require.NoError(t, xFile.mkDir(audio, time.Time{}))
+	xFile.noteWritten(inner)
 
 	_, err := xFile.squashRoot([]string{inner})
 	require.NoError(t, err)

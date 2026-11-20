@@ -50,6 +50,9 @@ var extension2function = []archive{
 	{Type: "gzip", Ext: ".gz", Fn: ChngInt(ExtractGzip)},
 	{Type: "gzip", Ext: ".gzip", Fn: ChngInt(ExtractGzip)},
 	{Type: "iso", Ext: ".iso", Fn: ChngInt(ExtractISO)},
+	// .img is also a raw disk image. ExtractFile always tries it; a folder
+	// search lists one only when the bytes are an ISO 9660 or UDF disc.
+	{Type: "iso", Ext: ".img", Fn: ChngInt(ExtractISO)},
 	{Type: "lz4", Ext: ".lz4", Fn: ChngInt(ExtractLZ4)},
 	{Type: "lzma", Ext: ".lz", Fn: ChngInt(ExtractLZMA)},
 	{Type: "lzma", Ext: ".lzip", Fn: ChngInt(ExtractLZMA)},
@@ -179,6 +182,12 @@ type XFile struct {
 	// PreserveExec keeps archive execute bits for each class FileMode already
 	// grants. Off, FileMode is the mode passed to open. Umask still applies.
 	PreserveExec bool
+	// DisableSparse writes zero bytes instead of holes. Off, a run of 32 KiB
+	// of zeros is stored as a hole. A hole at the end of a file is closed with
+	// one zero byte so the file keeps its size. Progress and the byte caps
+	// still count the logical size. APE, FLAC, and CUE audio output do not
+	// use this path.
+	DisableSparse bool
 	// Progress is called periodically during file extraction.
 	// Contains info about the progress of the extraction.
 	// This is not called if an Updates channel is also provided.
@@ -225,6 +234,11 @@ type XFile struct {
 	// after the last member. A zero time is a parent created for a member
 	// and is not recorded. Guarded by plantedMu, same as topDirs.
 	dirTimes map[string]time.Time
+	// written is the paths this extract created. Squash root detection uses
+	// these rather than the public file list: tar returns header names, and a
+	// header can name a file that already exists somewhere else. Guarded by
+	// plantedMu, like topDirs.
+	written []string
 	// onDisk, when set, tells link walks where an entry seen at a path is
 	// right now. SquashRoot sets it on a scoped copy to check links at the
 	// position they will have after the move. See linkWalk.

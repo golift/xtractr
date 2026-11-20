@@ -115,3 +115,11 @@ func IsArchiveFileByContent(path string) bool {
 	extractFn, _, err := detectBySignature(path)
 	return err == nil && extractFn != nil
 }
+
+// discImageFile reports whether path has an ISO 9660 or UDF signature.
+// Both are labeled "iso" in the signature table. A .img without one is left
+// out of a folder search; ExtractFile still tries it.
+func discImageFile(path string) bool {
+	_, kind, err := detectBySignature(path)
+	return err == nil && kind == "iso"
+}
