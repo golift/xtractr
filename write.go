@@ -623,7 +623,24 @@ func (x *XFile) writeFile(file *file, parallel bool) (uint64, error) {
 
 	file.Path = out.path
 
-	progWriter, err := x.wrapExtractWriter(fout, parallel)
+	size, err := x.copyOutFile(fout, out, file, parallel)
+	if err != nil {
+		return size, err
+	}
+
+	x.noteArchiveOutput(file.Path, size)
+	out.chtimes(file.Atime, file.Mtime)
+
+	return size, nil
+}
+
+// copyOutFile copies one member. The sparse writer sits under the byte counter,
+// so progress, MaxBytes, and MaxRatio count the logical size, holes included.
+// A partial file is removed here.
+func (x *XFile) copyOutFile(fout *os.File, out outputFile, file *file, parallel bool) (uint64, error) {
+	sparse := newSparseWriter(fout, x.DisableSparse)
+
+	progWriter, err := x.wrapExtractWriter(sparse, parallel)
 	if err != nil {
 		_ = fout.Close()
 
@@ -633,6 +650,12 @@ func (x *XFile) writeFile(file *file, parallel bool) (uint64, error) {
 	}
 
 	size, err := io.Copy(progWriter, file.Data)
+
+	var holeErr error
+	if err == nil {
+		holeErr = sparse.finish()
+	}
+
 	closeErr := fout.Close()
 
 	if err != nil {
@@ -642,15 +665,19 @@ func (x *XFile) writeFile(file *file, parallel bool) (uint64, error) {
 		return uint64(size), fmt.Errorf("copying archived file '%s' io: %w", file.Path, err)
 	}
 
+	if holeErr != nil {
+		out.remove()
+		x.uncountExtracted()
+
+		return uint64(size), fmt.Errorf("closing archived file '%s' hole: %w", file.Path, holeErr)
+	}
+
 	if closeErr != nil {
 		out.remove()
 		x.uncountExtracted()
 
 		return uint64(size), fmt.Errorf("closing archived file '%s': %w", file.Path, closeErr)
 	}
-
-	x.noteArchiveOutput(file.Path, uint64(size))
-	out.chtimes(file.Atime, file.Mtime)
 
 	return uint64(size), nil
 }
