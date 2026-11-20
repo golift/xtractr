@@ -113,7 +113,8 @@ func (x *Xtractr) RenameFiles(fromPath, toPath string, overwrite bool) (Renamed,
 // (e.g. Unraid shfs) can return an empty ReadDir after a successful write;
 // Lstat of those known paths still works, so the move does not depend on listing.
 func (x *Xtractr) renameExtracted(fromPath, toPath string, overwrite bool, known []string) (Renamed, error) {
-	return moveFilesKnown(x.config, x.config.DirMode, fromPath, toPath, overwrite, x.config.Suffix, known)
+	return moveFilesKnown(x.config, x.config.DirMode, fromPath, toPath, overwrite, x.config.Suffix, known,
+		x.config.DisableSparse)
 }
 
 // ensureMoveFiles is bindMoveFiles, stored in a variable so squashRoot can
@@ -140,7 +141,8 @@ func (x *XFile) bindMoveFiles() {
 	}
 
 	x.moveFiles = func(fromPath, toPath string, overwrite bool) ([]string, error) {
-		renamed, err := moveFilesKnown(x.log, x.DirMode, fromPath, toPath, overwrite, x.Suffix, x.moveKnown)
+		renamed, err := moveFilesKnown(x.log, x.DirMode, fromPath, toPath, overwrite, x.Suffix, x.moveKnown,
+			x.DisableSparse)
 		x.refused = append(x.refused, renamed.Refused...)
 
 		return renamed.NewFiles, err
@@ -154,7 +156,7 @@ func moveFiles(
 	overwrite bool,
 	suffix string,
 ) (Renamed, error) {
-	return moveFilesKnown(log, dirMode, fromPath, toPath, overwrite, suffix, nil)
+	return moveFilesKnown(log, dirMode, fromPath, toPath, overwrite, suffix, nil, false)
 }
 
 func moveFilesKnown( //nolint:cyclop,funlen
@@ -164,6 +166,7 @@ func moveFilesKnown( //nolint:cyclop,funlen
 	overwrite bool,
 	suffix string,
 	known []string,
+	disableSparse bool,
 ) (Renamed, error) {
 	if log == nil {
 		log = NoLogger()
@@ -236,7 +239,7 @@ func moveFilesKnown( //nolint:cyclop,funlen
 			continue
 		}
 
-		switch err = renameFile(file, newFile, suffix); {
+		switch err = renameFile(file, newFile, suffix, disableSparse); {
 		case err != nil:
 			keepErr = err
 			log.Printf("Error: Renaming Temp File: %v to %v: %v", file, newFile, err)
@@ -486,7 +489,7 @@ func deleteFiles(log Logger, files ...string) {
 
 // Rename is an attempt to deal with "invalid cross link device" on weird file systems.
 func (x *Xtractr) Rename(oldpath, newpath string) error {
-	return renameFile(oldpath, newpath, x.config.Suffix)
+	return renameFile(oldpath, newpath, x.config.Suffix, x.config.DisableSparse)
 }
 
 const (
@@ -508,7 +511,7 @@ func copySiblingExt(suffix, tail string) string {
 	return "." + strings.Trim(defaultSuffix(suffix), "._") + tail
 }
 
-func renameFile(oldpath, newpath, suffix string) error {
+func renameFile(oldpath, newpath, suffix string, disableSparse bool) error {
 	origErr := os.Rename(oldpath, newpath)
 	if origErr == nil {
 		return nil
@@ -516,7 +519,7 @@ func renameFile(oldpath, newpath, suffix string) error {
 
 	origErr = fmt.Errorf("os.Rename(): %w", origErr)
 
-	err := copyMove(oldpath, newpath, suffix)
+	err := copyMove(oldpath, newpath, suffix, disableSparse)
 	if err != nil {
 		return &ExtractError{Errs: []error{origErr, err}}
 	}
@@ -526,7 +529,7 @@ func renameFile(oldpath, newpath, suffix string) error {
 
 // copyMove is the EXDEV fallback for renameFile. It is a separate function so
 // tests can exercise it without forcing a cross-device rename.
-func copyMove(oldpath, newpath, suffix string) error {
+func copyMove(oldpath, newpath, suffix string, disableSparse bool) error {
 	oldInfo, err := os.Lstat(oldpath)
 	if err != nil {
 		return fmt.Errorf("os.Lstat(): %w", err)
@@ -542,10 +545,10 @@ func copyMove(oldpath, newpath, suffix string) error {
 		return fmt.Errorf("cannot move non-regular file %s: %w", oldpath, errExtractNotRegular)
 	}
 
-	return copyMoveFile(oldpath, newpath, suffix, oldInfo)
+	return copyMoveFile(oldpath, newpath, suffix, oldInfo, disableSparse)
 }
 
-func copyMoveFile(oldpath, newpath, suffix string, oldInfo os.FileInfo) error {
+func copyMoveFile(oldpath, newpath, suffix string, oldInfo os.FileInfo, disableSparse bool) error {
 	oldFile, err := os.Open(oldpath)
 	if err != nil {
 		return fmt.Errorf("os.Open(): %w", err)
@@ -562,13 +565,28 @@ func copyMoveFile(oldpath, newpath, suffix string, oldInfo os.FileInfo) error {
 
 	defer release() // after the rename (or error cleanup) below.
 
-	_, err = io.Copy(newFile, oldFile)
+	// A cross-device move reads holes as zeros. Write them as holes again,
+	// unless this job asked for dense output.
+	sparse := newSparseWriter(newFile, disableSparse)
+	_, err = io.Copy(sparse, oldFile)
+
+	var holeErr error
+	if err == nil {
+		holeErr = sparse.finish()
+	}
+
 	closeErr := newFile.Close()
 
 	if err != nil {
 		_ = os.Remove(pathUsed)
 
 		return fmt.Errorf("io.Copy(): %w", err)
+	}
+
+	if holeErr != nil {
+		_ = os.Remove(pathUsed)
+
+		return fmt.Errorf("closing hole: %w", holeErr)
 	}
 
 	if closeErr != nil {

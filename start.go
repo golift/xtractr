@@ -42,6 +42,9 @@ type Config struct {
 	// a suffix is added instead. ie. .1, .2, .3, etc.
 	// Default is false because a misconfiguration may fill your disk.
 	TryNames bool
+	// DisableSparse writes zero bytes instead of holes for every job in the
+	// queue. Off, a run of 32 KiB of zeros is stored as a hole.
+	DisableSparse bool
 	// The suffix used for temporary folders and to brand cross-device copy
 	// siblings as a known extra extension (e.g. movie.mkv.xtractr_partial).
 	// Empty uses DefaultSuffix.

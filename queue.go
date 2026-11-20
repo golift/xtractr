@@ -459,6 +459,7 @@ func (x *Xtractr) processArchive(filename string, resp *Response) (uint64, []str
 		FileMode:      x.config.FileMode,
 		DirMode:       x.config.DirMode,
 		PreserveExec:  resp.X.PreserveExec,
+		DisableSparse: x.config.DisableSparse,
 		Suffix:        x.config.Suffix,
 		Passwords:     resp.X.Passwords,
 		Password:      resp.X.Password,
