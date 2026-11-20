@@ -23,7 +23,12 @@ func ExtractISO(xFile *XFile) (size uint64, filesList []string, err error) {
 	size, filesList, udfErr := extractUDF(xFile, openISO)
 	if udfErr == nil {
 		xFile.Debugf("Extracted %s via UDF path", xFile.FilePath)
-		return size, filesList, nil
+
+		// Outside extractUDF: a squash error must not fall through to ISO 9660,
+		// which would extract the same image a second time.
+		filesList, err = xFile.cleanup(filesList)
+
+		return size, filesList, err
 	}
 
 	if IsLimitError(udfErr) {
@@ -77,7 +82,11 @@ func extractISO9660(xFile *XFile, openISO *os.File, udfErr error) (uint64, []str
 		return size, files, err
 	}
 
-	return size, files, nil
+	// Once for the whole image. uniso used to squash at every directory, so
+	// /dir/sub/file and /dir/file beside /readme.txt both flattened.
+	files, err = xFile.cleanup(files)
+
+	return size, files, err
 }
 
 //nolint:unparam // so we can pass it in.
@@ -160,9 +169,7 @@ func (x *XFile) uniso(isoFile *iso9660.File, parent string) (uint64, []string, e
 		files = append(files, childFiles...)
 	}
 
-	files, err = x.cleanup(files)
-
-	return size, files, err
+	return size, files, nil
 }
 
 func (x *XFile) unisofile(isoFile *iso9660.File, wfile string) (uint64, []string, error) {

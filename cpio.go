@@ -53,7 +53,7 @@ func (x *XFile) uncpio(reader io.Reader) ([]string, error) {
 	for {
 		zipFile, err := zipReader.Next()
 		if errors.Is(err, io.EOF) {
-			return files, nil
+			return x.cleanup(files)
 		} else if err != nil {
 			return nil, fmt.Errorf("cpio Next() failed: %w", err)
 		}

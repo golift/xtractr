@@ -223,6 +223,16 @@ type XFile struct {
 	// lock in this struct: password retries copy XFile.
 	planted          []plantedLink
 	plantedCollected bool
+	// topDirs are the top-level folder names this extract created. A format
+	// that lists files only would otherwise miss an empty sibling folder and
+	// squash the one that holds the files. Guarded by plantedMu: password
+	// retries copy XFile, so the lock cannot live on it.
+	topDirs map[string]struct{}
+	// written is the paths this extract created. Squash root detection uses
+	// these rather than the public file list: tar returns header names, and a
+	// header can name a file that already exists somewhere else. Guarded by
+	// plantedMu, like topDirs.
+	written []string
 	// onDisk, when set, tells link walks where an entry seen at a path is
 	// right now. SquashRoot sets it on a scoped copy to check links at the
 	// position they will have after the move. See linkWalk.

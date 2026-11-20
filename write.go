@@ -26,7 +26,7 @@ import (
 //nolint:gochecknoglobals // password retries copy XFile, so this lock cannot live on it.
 var linkWrite sync.RWMutex
 
-// plantedMu guards XFile.planted and plantedCollected. Link writes audit them
+// plantedMu guards XFile.planted, plantedCollected, topDirs, and written. Link writes audit them
 // under linkWrite, but directory creation audits them too, from file workers
 // that share linkWrite or hold nothing. Taken after linkWrite, never before.
 //
@@ -47,17 +47,24 @@ type file struct {
 // cleanup runs after a successful extract.
 // The intent is to move files into their final location.
 func (x *XFile) cleanup(files []string) ([]string, error) {
-	// Tar records header names; every other extractor records paths under
-	// OutputDir. Squash moves from a child of OutputDir, so resolve against
-	// OutputDir here. The returned list stays as the extractor built it.
-	x.moveKnown = resolveExtractPaths(x.OutputDir, files)
+	// The paths below are only used to squash. A normal extract keeps the
+	// extractor's list and does not need the working directory.
+	if !x.SquashRoot {
+		return files, nil
+	}
 
-	files, err := x.squashRoot(files)
+	// The move trusts paths it can Lstat. Make them absolute under the output
+	// folder first: a relative OutputDir, or one spelled with a doubled slash,
+	// otherwise gets joined onto itself. The list squashRoot returns when
+	// nothing moves is the one the extractor built (tar header names included).
+	output, err := absoluteOutput(x.OutputDir)
 	if err != nil {
 		return files, err
 	}
 
-	return files, nil
+	x.moveKnown = writtenPaths(output, x.squashPaths(files))
+
+	return x.squashRoot(files)
 }
 
 func (x *XFile) squashRoot(files []string) ([]string, error) {
@@ -65,53 +72,158 @@ func (x *XFile) squashRoot(files []string) ([]string, error) {
 		return files, nil
 	}
 
-	roots := map[string]struct{}{}
-
-	for _, path := range files {
-		// Remove the output dir prefix, then split on the separator and get the
-		// first item. Tar records header names, which use "/" on every OS;
-		// without FromSlash, Windows treats "pkg/a.txt" as one root, stats the
-		// file, and skips the move because it is not a directory.
-		path = filepath.FromSlash(path)
-		newRoot := strings.TrimLeft(strings.TrimPrefix(path, x.OutputDir), string(filepath.Separator))
-		roots[strings.SplitN(newRoot, string(filepath.Separator), 2)[0]] = struct{}{} //nolint:mnd
+	output, err := absoluteOutput(x.OutputDir)
+	if err != nil {
+		return files, err
 	}
 
+	roots := x.squashRoots(output, files)
 	if len(roots) != 1 {
 		return files, nil
 	}
 
-	for root := range roots {
-		from := filepath.Join(x.OutputDir, root)
+	var root string
 
-		info, err := os.Lstat(from)
-		if err != nil {
-			return files, fmt.Errorf("stat squash root: %w", err)
-		}
-
-		if !info.IsDir() {
-			// A lone top-level file is already in OutputDir. Moving it onto
-			// itself used to skip the rename and then delete the extract. A
-			// lone symlink stays as well: the move would follow it and pull
-			// the contents of whatever directory it names into OutputDir.
-			return files, nil
-		}
-
-		err = x.ensureLinksWithin(from)
-		if err != nil {
-			return files, fmt.Errorf("%s: %w", x.FilePath, err)
-		}
-
-		// ExtractFile binds this. A direct ExtractTarGzip (or any other
-		// Extract* call) does not, and a nil moveFiles panics here.
-		// Called through a variable: a direct call to bindMoveFiles closes an
-		// initialization cycle through IsArchiveFile and extension2function.
-		ensureMoveFiles(x)
-
-		return x.moveSquashRoot(from, files)
+	for name := range roots {
+		root = name
 	}
 
-	return files, nil
+	from := filepath.Join(output, root)
+
+	info, err := os.Lstat(from)
+	if err != nil {
+		return files, fmt.Errorf("stat squash root: %w", err)
+	}
+
+	if !info.IsDir() {
+		// A lone top-level file is already in OutputDir. Moving it onto
+		// itself used to skip the rename and then delete the extract. A
+		// lone symlink stays as well: the move would follow it and pull
+		// the contents of whatever directory it names into OutputDir.
+		return files, nil
+	}
+
+	err = x.ensureLinksWithin(from)
+	if err != nil {
+		return files, fmt.Errorf("%s: %w", x.FilePath, err)
+	}
+
+	// ExtractFile binds this. A direct ExtractTarGzip (or any other
+	// Extract* call) does not, and a nil moveFiles panics here.
+	// Called through a variable: a direct call to bindMoveFiles closes an
+	// initialization cycle through IsArchiveFile and extension2function.
+	ensureMoveFiles(x)
+
+	return x.moveSquashRoot(from, files)
+}
+
+// squashRoots is the set of top-level names under output. An entry whose
+// written path is the output folder itself (a tar name of "." or "./") is
+// not a root: treating it as one renames the output folder onto itself.
+// Folders this extract created count too, so an empty top-level folder keeps
+// a populated sibling from being squashed.
+func (x *XFile) squashRoots(output string, files []string) map[string]struct{} {
+	paths := x.squashPaths(files)
+	roots := make(map[string]struct{}, len(paths))
+
+	for _, path := range writtenPaths(output, paths) {
+		top, ok := topUnder(output, path)
+		if ok {
+			roots[top] = struct{}{}
+		}
+	}
+
+	plantedMu.Lock()
+	defer plantedMu.Unlock()
+
+	for name := range x.topDirs {
+		roots[name] = struct{}{}
+	}
+
+	return roots
+}
+
+// absoluteOutput is OutputDir with a doubled slash and a leading "." cleaned
+// away, then made absolute. Root detection and the squash move both use it,
+// so a relative OutputDir is not joined onto itself.
+func absoluteOutput(dir string) (string, error) {
+	abs, err := filepath.Abs(filepath.Clean(dir))
+	if err != nil {
+		return "", fmt.Errorf("output directory: %w", err)
+	}
+
+	return abs, nil
+}
+
+// writtenPaths is where each listed entry was written, absolute under output.
+// Tar records header names. Every other extractor records a path that already
+// starts with OutputDir, which may still be relative or spelled with the
+// doubled slash the caller passed.
+func writtenPaths(output string, files []string) []string {
+	if len(files) == 0 {
+		return files
+	}
+
+	out := make([]string, len(files))
+	for idx, path := range files {
+		out[idx] = absoluteWritten(output, path)
+	}
+
+	return out
+}
+
+// absoluteWritten resolves path to the absolute path clean would write.
+// A path that already lands inside output (zip, rar, 7z, or a relative
+// OutputDir's own prefix) is used as it is, once that file is there.
+// Anything else is a tar header name, including ones that start with "./",
+// and is joined onto output.
+func absoluteWritten(output, path string) string {
+	if path == "" {
+		return ""
+	}
+
+	cleaned := filepath.Clean(filepath.FromSlash(path))
+
+	if filepath.IsAbs(cleaned) {
+		if pathWithin(output, cleaned) {
+			return cleaned
+		}
+
+		return filepath.Clean(filepath.Join(output, cleaned))
+	}
+
+	abs, err := filepath.Abs(cleaned)
+	// A tar member can spell the same relative path as a file already under the
+	// output folder (member "out/a.txt", output ".../out", cwd the parent).
+	// Trust the absolute path only when that file is really there.
+	if err == nil && pathWithin(output, abs) {
+		_, statErr := os.Lstat(abs)
+		if statErr == nil {
+			return abs
+		}
+	}
+
+	return filepath.Clean(filepath.Join(output, cleaned))
+}
+
+// topUnder is the first path component of written relative to output.
+// The output folder itself is not a component.
+func topUnder(output, written string) (string, bool) {
+	if written == "" || !pathWithin(output, written) || filepath.Clean(written) == filepath.Clean(output) {
+		return "", false
+	}
+
+	rel, err := filepath.Rel(output, written)
+	if err != nil || rel == "." || rel == "" {
+		return "", false
+	}
+
+	top, _, _ := strings.Cut(rel, string(filepath.Separator))
+	if top == "" || top == "." || top == ".." {
+		return "", false
+	}
+
+	return top, true
 }
 
 // moveSquashRoot moves root's children up into OutputDir and removes root.
@@ -155,7 +267,12 @@ func (x *XFile) moveSquashRoot(root string, files []string) ([]string, error) {
 
 	x.moveKnown = rebasePaths(x.moveKnown, root, aside)
 
-	return x.moveFiles(aside, x.OutputDir, false)
+	dest, err := absoluteOutput(x.OutputDir)
+	if err != nil {
+		return files, err
+	}
+
+	return x.moveFiles(aside, dest, false)
 }
 
 // asideTail brands the name an entry is renamed to while this extract needs
@@ -317,9 +434,66 @@ func (x *XFile) mkDirLocked(path string, mtime time.Time) error {
 		return fmt.Errorf("%s: %w: %s resolves outside the output folder", x.FilePath, ErrInvalidPath, path)
 	}
 
+	x.noteTopDir(path)
+	x.noteWritten(path)
+
 	_ = os.Chtimes(path, time.Time{}, mtime)
 
 	return nil
+}
+
+// noteTopDir records the top-level name of a folder this extract created.
+// The output folder itself is not a name. See squashRoots.
+func (x *XFile) noteTopDir(path string) {
+	output, err := absoluteOutput(x.OutputDir)
+	if err != nil {
+		return
+	}
+
+	top, ok := topUnder(output, absoluteWritten(output, path))
+	if !ok {
+		return
+	}
+
+	plantedMu.Lock()
+	defer plantedMu.Unlock()
+
+	if x.topDirs == nil {
+		x.topDirs = map[string]struct{}{}
+	}
+
+	x.topDirs[top] = struct{}{}
+}
+
+// noteWritten records a path this extract created. See XFile.written.
+func (x *XFile) noteWritten(path string) {
+	if path == "" {
+		return
+	}
+
+	plantedMu.Lock()
+	defer plantedMu.Unlock()
+
+	x.written = append(x.written, path)
+}
+
+// createdPaths is a copy of the paths this extract created.
+func (x *XFile) createdPaths() []string {
+	plantedMu.Lock()
+	defer plantedMu.Unlock()
+
+	return slices.Clone(x.written)
+}
+
+// squashPaths is where this extract wrote. The public file list is the fallback
+// for a caller that hands squashRoot paths it already wrote. Tar's list is
+// header names, so it is not used once a path was recorded.
+func (x *XFile) squashPaths(files []string) []string {
+	if paths := x.createdPaths(); len(paths) > 0 {
+		return paths
+	}
+
+	return files
 }
 
 // mkdirAllCounted creates each missing component under OutputDir with os.Mkdir
@@ -488,6 +662,7 @@ func (x *XFile) writeFile(file *file, parallel bool) (uint64, error) {
 	}
 
 	x.noteArchiveOutput(file.Path, size)
+	x.noteWritten(file.Path)
 	out.chtimes(file.Atime, file.Mtime)
 
 	return size, nil
@@ -1461,6 +1636,7 @@ func (x *XFile) finishLink(path string, old replacedEntry) error {
 	}
 
 	old.discard()
+	x.noteWritten(path)
 
 	return nil
 }
@@ -1558,15 +1734,32 @@ type plantedLink struct {
 }
 
 func (l *plantedLink) visited(path string) bool {
+	path = sameLookup(path)
+
 	for _, visit := range l.visits {
 		// Case-insensitive, since the filesystem may be. A spurious match
 		// only costs a walk.
-		if strings.EqualFold(visit, path) {
+		if strings.EqualFold(sameLookup(visit), path) {
 			return true
 		}
 	}
 
 	return false
+}
+
+// sameLookup puts path in the namespace planted-link visits are compared in.
+// A relative OutputDir records a visit from the working directory. A squash
+// aside is absolute, because the move is. Cleaning, making it absolute, and
+// resolving the parent that exists puts both on the same path.
+func sameLookup(path string) string {
+	cleaned := filepath.Clean(path)
+
+	abs, err := filepath.Abs(cleaned)
+	if err != nil {
+		return cleaned
+	}
+
+	return resolveExisting(abs)
 }
 
 // uniqueVisits drops the repeats a cycle leaves in a walk's lookups.
