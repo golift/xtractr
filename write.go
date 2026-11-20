@@ -1672,15 +1672,32 @@ type plantedLink struct {
 }
 
 func (l *plantedLink) visited(path string) bool {
+	path = sameLookup(path)
+
 	for _, visit := range l.visits {
 		// Case-insensitive, since the filesystem may be. A spurious match
 		// only costs a walk.
-		if strings.EqualFold(visit, path) {
+		if strings.EqualFold(sameLookup(visit), path) {
 			return true
 		}
 	}
 
 	return false
+}
+
+// sameLookup puts path in the namespace planted-link visits are compared in.
+// A relative OutputDir records a visit from the working directory. A squash
+// aside is absolute, because the move is. Cleaning, making it absolute, and
+// resolving the parent that exists puts both on the same path.
+func sameLookup(path string) string {
+	cleaned := filepath.Clean(path)
+
+	abs, err := filepath.Abs(cleaned)
+	if err != nil {
+		return cleaned
+	}
+
+	return resolveExisting(abs)
 }
 
 // uniqueVisits drops the repeats a cycle leaves in a walk's lookups.
