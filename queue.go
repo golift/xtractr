@@ -323,12 +323,14 @@ func (x *Xtractr) finishExtract(resp *Response, err error) {
 }
 
 // weExtractedAnISO makes sure we do not recurse into an ISO file.
+// .iso and .img both count: a folder search and a direct extract use the same disc reader.
 // If an iso was found in the same directory as other archives,
 // it will prevent the other archives from extracting recursively.
 func weExtractedAnISO(resp *Response) bool {
 	for _, archives := range resp.Archives {
 		for _, archive := range archives {
-			if strings.HasSuffix(strings.ToLower(archive), ".iso") {
+			lower := strings.ToLower(archive)
+			if strings.HasSuffix(lower, ".iso") || strings.HasSuffix(lower, ".img") {
 				return true
 			}
 		}
@@ -457,6 +459,7 @@ func (x *Xtractr) processArchive(filename string, resp *Response) (uint64, []str
 		FileMode:      x.config.FileMode,
 		DirMode:       x.config.DirMode,
 		PreserveExec:  resp.X.PreserveExec,
+		DisableSparse: x.config.DisableSparse,
 		Suffix:        x.config.Suffix,
 		Passwords:     resp.X.Passwords,
 		Password:      resp.X.Password,
