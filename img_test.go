@@ -1,10 +1,12 @@
 package xtractr_test
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/Unpackerr/iso9660"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golift.io/xtractr"
@@ -48,6 +50,44 @@ func TestFindCompressedFilesImgNeedsDiscSignature(t *testing.T) {
 	assert.Empty(t, xtractr.FindCompressedFiles(xtractr.Filter{Path: raw}),
 		"a .img passed in directly is listed only when it is a disc")
 	assert.Empty(t, xtractr.FindCompressedFiles(xtractr.Filter{Path: dir, ExcludeSuffix: []string{".img"}}))
+}
+
+func TestExtractImg(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	writer, err := iso9660.NewWriter()
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, writer.Cleanup())
+	})
+
+	const body = "hello from img"
+
+	require.NoError(t, writer.AddFile(bytes.NewReader([]byte(body)), "readme.txt"))
+
+	imgPath := filepath.Join(dir, "disc.img")
+	imgFile, err := os.Create(imgPath)
+	require.NoError(t, err)
+	require.NoError(t, writer.WriteTo(imgFile, "test"))
+	require.NoError(t, imgFile.Close())
+
+	found := xtractr.FindCompressedFiles(xtractr.Filter{Path: imgPath})
+	assert.Equal(t, xtractr.ArchiveList{imgPath: {imgPath}}, found)
+
+	out := filepath.Join(dir, "out")
+	_, files, _, err := xtractr.ExtractFile(&xtractr.XFile{
+		FilePath:  imgPath,
+		OutputDir: out,
+		FileMode:  0o644,
+		DirMode:   0o755,
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, files)
+
+	got, err := os.ReadFile(files[0])
+	require.NoError(t, err)
+	assert.Equal(t, body, string(got))
 }
 
 func TestExtractFileTriesImgWithoutSignature(t *testing.T) {
