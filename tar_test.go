@@ -677,6 +677,27 @@ func assertNotResolvingTo(t *testing.T, link, victim string) {
 	}
 }
 
+// TestTarSquashRootAsideLookupRelativeOutput is the aside-name check with a
+// relative OutputDir. The squash move uses an absolute aside path. The planted
+// link was recorded relative to the working directory, and a string compare
+// misses it: the root is renamed aside and the link resolves outside OutputDir.
+func TestTarSquashRootAsideLookupRelativeOutput(t *testing.T) {
+	skipWithoutSymlinks(t)
+
+	dir := t.TempDir()
+	t.Chdir(dir)
+
+	require.NoError(t, os.Mkdir("out", 0o750))
+	require.NoError(t, os.WriteFile("victim", []byte("pwned"), 0o600))
+	require.NoError(t, os.Symlink("foo.xtractr_aside/../../victim", filepath.Join("out", "existing")))
+
+	err := squashTar(t, "out", []tarMember{{name: "foo/bar.txt"}})
+	require.ErrorIs(t, err, xtractr.ErrAsideTaken)
+	assertRegularFile(t, filepath.Join(dir, "out", "foo", "bar.txt"))
+	assertDirNames(t, filepath.Join(dir, "out"), "existing", "foo")
+	assertNotResolvingTo(t, filepath.Join(dir, "out", "existing"), filepath.Join(dir, "victim"))
+}
+
 // TestTarDirArmsPlantedClimb is a directory member, not a link, that arms a
 // planted link: foo -> missing dangles, existing -> foo/../../victim resolves
 // nowhere, and a plain missing/ makes it resolve beside OutputDir. The
