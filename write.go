@@ -49,7 +49,12 @@ type file struct {
 // The intent is to move files into their final location.
 func (x *XFile) cleanup(files []string) ([]string, error) {
 	// Before the squash move, so a renamed folder keeps the time applied here.
+	// A normal extract still needs this. The paths below are only used to squash.
 	x.setDirTimes()
+
+	if !x.SquashRoot {
+		return files, nil
+	}
 
 	// The move trusts paths it can Lstat. Make them absolute under the output
 	// folder first: a relative OutputDir, or one spelled with a doubled slash,
@@ -171,8 +176,9 @@ func writtenPaths(output string, files []string) []string {
 
 // absoluteWritten resolves path to the absolute path clean would write.
 // A path that already lands inside output (zip, rar, 7z, or a relative
-// OutputDir's own prefix) is used as it is. Anything else is a tar header
-// name, including ones that start with "./", and is joined onto output.
+// OutputDir's own prefix) is used as it is, once that file is there.
+// Anything else is a tar header name, including ones that start with "./",
+// and is joined onto output.
 func absoluteWritten(output, path string) string {
 	if path == "" {
 		return ""
@@ -189,8 +195,14 @@ func absoluteWritten(output, path string) string {
 	}
 
 	abs, err := filepath.Abs(cleaned)
+	// A tar member can spell the same relative path as a file already under the
+	// output folder (member "out/a.txt", output ".../out", cwd the parent).
+	// Trust the absolute path only when that file is really there.
 	if err == nil && pathWithin(output, abs) {
-		return abs
+		_, statErr := os.Lstat(abs)
+		if statErr == nil {
+			return abs
+		}
 	}
 
 	return filepath.Clean(filepath.Join(output, cleaned))

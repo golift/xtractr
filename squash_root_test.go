@@ -46,6 +46,27 @@ func TestTarSquashRootDotNamesKeepExistingFile(t *testing.T) {
 	assert.FileExists(t, filepath.Join(out, "a.txt"))
 }
 
+func TestSquashRootMemberNamedLikeOutputDir(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+
+	archive := filepath.Join(dir, "named.tar")
+	writePlainTar(t, archive, map[string]string{"out/a.txt": "hi"})
+
+	out := filepath.Join(dir, "out")
+	_, files, _, err := xtractr.ExtractFile(&xtractr.XFile{
+		FilePath:   archive,
+		OutputDir:  out,
+		FileMode:   0o644,
+		DirMode:    0o755,
+		SquashRoot: true,
+	})
+	require.NoError(t, err)
+	assert.NotEmpty(t, files)
+	assert.FileExists(t, filepath.Join(out, "a.txt"))
+	assert.NoFileExists(t, filepath.Join(out, "out", "a.txt"))
+}
+
 func TestSquashRootOutputDirSpelling(t *testing.T) {
 	t.Parallel()
 
