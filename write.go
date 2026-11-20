@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -47,8 +48,10 @@ type file struct {
 // cleanup runs after a successful extract.
 // The intent is to move files into their final location.
 func (x *XFile) cleanup(files []string) ([]string, error) {
-	// The paths below are only used to squash. A normal extract keeps the
-	// extractor's list and does not need the working directory.
+	// Before the squash move, so a renamed folder keeps the time applied here.
+	// A normal extract still needs this. The paths below are only used to squash.
+	x.setDirTimes()
+
 	if !x.SquashRoot {
 		return files, nil
 	}
@@ -435,11 +438,82 @@ func (x *XFile) mkDirLocked(path string, mtime time.Time) error {
 	}
 
 	x.noteTopDir(path)
+	x.noteDirTime(path, mtime)
 	x.noteWritten(path)
 
-	_ = os.Chtimes(path, time.Time{}, mtime)
-
 	return nil
+}
+
+// noteDirTime remembers a directory entry's own time. A zero time is a parent
+// created for a member, and writing that member resets the folder, so it must
+// not replace a time already recorded for the directory entry. The output
+// folder itself is never stamped.
+func (x *XFile) noteDirTime(path string, mtime time.Time) {
+	if mtime.IsZero() {
+		return
+	}
+
+	output, err := absoluteOutput(x.OutputDir)
+	if err != nil {
+		return
+	}
+
+	path = absoluteWritten(output, path)
+	if path == output {
+		return
+	}
+
+	plantedMu.Lock()
+	defer plantedMu.Unlock()
+
+	if x.dirTimes == nil {
+		x.dirTimes = map[string]time.Time{}
+	}
+
+	x.dirTimes[path] = mtime
+}
+
+// setDirTimes applies directory-entry times after the last member is written.
+// It keeps mkDir's checks: the path is still a directory, it still resolves
+// inside the output folder, and no link write is in flight.
+func (x *XFile) setDirTimes() {
+	plantedMu.Lock()
+
+	if len(x.dirTimes) == 0 {
+		plantedMu.Unlock()
+
+		return
+	}
+
+	times := make(map[string]time.Time, len(x.dirTimes))
+	maps.Copy(times, x.dirTimes)
+
+	plantedMu.Unlock()
+
+	// Recorded paths are absolute. A relative OutputDir makes filepath.Rel fail
+	// inside resolvedWithinOutput, and every directory time would be skipped.
+	output, err := absoluteOutput(x.OutputDir)
+	if err != nil {
+		return
+	}
+
+	base := resolveExisting(output)
+
+	linkWrite.RLock()
+	defer linkWrite.RUnlock()
+
+	for path, when := range times {
+		if when.IsZero() || filepath.Clean(path) == output {
+			continue
+		}
+
+		info, statErr := os.Lstat(path)
+		if statErr != nil || !info.IsDir() || !pathWithin(base, resolveExisting(path)) {
+			continue
+		}
+
+		_ = os.Chtimes(path, time.Time{}, when)
+	}
 }
 
 // noteTopDir records the top-level name of a folder this extract created.
@@ -636,7 +710,7 @@ func (x *XFile) writeFile(file *file, parallel bool) (uint64, error) {
 	// ModeSymlink set. Writing them as regular files leaves a text stub instead
 	// of a real link — the same class of bug as tar (#153), different symptom.
 	if file.FileMode&os.ModeSymlink != 0 {
-		err := x.mkDir(filepath.Dir(file.Path), file.Mtime)
+		err := x.mkDir(filepath.Dir(file.Path), time.Time{})
 		if err != nil {
 			return 0, fmt.Errorf("writing archived file '%s' parent folder: %w", filepath.Base(file.Path), err)
 		}
@@ -724,7 +798,7 @@ func (x *XFile) openOutputFile(file *file) (*os.File, outputFile, error) {
 	linkWrite.RLock()
 	defer linkWrite.RUnlock()
 
-	err := x.mkDirLocked(filepath.Dir(file.Path), file.Mtime)
+	err := x.mkDirLocked(filepath.Dir(file.Path), time.Time{})
 	if err != nil {
 		return nil, outputFile{}, fmt.Errorf("writing archived file '%s' parent folder: %w", filepath.Base(file.Path), err)
 	}

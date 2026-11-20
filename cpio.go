@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"time"
 
 	"github.com/cavaliergopher/cpio"
 )
@@ -94,7 +95,7 @@ func (x *XFile) uncpioFile(cpioFile *cpio.Header, cpioReader *cpio.Reader) (uint
 	// This turns hard links into symlinks.
 	if cpioFile.Linkname != "" {
 		// The link's parent folder may not have its own entry in the archive.
-		err := x.mkDir(filepath.Dir(file.Path), cpioFile.ModTime)
+		err := x.mkDir(filepath.Dir(file.Path), time.Time{})
 		if err != nil {
 			return 0, fmt.Errorf("making cpio link parent dir: %w", err)
 		}

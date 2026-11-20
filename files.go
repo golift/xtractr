@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 	"unicode/utf8"
 )
 
@@ -228,6 +229,11 @@ type XFile struct {
 	// squash the one that holds the files. Guarded by plantedMu: password
 	// retries copy XFile, so the lock cannot live on it.
 	topDirs map[string]struct{}
+	// dirTimes are the archive's own times for directory entries. A file
+	// written into a folder resets that folder's time, so these are applied
+	// after the last member. A zero time is a parent created for a member
+	// and is not recorded. Guarded by plantedMu, same as topDirs.
+	dirTimes map[string]time.Time
 	// written is the paths this extract created. Squash root detection uses
 	// these rather than the public file list: tar returns header names, and a
 	// header can name a file that already exists somewhere else. Guarded by

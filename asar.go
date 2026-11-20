@@ -97,7 +97,7 @@ func (x *XFile) asarPrepareEntries(reader *asar.Reader) ([]asarFileEntry, []stri
 				return nil, files, fmt.Errorf("making asar dir: %w", err)
 			}
 		case asarFile.IsLink():
-			err := x.mkDir(filepath.Dir(cleanPath), time.Now())
+			err := x.mkDir(filepath.Dir(cleanPath), time.Time{})
 			if err != nil {
 				return nil, files, fmt.Errorf("making asar symlink parent: %w", err)
 			}

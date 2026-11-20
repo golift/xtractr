@@ -204,7 +204,7 @@ func (x *XFile) untarFile(header *tar.Header, tarReader *tar.Reader) (uint64, er
 
 // untarLink creates a symlink or hard link from a tar header.
 func (x *XFile) untarLink(header *tar.Header, path string) (uint64, error) {
-	err := x.mkDir(filepath.Dir(path), header.ModTime)
+	err := x.mkDir(filepath.Dir(path), time.Time{})
 	if err != nil {
 		return 0, fmt.Errorf("making tar link parent dir: %w", err)
 	}
