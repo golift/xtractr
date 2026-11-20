@@ -476,18 +476,25 @@ func (x *XFile) setDirTimes() {
 
 	plantedMu.Unlock()
 
+	// Recorded paths are absolute. A relative OutputDir makes filepath.Rel fail
+	// inside resolvedWithinOutput, and every directory time would be skipped.
 	output, err := absoluteOutput(x.OutputDir)
+	if err != nil {
+		return
+	}
+
+	base := resolveExisting(output)
 
 	linkWrite.RLock()
 	defer linkWrite.RUnlock()
 
 	for path, when := range times {
-		if when.IsZero() || (err == nil && filepath.Clean(path) == output) {
+		if when.IsZero() || filepath.Clean(path) == output {
 			continue
 		}
 
 		info, statErr := os.Lstat(path)
-		if statErr != nil || !info.IsDir() || !x.resolvedWithinOutput(path) {
+		if statErr != nil || !info.IsDir() || !pathWithin(base, resolveExisting(path)) {
 			continue
 		}
 

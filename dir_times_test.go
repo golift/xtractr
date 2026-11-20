@@ -48,6 +48,25 @@ func TestDirectoryTimesSurviveMemberWrites(t *testing.T) {
 	})
 }
 
+func TestDirectoryTimesRelativeOutput(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+
+	dirTime := time.Date(2020, 1, 2, 3, 4, 5, 0, time.UTC)
+	fileTime := time.Date(2024, 6, 7, 8, 9, 10, 0, time.UTC)
+	archive := filepath.Join(dir, "dated.tar")
+	writeDatedTar(t, archive, dirTime, fileTime)
+
+	_, _, err := xtractr.ExtractTar(&xtractr.XFile{
+		FilePath:  archive,
+		OutputDir: "out",
+		FileMode:  0o644,
+		DirMode:   0o755,
+	})
+	require.NoError(t, err)
+	assertTimes(t, filepath.Join(dir, "out"), dirTime, fileTime)
+}
+
 func extractDatedZip(t *testing.T, workers int, dirTime, fileTime time.Time) {
 	t.Helper()
 
