@@ -23,7 +23,7 @@ func TestCopyMoveRegularFile(t *testing.T) {
 
 	require.NoError(t, os.WriteFile(src, []byte("extracted"), 0o600))
 
-	require.NoError(t, copyMove(src, dest, DefaultSuffix))
+	require.NoError(t, copyMove(src, dest, DefaultSuffix, false))
 
 	got, err := os.ReadFile(dest)
 	require.NoError(t, err)
@@ -53,7 +53,7 @@ func TestCopyMoveNameTooLongTruncatesDest(t *testing.T) {
 	short, err := TruncatePathForFS(dest)
 	require.NoError(t, err)
 
-	require.NoError(t, copyMove(src, dest, DefaultSuffix))
+	require.NoError(t, copyMove(src, dest, DefaultSuffix, false))
 
 	got, err := os.ReadFile(short)
 	require.NoError(t, err)
@@ -77,7 +77,7 @@ func TestCopyMoveSymlinkDest(t *testing.T) {
 	require.NoError(t, os.WriteFile(victim, []byte("secret"), 0o600))
 	require.NoError(t, os.Symlink(victim, dest))
 
-	require.NoError(t, copyMove(src, dest, DefaultSuffix))
+	require.NoError(t, copyMove(src, dest, DefaultSuffix, false))
 
 	got, err := os.ReadFile(victim)
 	require.NoError(t, err)
@@ -106,7 +106,7 @@ func TestCopyMoveDanglingSymlinkDest(t *testing.T) {
 	require.NoError(t, os.WriteFile(src, []byte("extracted"), 0o600))
 	require.NoError(t, os.Symlink(missing, dest))
 
-	require.NoError(t, copyMove(src, dest, DefaultSuffix))
+	require.NoError(t, copyMove(src, dest, DefaultSuffix, false))
 
 	_, err := os.Lstat(missing)
 	require.ErrorIs(t, err, os.ErrNotExist, "must not create the dangling target")
@@ -133,7 +133,7 @@ func TestCopyMoveSymlinkSource(t *testing.T) {
 	require.NoError(t, os.WriteFile(target, []byte("secret"), 0o600))
 	require.NoError(t, os.Symlink(target, src))
 
-	require.NoError(t, copyMove(src, dest, DefaultSuffix))
+	require.NoError(t, copyMove(src, dest, DefaultSuffix, false))
 
 	info, err := os.Lstat(dest)
 	require.NoError(t, err)
@@ -166,7 +166,7 @@ func TestCopyMoveHardlinkDest(t *testing.T) {
 		t.Skipf("hard links unavailable: %v", err)
 	}
 
-	require.NoError(t, copyMove(src, dest, DefaultSuffix))
+	require.NoError(t, copyMove(src, dest, DefaultSuffix, false))
 
 	got, err := os.ReadFile(dest)
 	require.NoError(t, err)
@@ -184,7 +184,7 @@ func TestCopyMoveDirectorySourceLeavesDest(t *testing.T) {
 	dest := filepath.Join(t.TempDir(), "payload.bin")
 	require.NoError(t, os.WriteFile(dest, []byte("existing"), 0o600))
 
-	err := copyMove(src, dest, DefaultSuffix)
+	err := copyMove(src, dest, DefaultSuffix, false)
 	require.Error(t, err)
 
 	got, err := os.ReadFile(dest)
@@ -257,7 +257,7 @@ func TestCopyMoveCustomSuffix(t *testing.T) {
 	require.NoError(t, os.WriteFile(src, []byte("extracted"), 0o600))
 	require.NoError(t, os.WriteFile(stale, []byte("stale"), 0o600))
 
-	require.NoError(t, copyMove(src, dest, suffix))
+	require.NoError(t, copyMove(src, dest, suffix, false))
 
 	got, err := os.ReadFile(dest)
 	require.NoError(t, err)
@@ -541,7 +541,7 @@ func TestMoveFilesKnownEmptyListingLeavesTemp(t *testing.T) {
 	toDir := t.TempDir()
 	known := filepath.Join(fromDir, "movie.mkv")
 
-	_, err := moveFilesKnown(NoLogger(), 0o755, fromDir, toDir, false, DefaultSuffix, []string{known})
+	_, err := moveFilesKnown(NoLogger(), 0o755, fromDir, toDir, false, DefaultSuffix, []string{known}, false)
 	require.ErrorIs(t, err, errExtractListingEmpty)
 	require.DirExists(t, fromDir, "temp dir must survive when the write list is not visible")
 	require.NoFileExists(t, filepath.Join(toDir, "movie.mkv"))
@@ -557,7 +557,7 @@ func TestMoveFilesKnownMovesWriteList(t *testing.T) {
 
 	require.NoError(t, os.WriteFile(src, []byte("payload"), 0o600))
 
-	got, err := moveFilesKnown(NoLogger(), 0o755, fromDir, toDir, false, DefaultSuffix, []string{src})
+	got, err := moveFilesKnown(NoLogger(), 0o755, fromDir, toDir, false, DefaultSuffix, []string{src}, false)
 	require.NoError(t, err)
 	require.Equal(t, []string{dest}, got.NewFiles)
 
@@ -599,7 +599,7 @@ func TestMoveFilesKnownPartialMissLeavesTemp(t *testing.T) {
 	require.NoError(t, os.WriteFile(src, []byte("payload"), 0o600))
 
 	_, err := moveFilesKnown(NoLogger(), 0o755, fromDir, toDir, false, DefaultSuffix,
-		[]string{src, filepath.Join(fromDir, "other.mkv")})
+		[]string{src, filepath.Join(fromDir, "other.mkv")}, false)
 	require.ErrorIs(t, err, errExtractListingEmpty)
 	require.DirExists(t, fromDir)
 	require.FileExists(t, src)
@@ -617,7 +617,7 @@ func TestWithoutPathsDropsDeletedNestedArchive(t *testing.T) {
 
 	toDir := t.TempDir()
 	known := withoutPaths(resolveExtractPaths(fromDir, []string{payload, "inner.zip"}), []string{nested})
-	got, err := moveFilesKnown(NoLogger(), 0o755, fromDir, toDir, false, DefaultSuffix, known)
+	got, err := moveFilesKnown(NoLogger(), 0o755, fromDir, toDir, false, DefaultSuffix, known, false)
 	require.NoError(t, err)
 	require.Equal(t, []string{filepath.Join(toDir, "payload.txt")}, got.NewFiles)
 	require.NoDirExists(t, fromDir)
@@ -657,7 +657,7 @@ func TestTarAbsoluteNameSurvivesEmptyListing(t *testing.T) {
 	assert.Equal(t, []string{written}, got)
 
 	destDir := filepath.Join(dir, "dest")
-	moved, err := moveFilesKnown(NoLogger(), 0o750, out, destDir, false, DefaultSuffix, files)
+	moved, err := moveFilesKnown(NoLogger(), 0o750, out, destDir, false, DefaultSuffix, files, false)
 	require.NoError(t, err)
 	require.Equal(t, []string{filepath.Join(destDir, "movie.mkv")}, moved.NewFiles)
 	require.NoDirExists(t, out)

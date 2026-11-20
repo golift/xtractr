@@ -1,10 +1,10 @@
 package xtractr
 
 import (
-	"bytes"
 	"fmt"
 	"io"
 	"os"
+	"slices"
 )
 
 // sparseBlock is the zero run stored as a hole. zstd and xz use the same size.
@@ -38,14 +38,21 @@ func newSparseWriter(file *os.File, disable bool) *sparseWriter {
 	return &sparseWriter{out: file, file: file, disable: disable}
 }
 
-// Write accepts logical bytes. Zeros are held until a non-zero byte or finish,
-// so a run split across writes is still one hole. The count returned is the
+// Write accepts logical bytes. A run of sparseBlock zeros becomes a hole.
+// Shorter runs stay in the same write as the surrounding data, and a trailing
+// run is held so the next write can extend it. The count returned is the
 // logical size, which is what the progress and byte caps see.
 func (s *sparseWriter) Write(data []byte) (int, error) {
 	if len(data) == 0 || s.disable || s.dense {
 		return s.writeDense(data)
 	}
 
+	return s.writeRuns(data)
+}
+
+// writeRuns splits data into holes and dense writes. A zero run at the end of
+// this call stays pending so the next call can extend it into a hole.
+func (s *sparseWriter) writeRuns(data []byte) (int, error) {
 	accepted := 0
 
 	for len(data) > 0 {
@@ -58,35 +65,62 @@ func (s *sparseWriter) Write(data []byte) (int, error) {
 			continue
 		}
 
-		err := s.commitZeros(false)
+		wrote, rest, err := s.writeNonZeros(data)
+		accepted += wrote
+		data = rest
+
 		if err != nil {
 			return accepted, err
-		}
-
-		if s.dense {
-			count, err := s.writeDense(data)
-
-			return accepted + count, err
-		}
-
-		count := leadingData(data)
-
-		wrote, err := s.out.Write(data[:count])
-		accepted += wrote
-		data = data[wrote:]
-
-		if err != nil {
-			return accepted, fmt.Errorf("writing file: %w", err)
 		}
 	}
 
 	return accepted, nil
 }
 
+// writeNonZeros writes the pending short zero run and the dense prefix of data.
+// A trailing zero run is left in the returned remainder.
+func (s *sparseWriter) writeNonZeros(data []byte) (int, []byte, error) {
+	err := s.flushHole()
+	if err != nil {
+		return 0, data, err
+	}
+
+	if s.dense {
+		wrote, denseErr := s.writeDense(data)
+
+		return wrote, data[wrote:], denseErr
+	}
+
+	err = s.writePending()
+	if err != nil {
+		return 0, data, err
+	}
+
+	count := denseSpan(data)
+	if count == len(data) {
+		count -= trailingZeros(data)
+	}
+
+	if count == 0 {
+		return 0, data, fmt.Errorf("writing file: %w", io.ErrShortWrite)
+	}
+
+	wrote, err := s.writeDense(data[:count])
+
+	return wrote, data[wrote:], err
+}
+
 // finish writes a short trailing zero run, or closes a trailing hole with one
 // zero byte at the last offset.
 func (s *sparseWriter) finish() error {
-	err := s.commitZeros(true)
+	var err error
+
+	if !s.disable && !s.dense && s.pending >= sparseBlock {
+		err = s.closeHole()
+	} else {
+		err = s.writePending()
+	}
+
 	if err != nil {
 		return err
 	}
@@ -98,17 +132,11 @@ func (s *sparseWriter) finish() error {
 	return nil
 }
 
-func (s *sparseWriter) commitZeros(atEnd bool) error {
-	if s.pending == 0 {
+// flushHole seeks over whole sparse blocks and leaves a short remainder to be
+// written with the data that follows. A failed seek writes the zeros instead.
+func (s *sparseWriter) flushHole() error {
+	if s.pending < sparseBlock {
 		return nil
-	}
-
-	if s.dense || s.disable || s.pending < sparseBlock {
-		return s.writePending()
-	}
-
-	if atEnd {
-		return s.closeHole()
 	}
 
 	skip := s.pending - s.pending%sparseBlock
@@ -122,7 +150,7 @@ func (s *sparseWriter) commitZeros(atEnd bool) error {
 
 	s.pending -= skip
 
-	return s.writePending()
+	return nil
 }
 
 func (s *sparseWriter) closeHole() error {
@@ -191,6 +219,10 @@ func (s *sparseWriter) writeDense(data []byte) (int, error) {
 		return count, fmt.Errorf("writing file: %w", err)
 	}
 
+	if count == 0 {
+		return 0, fmt.Errorf("writing file: %w", io.ErrShortWrite)
+	}
+
 	return count, nil
 }
 
@@ -223,11 +255,38 @@ func leadingZeros(data []byte) int {
 	return len(data)
 }
 
-func leadingData(data []byte) int {
-	idx := bytes.IndexByte(data, 0)
-	if idx < 0 {
-		return len(data)
+func trailingZeros(data []byte) int {
+	count := 0
+
+	for _, d := range slices.Backward(data) {
+		if d != 0 {
+			break
+		}
+
+		count++
 	}
 
-	return idx
+	return count
+}
+
+// denseSpan is the prefix to write in one piece: everything before a zero run
+// long enough to be a hole. data must start with a non-zero byte.
+func denseSpan(data []byte) int {
+	run := 0
+
+	for idx, value := range data {
+		if value != 0 {
+			run = 0
+
+			continue
+		}
+
+		run++
+
+		if run == sparseBlock {
+			return idx - sparseBlock + 1
+		}
+	}
+
+	return len(data)
 }

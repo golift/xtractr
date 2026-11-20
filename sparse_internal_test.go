@@ -51,6 +51,79 @@ func TestSparseWriterShortZeroRunStaysDense(t *testing.T) {
 	assert.Equal(t, make([]byte, sparseBlock-1), buf.data)
 }
 
+func TestSparseWriterShortInteriorZerosOneWrite(t *testing.T) {
+	t.Parallel()
+
+	payload := []byte{1, 0, 2, 0, 3, 0, 4}
+	buf := &seekBuffer{}
+	writer := &sparseWriter{out: buf}
+
+	_, err := writer.Write(payload)
+	require.NoError(t, err)
+	require.NoError(t, writer.finish())
+
+	assert.Equal(t, payload, buf.data)
+	assert.Equal(t, 1, buf.writes)
+	assert.Zero(t, buf.seeks)
+}
+
+func TestSparseWriterHoleRemainderJoinsFollowingData(t *testing.T) {
+	t.Parallel()
+
+	payload := append(make([]byte, sparseBlock+100), []byte("abc")...)
+	buf := &seekBuffer{}
+	writer := &sparseWriter{out: buf}
+
+	_, err := writer.Write(payload)
+	require.NoError(t, err)
+	require.NoError(t, writer.finish())
+
+	assert.Equal(t, payload, buf.data)
+	assert.NotZero(t, buf.seeks)
+	require.NotEmpty(t, writer.holes)
+	assert.Equal(t, int64(sparseBlock), writer.holes[0].length)
+}
+
+func TestSparseWriterTrailingBlockClosesHole(t *testing.T) {
+	t.Parallel()
+
+	buf := &seekBuffer{}
+	writer := &sparseWriter{out: buf}
+
+	_, err := writer.Write(make([]byte, sparseBlock))
+	require.NoError(t, err)
+	require.NoError(t, writer.finish())
+
+	require.Len(t, buf.data, sparseBlock)
+	assert.Equal(t, byte(0), buf.data[sparseBlock-1])
+	assert.Equal(t, 1, buf.writes)
+	assert.NotZero(t, buf.seeks)
+	require.NotEmpty(t, writer.holes)
+	assert.Equal(t, int64(sparseBlock-1), writer.holes[0].length)
+}
+
+func TestCopyMoveDisableSparseStaysDense(t *testing.T) {
+	t.Parallel()
+
+	payload := append([]byte{1}, make([]byte, sparseBlock*2)...)
+	src := filepath.Join(t.TempDir(), "src")
+	require.NoError(t, os.WriteFile(src, payload, 0o600))
+
+	info, err := os.Lstat(src)
+	require.NoError(t, err)
+
+	dst := filepath.Join(filepath.Dir(src), "moved")
+	require.NoError(t, copyMoveFile(src, dst, "_xtractr", info, true))
+
+	got, err := os.ReadFile(dst)
+	require.NoError(t, err)
+	assert.Equal(t, payload, got)
+
+	if alloc, ok := allocatedBytes(dst); ok {
+		assert.Greater(t, alloc, int64(len(payload)/2), "allocated %d, logical %d", alloc, len(payload))
+	}
+}
+
 func TestSparseWriterDisableWritesZeros(t *testing.T) {
 	t.Parallel()
 
@@ -115,7 +188,7 @@ func TestCopyMoveKeepsHoles(t *testing.T) {
 	require.NoError(t, err)
 
 	dst := filepath.Join(filepath.Dir(src), "moved")
-	require.NoError(t, copyMoveFile(src, dst, "_xtractr", info))
+	require.NoError(t, copyMoveFile(src, dst, "_xtractr", info, false))
 
 	got, err := os.ReadFile(dst)
 	require.NoError(t, err)
@@ -167,13 +240,16 @@ func gzipFile(t *testing.T, payload []byte) string {
 // seekBuffer is an in-memory WriteSeeker. A seek past the end grows the buffer
 // with zeros, which is what a hole reads back as.
 type seekBuffer struct {
-	data  []byte
-	pos   int
-	seeks int
-	fail  bool
+	data   []byte
+	pos    int
+	seeks  int
+	writes int
+	fail   bool
 }
 
 func (b *seekBuffer) Write(data []byte) (int, error) {
+	b.writes++
+
 	end := b.pos + len(data)
 	if end > len(b.data) {
 		grown := make([]byte, end)
