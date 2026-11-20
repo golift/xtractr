@@ -26,7 +26,7 @@ import (
 //nolint:gochecknoglobals // password retries copy XFile, so this lock cannot live on it.
 var linkWrite sync.RWMutex
 
-// plantedMu guards XFile.planted and plantedCollected. Link writes audit them
+// plantedMu guards XFile.planted, plantedCollected, topDirs, and written. Link writes audit them
 // under linkWrite, but directory creation audits them too, from file workers
 // that share linkWrite or hold nothing. Taken after linkWrite, never before.
 //
@@ -62,7 +62,7 @@ func (x *XFile) cleanup(files []string) ([]string, error) {
 		return files, err
 	}
 
-	x.moveKnown = writtenPaths(output, files)
+	x.moveKnown = writtenPaths(output, x.squashPaths(files))
 
 	return x.squashRoot(files)
 }
@@ -123,9 +123,10 @@ func (x *XFile) squashRoot(files []string) ([]string, error) {
 // Folders this extract created count too, so an empty top-level folder keeps
 // a populated sibling from being squashed.
 func (x *XFile) squashRoots(output string, files []string) map[string]struct{} {
-	roots := make(map[string]struct{}, len(files))
+	paths := x.squashPaths(files)
+	roots := make(map[string]struct{}, len(paths))
 
-	for _, path := range writtenPaths(output, files) {
+	for _, path := range writtenPaths(output, paths) {
 		top, ok := topUnder(output, path)
 		if ok {
 			roots[top] = struct{}{}
@@ -434,6 +435,7 @@ func (x *XFile) mkDirLocked(path string, mtime time.Time) error {
 	}
 
 	x.noteTopDir(path)
+	x.noteWritten(path)
 
 	_ = os.Chtimes(path, time.Time{}, mtime)
 
@@ -461,6 +463,37 @@ func (x *XFile) noteTopDir(path string) {
 	}
 
 	x.topDirs[top] = struct{}{}
+}
+
+// noteWritten records a path this extract created. See XFile.written.
+func (x *XFile) noteWritten(path string) {
+	if path == "" {
+		return
+	}
+
+	plantedMu.Lock()
+	defer plantedMu.Unlock()
+
+	x.written = append(x.written, path)
+}
+
+// createdPaths is a copy of the paths this extract created.
+func (x *XFile) createdPaths() []string {
+	plantedMu.Lock()
+	defer plantedMu.Unlock()
+
+	return slices.Clone(x.written)
+}
+
+// squashPaths is where this extract wrote. The public file list is the fallback
+// for a caller that hands squashRoot paths it already wrote. Tar's list is
+// header names, so it is not used once a path was recorded.
+func (x *XFile) squashPaths(files []string) []string {
+	if paths := x.createdPaths(); len(paths) > 0 {
+		return paths
+	}
+
+	return files
 }
 
 // mkdirAllCounted creates each missing component under OutputDir with os.Mkdir
@@ -650,6 +683,7 @@ func (x *XFile) writeFile(file *file, parallel bool) (uint64, error) {
 	}
 
 	x.noteArchiveOutput(file.Path, uint64(size))
+	x.noteWritten(file.Path)
 	out.chtimes(file.Atime, file.Mtime)
 
 	return uint64(size), nil
@@ -1575,6 +1609,7 @@ func (x *XFile) finishLink(path string, old replacedEntry) error {
 	}
 
 	old.discard()
+	x.noteWritten(path)
 
 	return nil
 }

@@ -46,6 +46,76 @@ func TestTarSquashRootDotNamesKeepExistingFile(t *testing.T) {
 	assert.FileExists(t, filepath.Join(out, "a.txt"))
 }
 
+// TestSquashRootParentOutputLeavesWorkDir is OutputDir ".." with a tar member
+// whose name already exists in the working directory. The member is written
+// to the parent. Root detection must not treat the working directory as the
+// archive root and move it into the parent.
+func TestSquashRootParentOutputLeavesWorkDir(t *testing.T) {
+	dir := t.TempDir()
+	work := filepath.Join(dir, "work")
+	require.NoError(t, os.Mkdir(work, 0o750))
+	t.Chdir(work)
+
+	require.NoError(t, os.WriteFile("a.txt", []byte("mine"), 0o600))
+	require.NoError(t, os.WriteFile("keep.txt", []byte("stay"), 0o600))
+
+	archive := filepath.Join(work, "one.tar")
+	writePlainTar(t, archive, map[string]string{"a.txt": "extracted"})
+
+	_, files, _, err := xtractr.ExtractFile(&xtractr.XFile{
+		FilePath:   archive,
+		OutputDir:  "..",
+		FileMode:   0o644,
+		DirMode:    0o755,
+		SquashRoot: true,
+	})
+	require.NoError(t, err)
+	assert.NotEmpty(t, files)
+
+	got, err := os.ReadFile(filepath.Join(work, "keep.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, "stay", string(got))
+
+	got, err = os.ReadFile(filepath.Join(work, "a.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, "mine", string(got))
+
+	got, err = os.ReadFile(filepath.Join(dir, "a.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, "extracted", string(got))
+}
+
+// TestSquashRootMemberNamedLikeOutputDirKeepsExisting is the same member name
+// when out/a.txt is already there. The extract writes out/out/a.txt. Squash
+// still sees one root, and the move keeps the file that was already there.
+func TestSquashRootMemberNamedLikeOutputDirKeepsExisting(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+
+	out := filepath.Join(dir, "out")
+	require.NoError(t, os.Mkdir(out, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(out, "a.txt"), []byte("old"), 0o600))
+
+	archive := filepath.Join(dir, "named.tar")
+	writePlainTar(t, archive, map[string]string{"out/a.txt": "new"})
+
+	// The move refuses to replace a.txt, so the returned list is empty.
+	size, _, _, err := xtractr.ExtractFile(&xtractr.XFile{
+		FilePath:   archive,
+		OutputDir:  out,
+		FileMode:   0o644,
+		DirMode:    0o755,
+		SquashRoot: true,
+	})
+	require.NoError(t, err)
+	assert.NotZero(t, size)
+
+	got, err := os.ReadFile(filepath.Join(out, "a.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, "old", string(got))
+	assert.NoFileExists(t, filepath.Join(out, "out", "a.txt"))
+}
+
 func TestSquashRootMemberNamedLikeOutputDir(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
