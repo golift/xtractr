@@ -562,13 +562,27 @@ func copyMoveFile(oldpath, newpath, suffix string, oldInfo os.FileInfo) error {
 
 	defer release() // after the rename (or error cleanup) below.
 
-	_, err = io.Copy(newFile, oldFile)
+	// A cross-device move reads holes as zeros. Write them as holes again.
+	sparse := newSparseWriter(newFile, false)
+	_, err = io.Copy(sparse, oldFile)
+
+	var holeErr error
+	if err == nil {
+		holeErr = sparse.finish()
+	}
+
 	closeErr := newFile.Close()
 
 	if err != nil {
 		_ = os.Remove(pathUsed)
 
 		return fmt.Errorf("io.Copy(): %w", err)
+	}
+
+	if holeErr != nil {
+		_ = os.Remove(pathUsed)
+
+		return fmt.Errorf("closing hole: %w", holeErr)
 	}
 
 	if closeErr != nil {

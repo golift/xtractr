@@ -221,6 +221,10 @@ type XFile struct {
 	// PreserveExec keeps archive execute bits for each class FileMode already
 	// grants. Off, FileMode is the mode passed to open. Umask still applies.
 	PreserveExec bool
+	// DisableSparse writes zero bytes instead of holes. Off, a run of 32 KiB
+	// of zeros is stored as a hole. A hole at the end of a file is closed with
+	// one zero byte so the file keeps its size.
+	DisableSparse bool
 	// Progress is called periodically during file extraction.
 	// Contains info about the progress of the extraction.
 	// This is not called if an Updates channel is also provided.
