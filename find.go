@@ -71,7 +71,9 @@ func (e Exclude) Has(test string) bool {
 // only the first file in a multi-part rar or 7zip archive. Sometimes there are multiple archives,
 // so if the rar archive does not have "part" followed by a number in the name, then it will be
 // considered an independent archive. Some packagers seem to use different naming schemes,
-// so this may need to be updated as time progresses. Use the input to Filter to adjust the output.
+// so this may need to be updated as time progresses. A file named .img is listed only
+// when it has an ISO 9660 or UDF signature; other extensions are matched by name.
+// Use the input to Filter to adjust the output.
 func FindCompressedFiles(filter Filter) ArchiveList { //nolint:gocritic // public API; Filter is a value.
 	return findCompressedFiles(filter.Path, &filter, 0)
 }
@@ -81,13 +83,19 @@ func findCompressedFiles(path string, filter *Filter, depth int) ArchiveList {
 		return nil
 	}
 
-	dir, err := os.Open(path)
-	if err != nil {
+	// Open on a named pipe blocks until some other process writes to it.
+	info, err := os.Lstat(path)
+	if err != nil || !searchablePath(path, info) {
+		return nil
+	}
+
+	dir, openErr := os.Open(path)
+	if openErr != nil {
 		return nil
 	}
 	defer dir.Close()
 
-	info, err := dir.Stat()
+	info, err = dir.Stat()
 	if err != nil {
 		return nil // unreadable folder?
 	}
@@ -114,7 +122,18 @@ func findDirectArchive(path string, filter *Filter) ArchiveList {
 		return nil
 	}
 
-	if linkInfo, _ := os.Lstat(path); !acceptArchive(filter, path, linkInfo) {
+	linkInfo, statErr := os.Lstat(path)
+	if statErr != nil || !imgRegular(filter, filepath.Dir(path), linkInfo) {
+		return nil
+	}
+
+	// A .img name is not enough: raw disk images use it too. List one passed in
+	// directly only when it has an ISO 9660 or UDF signature.
+	if strings.HasSuffix(strings.ToLower(path), ".img") && !discImageFile(path) {
+		return nil
+	}
+
+	if !acceptArchive(filter, path, linkInfo) {
 		return nil
 	}
 
@@ -204,6 +223,14 @@ func getCompressedFiles(path string, filter *Filter, fileList []os.FileInfo, dep
 		case strings.HasSuffix(lowerName, ".r00") && !CheckR00ForRarFile(fileList, lowerName):
 			// Accept .r00 as the first archive file if no .rar files are present in the path.
 			addArchive(files, path, file, filter)
+		case strings.HasSuffix(lowerName, ".img"):
+			// .img is a disc only when the signature says so. The generic suffix
+			// case below would list every .img. ExtractFile still tries every .img.
+			// Probe a regular file only: opening a named pipe here blocks the search.
+			full := filepath.Join(path, file.Name())
+			if imgRegular(filter, path, file) && discImageFile(full) {
+				addArchive(files, path, file, filter)
+			}
 		case !strings.HasSuffix(lowerName, ".r00") && IsArchiveFile(lowerName):
 			addArchive(files, path, file, filter)
 		}
@@ -293,6 +320,38 @@ func (a ArchiveList) List() []string {
 	}
 
 	return list
+}
+
+// searchablePath reports whether path can be opened for a search.
+// A named pipe, or a link to one, is not: opening it waits for a writer.
+func searchablePath(path string, info os.FileInfo) bool {
+	if info.Mode()&os.ModeSymlink != 0 {
+		target, err := os.Stat(path)
+
+		return err == nil && (target.IsDir() || target.Mode().IsRegular())
+	}
+
+	return info.IsDir() || info.Mode().IsRegular()
+}
+
+// imgRegular reports whether an .img candidate is a regular file.
+// A symlink counts only when the filter allows it and the target is regular.
+func imgRegular(filter *Filter, dir string, info os.FileInfo) bool {
+	if info == nil {
+		return false
+	}
+
+	if info.Mode().IsRegular() {
+		return true
+	}
+
+	if info.Mode()&os.ModeSymlink == 0 || filter == nil || !filter.AllowSymlinks {
+		return false
+	}
+
+	target, err := os.Stat(filepath.Join(dir, info.Name()))
+
+	return err == nil && target.Mode().IsRegular()
 }
 
 func skipSymlinkArchivePath(filter *Filter, path string) bool {
