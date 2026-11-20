@@ -71,7 +71,9 @@ func (e Exclude) Has(test string) bool {
 // only the first file in a multi-part rar or 7zip archive. Sometimes there are multiple archives,
 // so if the rar archive does not have "part" followed by a number in the name, then it will be
 // considered an independent archive. Some packagers seem to use different naming schemes,
-// so this may need to be updated as time progresses. Use the input to Filter to adjust the output.
+// so this may need to be updated as time progresses. A file named .img is listed only
+// when it has an ISO 9660 or UDF signature; other extensions are matched by name.
+// Use the input to Filter to adjust the output.
 func FindCompressedFiles(filter Filter) ArchiveList { //nolint:gocritic // public API; Filter is a value.
 	return findCompressedFiles(filter.Path, &filter, 0)
 }
@@ -108,6 +110,12 @@ func findCompressedFiles(path string, filter *Filter, depth int) ArchiveList {
 func findDirectArchive(path string, filter *Filter) ArchiveList {
 	if filter.ExcludeSuffix.Has(strings.ToLower(filepath.Base(path))) {
 		return nil // excluded suffix, even when the archive is passed in directly.
+	}
+
+	// A .img name is not enough: raw disk images use it too. List one passed in
+	// directly only when it has an ISO 9660 or UDF signature.
+	if strings.HasSuffix(strings.ToLower(path), ".img") && !discImageFile(path) {
+		return nil
 	}
 
 	if skipSymlinkArchivePath(filter, path) {
@@ -204,6 +212,12 @@ func getCompressedFiles(path string, filter *Filter, fileList []os.FileInfo, dep
 		case strings.HasSuffix(lowerName, ".r00") && !CheckR00ForRarFile(fileList, lowerName):
 			// Accept .r00 as the first archive file if no .rar files are present in the path.
 			addArchive(files, path, file, filter)
+		case strings.HasSuffix(lowerName, ".img"):
+			// .img is a disc only when the signature says so. The generic suffix
+			// case below would list every .img. ExtractFile still tries every .img.
+			if discImageFile(filepath.Join(path, file.Name())) {
+				addArchive(files, path, file, filter)
+			}
 		case !strings.HasSuffix(lowerName, ".r00") && IsArchiveFile(lowerName):
 			addArchive(files, path, file, filter)
 		}

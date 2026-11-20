@@ -49,6 +49,9 @@ var extension2function = []archive{
 	{Type: "gzip", Ext: ".gz", Fn: ChngInt(ExtractGzip)},
 	{Type: "gzip", Ext: ".gzip", Fn: ChngInt(ExtractGzip)},
 	{Type: "iso", Ext: ".iso", Fn: ChngInt(ExtractISO)},
+	// .img is also a raw disk image. ExtractFile always tries it; a folder
+	// search lists one only when the bytes are an ISO 9660 or UDF disc.
+	{Type: "iso", Ext: ".img", Fn: ChngInt(ExtractISO)},
 	{Type: "lz4", Ext: ".lz4", Fn: ChngInt(ExtractLZ4)},
 	{Type: "lzma", Ext: ".lz", Fn: ChngInt(ExtractLZMA)},
 	{Type: "lzma", Ext: ".lzip", Fn: ChngInt(ExtractLZMA)},
