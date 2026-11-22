@@ -2,6 +2,7 @@ package xtractr_test
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -42,4 +43,36 @@ func TestExtract7zMultiVolume(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestExtract7zMissingVolume covers a .7z.001 whose start header records a set
+// longer than the volumes on disk. The header walk used to fail inside sevenzip
+// with an unexpected EOF after the archive had already been accepted.
+func TestExtract7zMissingVolume(t *testing.T) {
+	t.Parallel()
+
+	data, err := os.ReadFile(filepath.Join("test_data", "multivol.7z.001"))
+	require.NoError(t, err)
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "multivol.7z.001")
+	require.NoError(t, os.WriteFile(path, data, 0o600)) //nolint:gosec // fixed name in a temp dir.
+
+	out := t.TempDir()
+	size, files, archives, err := xtractr.Extract7z(&xtractr.XFile{
+		FilePath:  path,
+		OutputDir: out,
+		FileMode:  xtractr.DefaultFileMode,
+		DirMode:   xtractr.DefaultDirMode,
+	})
+	require.ErrorIs(t, err, xtractr.ErrMissingVolume)
+	require.ErrorContains(t, err, "multivol.7z.002")
+	assert.False(t, xtractr.IsLimitError(err), "a missing volume is not a configured limit: %v", err)
+	assert.Zero(t, size)
+	assert.Empty(t, files)
+	assert.Empty(t, archives)
+
+	written, readErr := os.ReadDir(out)
+	require.NoError(t, readErr)
+	assert.Empty(t, written)
 }
