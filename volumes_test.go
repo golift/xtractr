@@ -47,6 +47,12 @@ func TestCheckVolumes(t *testing.T) {
 		assertChecked(t, &xtractr.XFile{FilePath: filepath.Join("test_data", "multivol.7z.001")})
 	})
 
+	t.Run("whole 7z later volume", func(t *testing.T) {
+		t.Parallel()
+
+		assertChecked(t, &xtractr.XFile{FilePath: filepath.Join("test_data", "multivol.7z.002")})
+	})
+
 	t.Run("continued file", func(t *testing.T) {
 		t.Parallel()
 
@@ -104,6 +110,20 @@ func TestCheckVolumes(t *testing.T) {
 			xtractr.ErrMissingVolume, rardecode.ErrInvalidFileBlock)
 	})
 
+	t.Run("lone r01", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		piece := []byte("0123456789")
+		names := writeRAR4Set(t, dir, "show.rar", rar4Options{volSize: len(piece)},
+			rar4File{name: "payload.bin", data: bytes.Repeat(piece, 3)},
+		)
+		require.GreaterOrEqual(t, len(names), 3)
+		require.NoError(t, os.Remove(filepath.Join(dir, names[0])))
+		require.NoError(t, os.Remove(filepath.Join(dir, names[1])))
+		assertChecked(t, &xtractr.XFile{FilePath: filepath.Join(dir, names[2])}, xtractr.ErrMissingVolume)
+	})
+
 	t.Run("short 7z", func(t *testing.T) {
 		t.Parallel()
 
@@ -115,6 +135,49 @@ func TestCheckVolumes(t *testing.T) {
 		require.NoError(t, os.WriteFile(path, data, 0o600)) //nolint:gosec // fixed name in a temp dir.
 
 		assertChecked(t, &xtractr.XFile{FilePath: path}, xtractr.ErrMissingVolume)
+	})
+
+	t.Run("lone 7z later volume", func(t *testing.T) {
+		t.Parallel()
+
+		data, err := os.ReadFile(filepath.Join("test_data", "multivol.7z.002"))
+		require.NoError(t, err)
+
+		dir := t.TempDir()
+		path := filepath.Join(dir, "multivol.7z.002")
+		require.NoError(t, os.WriteFile(path, data, 0o600)) //nolint:gosec // fixed name in a temp dir.
+
+		assertChecked(t, &xtractr.XFile{FilePath: path}, xtractr.ErrMissingVolume)
+		err = xtractr.CheckVolumes(&xtractr.XFile{FilePath: path})
+		require.ErrorContains(t, err, "multivol.7z.001")
+	})
+
+	t.Run("bad 7z header", func(t *testing.T) {
+		t.Parallel()
+
+		data, err := os.ReadFile(filepath.Join("test_data", "multivol.7z.001"))
+		require.NoError(t, err)
+
+		data[10] ^= 0xff
+
+		dir := t.TempDir()
+		path := filepath.Join(dir, "multivol.7z.001")
+		require.NoError(t, os.WriteFile(path, data, 0o600)) //nolint:gosec // fixed name in a temp dir.
+
+		assertHeaderError(t, path)
+	})
+
+	t.Run("truncated 7z header", func(t *testing.T) {
+		t.Parallel()
+
+		data, err := os.ReadFile(filepath.Join("test_data", "multivol.7z.001"))
+		require.NoError(t, err)
+
+		dir := t.TempDir()
+		path := filepath.Join(dir, "multivol.7z.001")
+		require.NoError(t, os.WriteFile(path, data[:20], 0o600)) //nolint:gosec // fixed name in a temp dir.
+
+		assertHeaderError(t, path)
 	})
 
 	t.Run("zip", func(t *testing.T) {
@@ -158,6 +221,19 @@ func assertChecked(t *testing.T, xFile *xtractr.XFile, wrapped ...error) {
 		assert.False(t, xtractr.IsLimitError(err), "a missing volume is not a configured limit: %v", err)
 	}
 
+	assert.Equal(t, before, namesIn(t, dir))
+}
+
+func assertHeaderError(t *testing.T, path string) {
+	t.Helper()
+
+	dir := filepath.Dir(path)
+	before := namesIn(t, dir)
+
+	err := xtractr.CheckVolumes(&xtractr.XFile{FilePath: path})
+	require.Error(t, err)
+	require.NotErrorIs(t, err, xtractr.ErrMissingVolume)
+	assert.False(t, xtractr.IsLimitError(err), "a bad header is not a configured limit: %v", err)
 	assert.Equal(t, before, namesIn(t, dir))
 }
 
