@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"hash/crc32"
 	"io"
 	"io/fs"
 	"os"
@@ -18,10 +19,14 @@ import (
 
 const (
 	rar4HeaderBytes     = 14
+	rar4BlockPrefix     = 7
+	rar4MainSize        = 13
 	rar4MainType        = 0x73
 	rar4FlagVolume      = 0x0001
+	rar4FlagComment     = 0x0002
 	rar4FlagNewNaming   = 0x0010
 	rar4FlagFirstVolume = 0x0100
+	rar4FlagBlockData   = 0x8000
 
 	// rar4Marker is the RAR 1.5/4 signature. RAR5 uses 0x01 in the last byte.
 	rar4Marker = "Rar!\x1a\x07\x00"
@@ -128,8 +133,9 @@ func rarSetHeaders(xFile *XFile) (total, compressed uint64, count int, err error
 
 // rar4LaterVolume reports whether path is a RAR4 volume that follows another
 // volume. rardecode does not read the first-volume flag, so a later volume
-// opened on its own can look like a whole archive. A read error or any other
-// signature returns false, and that file is left to the normal open.
+// opened on its own can look like a whole archive. A read error, a bad main
+// header CRC, or any other signature returns false, and that file is left to
+// the normal open.
 func rar4LaterVolume(path string) bool {
 	file, err := os.Open(path)
 	if err != nil {
@@ -151,7 +157,48 @@ func rar4LaterVolume(path string) bool {
 
 	// RAR 2.x set the volume flag and never the first-volume flag, and it
 	// named a first volume .rar. RAR 3.0 and later set the first-volume flag.
-	return flags&rar4FlagNewNaming != 0 || !strings.EqualFold(filepath.Ext(path), ".rar")
+	if flags&rar4FlagNewNaming == 0 && strings.EqualFold(filepath.Ext(path), ".rar") {
+		return false
+	}
+
+	return rar4MainCRC(file, buf)
+}
+
+// rar4MainCRC reports whether buf's main header matches its CRC. The flags are
+// trusted only after this, so a corrupt first volume is not a missing one.
+// file is positioned just after the 14 bytes in buf.
+func rar4MainCRC(file *os.File, buf []byte) bool {
+	flags := binary.LittleEndian.Uint16(buf[10:12])
+	if flags&rar4FlagBlockData != 0 {
+		return false
+	}
+
+	size := int(binary.LittleEndian.Uint16(buf[12:14]))
+	if flags&rar4FlagComment != 0 {
+		if size < rar4MainSize {
+			return false
+		}
+
+		size = rar4MainSize
+	} else if size < rar4BlockPrefix {
+		return false
+	}
+
+	extra := make([]byte, size-rar4BlockPrefix)
+
+	_, err := io.ReadFull(file, extra)
+	if err != nil {
+		return false
+	}
+
+	sum := crc32.NewIEEE()
+	_, _ = sum.Write(buf[9:rar4HeaderBytes])
+	_, _ = sum.Write(extra)
+
+	// The header stores the low 16 bits of the CRC32.
+	stored := uint32(binary.LittleEndian.Uint16(buf[7:9]))
+
+	return sum.Sum32()&0xffff == stored
 }
 
 // getUncompressedRarSize reads every file header, which walks every volume.
