@@ -38,7 +38,17 @@ func ExtractRAR(xFile *XFile) (size uint64, filesList, archiveList []string, err
 		return extractRAR(xFile)
 	}
 
-	// Try all the passwords.
+	return forRARPassword(xFile, tryRAR)
+}
+
+// forRARPassword tries Password first, then each of Passwords, and finally no
+// password. An incorrect password is retried. Any other error stops. try copies
+// the attempt tracker back onto xFile, including the no-password fallback, so a
+// later signature fallback keeps the same budget.
+func forRARPassword(
+	xFile *XFile,
+	try func(*XFile, string) (uint64, []string, []string, error),
+) (uint64, []string, []string, error) {
 	passwords := xFile.Passwords
 
 	if xFile.Password != "" { // If a single password is provided, try it first.
@@ -46,7 +56,7 @@ func ExtractRAR(xFile *XFile) (size uint64, filesList, archiveList []string, err
 	}
 
 	for idx, password := range passwords {
-		size, files, archives, err := tryRAR(xFile, password)
+		size, files, archives, err := try(xFile, password)
 
 		switch {
 		case err == nil:
@@ -61,9 +71,7 @@ func ExtractRAR(xFile *XFile) (size uint64, filesList, archiveList []string, err
 		}
 	}
 
-	// No password worked, try without a password. tryRAR copies the attempt
-	// tracker back so a later signature fallback keeps the same budget.
-	return tryRAR(xFile, "")
+	return try(xFile, "")
 }
 
 // tryRAR runs one extractRAR attempt on a copy (so Password can change) and
