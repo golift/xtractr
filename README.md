@@ -256,6 +256,8 @@ On a queue job (`Xtract`/`Config`) these apply **per top-level archive**. Two si
 
 A multi-volume RAR or 7-Zip set that is not all on disk returns `ErrMissingVolume`. That covers a later volume that has not arrived yet, and a first volume that is missing so a later one would be read in its place. It is not a cap error and `IsLimitError` is false for it: the archive is fine, and a later attempt succeeds once every volume is present.
 
+`CheckVolumes` reads those headers and extracts nothing. It returns an error wrapping `ErrMissingVolume` when the set is short, nil when the set is whole or the file is not a multi-volume RAR or `.7z.001`, and any other header error unchanged. `Password` and `Passwords` are tried in the same order as `ExtractRAR`.
+
 Queue extras caps on `Xtract` and `Config` (`0` inherits `Config`, then unlimited):
 
 - `MaxNested` — archives extracted from one source folder's extras pass
