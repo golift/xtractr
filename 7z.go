@@ -1,16 +1,34 @@
 package xtractr
 
 import (
+	"bytes"
+	"encoding/binary"
+	"errors"
 	"fmt"
+	"hash/crc32"
 	"io"
+	"math"
+	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/bodgit/sevenzip"
+)
+
+const (
+	// sevenZipStartLen is the 7z start header. Its CRC covers the 20 bytes after it.
+	sevenZipStartLen = 32
+	sevenZipSig      = "7z\xbc\xaf\x27\x1c"
 )
 
 // Extract7z extracts a 7zip archive.
 // Volumes: https://github.com/bodgit/sevenzip/issues/54
 func Extract7z(xFile *XFile) (size uint64, filesList, archiveList []string, err error) {
+	err = sevenZipMissing(xFile.FilePath)
+	if err != nil {
+		return 0, nil, nil, err
+	}
+
 	if len(xFile.Passwords) == 0 && xFile.Password == "" {
 		return extract7z(xFile)
 	}
@@ -43,6 +61,136 @@ func Extract7z(xFile *XFile) (size uint64, filesList, archiveList []string, err 
 
 	// unreachable code
 	return 0, nil, nil, nil
+}
+
+// sevenZipMissing reports a .7z.001 set whose start header records more bytes
+// than the volumes on disk. A file that is not a .001, or whose header is not
+// a 7z start header, returns nil so the normal open can report it. The set
+// length is 32 plus the end-header offset and size, and the volumes are
+// .001, .002 and so on, which is the walk sevenzip uses.
+func sevenZipMissing(path string) error {
+	header, ok := sevenZipStart(path)
+	if !ok {
+		return nil
+	}
+
+	offset := binary.LittleEndian.Uint64(header[12:20])
+	size := binary.LittleEndian.Uint64(header[20:28])
+
+	if offset > math.MaxUint64-sevenZipStartLen || size > math.MaxUint64-(sevenZipStartLen+offset) {
+		return nil
+	}
+
+	return sevenZipShort(path, sevenZipStartLen+offset+size)
+}
+
+// sevenZipStart returns the start header of a .7z.001 set. Those 32 bytes can
+// begin in .001 and continue in the next volume, which is how sevenzip reads
+// them. ok is false when the file is not a .001, or the header cannot be
+// checked here.
+func sevenZipStart(path string) (header []byte, ok bool) {
+	if !strings.HasSuffix(strings.ToLower(path), ".001") {
+		return nil, false
+	}
+
+	header, ok = sevenZipPrefix(path)
+	if !ok || !bytes.Equal(header[:len(sevenZipSig)], []byte(sevenZipSig)) {
+		return nil, false
+	}
+
+	sum := crc32.ChecksumIEEE(header[12:sevenZipStartLen])
+	if sum != binary.LittleEndian.Uint32(header[8:12]) {
+		return nil, false
+	}
+
+	return header, true
+}
+
+// sevenZipPrefix reads the first 32 bytes of a .7z.001 set, continuing into
+// .002 and on when a volume ends first. A missing volume or a short read
+// returns false so the normal open can report it.
+func sevenZipPrefix(path string) ([]byte, bool) {
+	base := strings.TrimSuffix(path, filepath.Ext(path))
+	buf := make([]byte, 0, sevenZipStartLen)
+
+	for idx := 1; len(buf) < sevenZipStartLen; idx++ {
+		part, ok := readVolumePart(fmt.Sprintf("%s.%03d", base, idx), sevenZipStartLen-len(buf))
+		if !ok {
+			return nil, false
+		}
+
+		buf = append(buf, part...)
+	}
+
+	return buf, true
+}
+
+// readVolumePart reads up to want bytes from one volume. A volume that ends
+// early returns the bytes it had. A missing or empty volume returns false.
+func readVolumePart(name string, want int) ([]byte, bool) {
+	file, err := os.Open(name)
+	if err != nil {
+		return nil, false
+	}
+
+	buf := make([]byte, want)
+	read, err := io.ReadFull(file, buf)
+	_ = file.Close()
+
+	if err == nil {
+		return buf, true
+	}
+
+	if read > 0 && errors.Is(err, io.ErrUnexpectedEOF) {
+		return buf[:read], true
+	}
+
+	return nil, false
+}
+
+// sevenZipShort reports the first missing volume when the volumes of a .7z.001
+// set add up to less than want. Volumes are .001, .002 and so on.
+func sevenZipShort(path string, want uint64) error {
+	base := strings.TrimSuffix(path, filepath.Ext(path))
+
+	var have uint64
+
+	for idx := 1; ; idx++ {
+		name := fmt.Sprintf("%s.%03d", base, idx)
+
+		info, err := os.Stat(name)
+		if err != nil {
+			return sevenZipGap(err, name, have, want)
+		}
+
+		next, fits := addVolumeSize(have, info.Size())
+		if !fits {
+			return nil
+		}
+
+		have = next
+	}
+}
+
+func sevenZipGap(err error, name string, have, want uint64) error {
+	if errors.Is(err, os.ErrNotExist) && have < want {
+		return fmt.Errorf("%w: %s", ErrMissingVolume, name)
+	}
+
+	return nil
+}
+
+func addVolumeSize(have uint64, size int64) (uint64, bool) {
+	if size <= 0 {
+		return have, true
+	}
+
+	part := uint64(size)
+	if have > math.MaxUint64-part {
+		return 0, false
+	}
+
+	return have + part, true
 }
 
 func extract7z(xFile *XFile) (uint64, []string, []string, error) {

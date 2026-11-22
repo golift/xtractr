@@ -3,14 +3,33 @@ package xtractr
 /* How to extract a RAR file. */
 
 import (
+	"bytes"
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"hash/crc32"
 	"io"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/nwaples/rardecode/v2"
+)
+
+const (
+	rar4HeaderBytes     = 14
+	rar4BlockPrefix     = 7
+	rar4MainSize        = 13
+	rar4MainType        = 0x73
+	rar4FlagVolume      = 0x0001
+	rar4FlagComment     = 0x0002
+	rar4FlagNewNaming   = 0x0010
+	rar4FlagFirstVolume = 0x0100
+	rar4FlagBlockData   = 0x8000
+
+	// rar4Marker is the RAR 1.5/4 signature. RAR5 uses 0x01 in the last byte.
+	rar4Marker = "Rar!\x1a\x07\x00"
 )
 
 // ExtractRAR attempts to extract a file as a rar file.
@@ -61,12 +80,7 @@ func tryRAR(xFile *XFile, password string) (uint64, []string, []string, error) {
 
 // extractRAR extracts a rar file. to a destination. This wraps github.com/nwaples/rardecode.
 func extractRAR(xFile *XFile) (uint64, []string, []string, error) {
-	rarReader, err := rardecode.OpenReader(xFile.FilePath, rardecode.Password(xFile.Password))
-	if err != nil {
-		return 0, nil, nil, fmt.Errorf("rardecode.OpenReader: %w", err)
-	}
-
-	total, compressed, count, err := getUncompressedRarSize(rarReader, xFile) // closes rarReader
+	total, compressed, count, err := rarSetHeaders(xFile)
 	if err != nil {
 		return 0, nil, nil, err
 	}
@@ -78,7 +92,7 @@ func extractRAR(xFile *XFile) (uint64, []string, []string, error) {
 		return 0, nil, nil, headerErr
 	}
 
-	rarReader, err = rardecode.OpenReader(xFile.FilePath, rardecode.Password(xFile.Password)) // open it again.
+	rarReader, err := rardecode.OpenReader(xFile.FilePath, rardecode.Password(xFile.Password)) // open it again.
 	if err != nil {
 		return 0, nil, nil, fmt.Errorf("rardecode.OpenReader: %w", err)
 	}
@@ -93,6 +107,98 @@ func extractRAR(xFile *XFile) (uint64, []string, []string, error) {
 	}
 
 	return xFile.prog.Wrote, files, normalizeVolumes(rarReader.Volumes(), xFile.FilePath), nil
+}
+
+// rarSetHeaders reads the headers of the RAR set that starts at xFile.FilePath
+// and extracts nothing. It returns ErrMissingVolume when the set is not all
+// on disk. total, compressed and count are what the ratio check needs, and
+// they are zero when err is not nil. Only FilePath and Password are read.
+func rarSetHeaders(xFile *XFile) (total, compressed uint64, count int, err error) {
+	if rar4LaterVolume(xFile.FilePath) {
+		return 0, 0, 0, fmt.Errorf("%w: %s", ErrMissingVolume, xFile.FilePath)
+	}
+
+	rarReader, err := rardecode.OpenReader(xFile.FilePath, rardecode.Password(xFile.Password))
+	if err != nil {
+		if errors.Is(err, rardecode.ErrBadVolumeNumber) {
+			// A RAR5 main header carries its volume number, and the first open expects 0.
+			return 0, 0, 0, fmt.Errorf("%w: %w", ErrMissingVolume, err)
+		}
+
+		return 0, 0, 0, fmt.Errorf("rardecode.OpenReader: %w", err)
+	}
+
+	return getUncompressedRarSize(rarReader, xFile) // closes rarReader
+}
+
+// rar4LaterVolume reports whether path is a RAR4 volume that follows another
+// volume. rardecode does not read the first-volume flag, so a later volume
+// opened on its own can look like a whole archive. A read error, a bad main
+// header CRC, or any other signature returns false, and that file is left to
+// the normal open.
+func rar4LaterVolume(path string) bool {
+	file, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer file.Close()
+
+	buf := make([]byte, rar4HeaderBytes)
+	_, err = io.ReadFull(file, buf)
+
+	if err != nil || !bytes.Equal(buf[:len(rar4Marker)], []byte(rar4Marker)) || buf[9] != rar4MainType {
+		return false
+	}
+
+	flags := binary.LittleEndian.Uint16(buf[10:12])
+	if flags&rar4FlagVolume == 0 || flags&rar4FlagFirstVolume != 0 {
+		return false
+	}
+
+	// RAR 2.x set the volume flag and never the first-volume flag, and it
+	// named a first volume .rar. RAR 3.0 and later set the first-volume flag.
+	if flags&rar4FlagNewNaming == 0 && strings.EqualFold(filepath.Ext(path), ".rar") {
+		return false
+	}
+
+	return rar4MainCRC(file, buf)
+}
+
+// rar4MainCRC reports whether buf's main header matches its CRC. The flags are
+// trusted only after this, so a corrupt first volume is not a missing one.
+// file is positioned just after the 14 bytes in buf.
+func rar4MainCRC(file *os.File, buf []byte) bool {
+	flags := binary.LittleEndian.Uint16(buf[10:12])
+	if flags&rar4FlagBlockData != 0 {
+		return false
+	}
+
+	size := int(binary.LittleEndian.Uint16(buf[12:14]))
+	if flags&rar4FlagComment != 0 {
+		if size < rar4MainSize {
+			return false
+		}
+
+		size = rar4MainSize
+	} else if size < rar4BlockPrefix {
+		return false
+	}
+
+	extra := make([]byte, size-rar4BlockPrefix)
+
+	_, err := io.ReadFull(file, extra)
+	if err != nil {
+		return false
+	}
+
+	sum := crc32.NewIEEE()
+	_, _ = sum.Write(buf[9:rar4HeaderBytes])
+	_, _ = sum.Write(extra)
+
+	// The header stores the low 16 bits of the CRC32.
+	stored := uint32(binary.LittleEndian.Uint16(buf[7:9]))
+
+	return sum.Sum32()&0xffff == stored
 }
 
 // getUncompressedRarSize reads every file header, which walks every volume.
@@ -112,7 +218,7 @@ func getUncompressedRarSize(
 			xFile.omitNoted(volumes...)
 			compressed = archiveFileSizes(volumes...)
 
-			return total, compressed, count, rarHeaderError(nextErr)
+			return total, compressed, count, rarHeaderError(nextErr, count)
 		}
 
 		total += uint64(header.UnPackedSize)
@@ -120,14 +226,17 @@ func getUncompressedRarSize(
 	}
 }
 
-// rarHeaderError is nil at the end of the archive. rardecode opens the next
-// volume while it reads headers, so a volume that does not exist (yet) shows
-// up as fs.ErrNotExist; that becomes ErrMissingVolume.
-func rarHeaderError(err error) error {
+// rarHeaderError is nil at the end of the archive. A set that is not all on
+// disk becomes ErrMissingVolume: the next volume is not there, a file runs
+// past the last volume, or the first header continues a file from a volume
+// that was not opened.
+func rarHeaderError(err error, count int) error {
 	switch {
 	case errors.Is(err, io.EOF):
 		return nil
-	case errors.Is(err, fs.ErrNotExist):
+	case errors.Is(err, fs.ErrNotExist), // the next volume is not on disk
+		errors.Is(err, rardecode.ErrUnexpectedArcEnd),               // a file runs past the last volume
+		count == 0 && errors.Is(err, rardecode.ErrInvalidFileBlock): // the set starts in an earlier volume
 		return fmt.Errorf("%w: %w", ErrMissingVolume, err)
 	default:
 		return fmt.Errorf("rarReader.Next: %w", err)
