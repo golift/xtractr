@@ -397,6 +397,41 @@ func TestExtractRAR4FirstVolumeStillExtracts(t *testing.T) {
 		writeRAR4Set(t, dir, "show.rar", rar4Options{volSize: 10}, rar4File{name: "payload.bin", data: payload})
 		assertRARExtracted(t, filepath.Join(dir, "show.rar"), "payload.bin", payload)
 	})
+
+	t.Run("new numbering", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		writeRAR4Set(t, dir, "show.part1.rar", rar4Options{firstVolume: true, newNaming: true},
+			rar4File{name: "payload.bin", data: payload})
+		assertRARExtracted(t, filepath.Join(dir, "show.part1.rar"), "payload.bin", payload)
+	})
+}
+
+// TestExtractRAR4BadHeaderCRC clears the first-volume bit and leaves the CRC.
+// That header is corrupt, so it must not become a retryable missing volume.
+func TestExtractRAR4BadHeaderCRC(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	writeRAR4Set(t, dir, "show.part1.rar", rar4Options{firstVolume: true, newNaming: true},
+		rar4File{name: "payload.bin", data: []byte("rar4 crc")})
+
+	path := filepath.Join(dir, "show.part1.rar")
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Greater(t, len(data), rar4FlagHigh)
+
+	data[rar4FlagHigh] &^= rar4FirstFlagHigh
+	require.NoError(t, os.WriteFile(path, data, 0o600)) //nolint:gosec // fixed name in a temp dir.
+
+	xFile := rarRatioFile(t, path)
+	size, files, archives, err := xtractr.ExtractRAR(xFile)
+	require.ErrorIs(t, err, rardecode.ErrBadHeaderCRC)
+	require.NotErrorIs(t, err, xtractr.ErrMissingVolume)
+	assert.Zero(t, size)
+	assert.Empty(t, files)
+	assert.Empty(t, archives)
 }
 
 func assertRARMissing(t *testing.T, path string, wrapped error) {
@@ -440,7 +475,13 @@ func assertRARExtracted(t *testing.T, path, name string, payload []byte) {
 const (
 	rar4MainType        = 0x73
 	rar4FlagVolume      = 0x0001
+	rar4FlagNewNaming   = 0x0010
 	rar4FlagFirstVolume = 0x0100
+
+	// rar4FirstFlagHigh is the first-volume bit in the high byte of the flags.
+	// That byte sits at rar4FlagHigh, just after the marker, CRC, type and low flag byte.
+	rar4FlagHigh      = 11
+	rar4FirstFlagHigh = 0x01
 
 	// rar4Marker is the RAR 1.5/4 signature.
 	rar4Marker = "Rar!\x1a\x07\x00"
@@ -455,6 +496,7 @@ type rar4File struct {
 type rar4Options struct {
 	volSize     int
 	firstVolume bool
+	newNaming   bool
 	noEnd       bool
 }
 
@@ -483,7 +525,7 @@ func writeRAR4Set(t *testing.T, dir, firstName string, opts rar4Options, files .
 		var body []byte
 
 		body = append(body, rar4Marker...)
-		body = append(body, rar4MainHeader(idx == 0 && opts.firstVolume)...)
+		body = append(body, rar4MainHeader(opts, idx == 0)...)
 
 		for _, piece := range pieces {
 			body = append(body, rar4FileHeader(piece)...)
@@ -552,10 +594,14 @@ func splitRAR4(files []rar4File, volSize int) [][]rar4Piece {
 	return volumes
 }
 
-func rar4MainHeader(first bool) []byte {
+func rar4MainHeader(opts rar4Options, firstVolume bool) []byte {
 	flags := uint16(rar4FlagVolume)
-	if first {
+	if firstVolume && opts.firstVolume {
 		flags |= rar4FlagFirstVolume
+	}
+
+	if opts.newNaming {
+		flags |= rar4FlagNewNaming
 	}
 
 	body := make([]byte, 11)

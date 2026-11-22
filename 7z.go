@@ -84,23 +84,17 @@ func sevenZipMissing(path string) error {
 	return sevenZipShort(path, sevenZipStartLen+offset+size)
 }
 
-// sevenZipStart returns the start header of a .7z.001 file. ok is false when
-// the file is not one, or its header cannot be checked here.
+// sevenZipStart returns the start header of a .7z.001 set. Those 32 bytes can
+// begin in .001 and continue in the next volume, which is how sevenzip reads
+// them. ok is false when the file is not a .001, or the header cannot be
+// checked here.
 func sevenZipStart(path string) (header []byte, ok bool) {
 	if !strings.HasSuffix(strings.ToLower(path), ".001") {
 		return nil, false
 	}
 
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, false
-	}
-
-	header = make([]byte, sevenZipStartLen)
-	_, err = io.ReadFull(file, header)
-	_ = file.Close()
-
-	if err != nil || !bytes.Equal(header[:len(sevenZipSig)], []byte(sevenZipSig)) {
+	header, ok = sevenZipPrefix(path)
+	if !ok || !bytes.Equal(header[:len(sevenZipSig)], []byte(sevenZipSig)) {
 		return nil, false
 	}
 
@@ -110,6 +104,48 @@ func sevenZipStart(path string) (header []byte, ok bool) {
 	}
 
 	return header, true
+}
+
+// sevenZipPrefix reads the first 32 bytes of a .7z.001 set, continuing into
+// .002 and on when a volume ends first. A missing volume or a short read
+// returns false so the normal open can report it.
+func sevenZipPrefix(path string) ([]byte, bool) {
+	base := strings.TrimSuffix(path, filepath.Ext(path))
+	buf := make([]byte, 0, sevenZipStartLen)
+
+	for idx := 1; len(buf) < sevenZipStartLen; idx++ {
+		part, ok := readVolumePart(fmt.Sprintf("%s.%03d", base, idx), sevenZipStartLen-len(buf))
+		if !ok {
+			return nil, false
+		}
+
+		buf = append(buf, part...)
+	}
+
+	return buf, true
+}
+
+// readVolumePart reads up to want bytes from one volume. A volume that ends
+// early returns the bytes it had. A missing or empty volume returns false.
+func readVolumePart(name string, want int) ([]byte, bool) {
+	file, err := os.Open(name)
+	if err != nil {
+		return nil, false
+	}
+
+	buf := make([]byte, want)
+	read, err := io.ReadFull(file, buf)
+	_ = file.Close()
+
+	if err == nil {
+		return buf, true
+	}
+
+	if read > 0 && errors.Is(err, io.ErrUnexpectedEOF) {
+		return buf[:read], true
+	}
+
+	return nil, false
 }
 
 // sevenZipShort reports the first missing volume when the volumes of a .7z.001

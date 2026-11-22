@@ -76,3 +76,104 @@ func TestExtract7zMissingVolume(t *testing.T) {
 	require.NoError(t, readErr)
 	assert.Empty(t, written)
 }
+
+// TestExtract7zHeaderSpansVolumes splits the fixture into 20-byte volumes, so
+// the 32-byte start header begins in .001 and continues in .002.
+func TestExtract7zHeaderSpansVolumes(t *testing.T) {
+	t.Parallel()
+
+	whole := read7zFixture(t)
+
+	const volSize = 20
+
+	t.Run("short set", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		path := write7zVolumes(t, dir, "span.7z", whole[:volSize*2], volSize)
+		out := t.TempDir()
+		size, files, archives, err := xtractr.Extract7z(&xtractr.XFile{
+			FilePath:  path,
+			OutputDir: out,
+			FileMode:  xtractr.DefaultFileMode,
+			DirMode:   xtractr.DefaultDirMode,
+		})
+		require.ErrorIs(t, err, xtractr.ErrMissingVolume)
+		require.ErrorContains(t, err, "span.7z.003")
+		assert.False(t, xtractr.IsLimitError(err), "a missing volume is not a configured limit: %v", err)
+		assert.Zero(t, size)
+		assert.Empty(t, files)
+		assert.Empty(t, archives)
+
+		written, readErr := os.ReadDir(out)
+		require.NoError(t, readErr)
+		assert.Empty(t, written)
+	})
+
+	t.Run("header not on disk", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		path := write7zVolumes(t, dir, "span.7z", whole[:volSize], volSize)
+		_, _, _, err := xtractr.Extract7z(&xtractr.XFile{
+			FilePath:  path,
+			OutputDir: t.TempDir(),
+			FileMode:  xtractr.DefaultFileMode,
+			DirMode:   xtractr.DefaultDirMode,
+		})
+		require.Error(t, err)
+		require.NotErrorIs(t, err, xtractr.ErrMissingVolume)
+	})
+
+	t.Run("whole set", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		path := write7zVolumes(t, dir, "span.7z", whole, volSize)
+		_, files, archives, err := xtractr.Extract7z(&xtractr.XFile{
+			FilePath:  path,
+			OutputDir: t.TempDir(),
+			FileMode:  xtractr.DefaultFileMode,
+			DirMode:   xtractr.DefaultDirMode,
+		})
+		require.NoError(t, err)
+		assert.NotEmpty(t, files)
+		assert.NotEmpty(t, archives)
+	})
+}
+
+func read7zFixture(t *testing.T) []byte {
+	t.Helper()
+
+	var whole []byte
+
+	for _, name := range []string{"multivol.7z.001", "multivol.7z.002"} {
+		data, err := os.ReadFile(filepath.Join("test_data", name))
+		require.NoError(t, err)
+
+		whole = append(whole, data...)
+	}
+
+	return whole
+}
+
+func write7zVolumes(t *testing.T, dir, stem string, data []byte, volSize int) string {
+	t.Helper()
+
+	var first string
+
+	for idx, off := 1, 0; off < len(data); idx++ {
+		end := min(off+volSize, len(data))
+		part := filepath.Join(dir, fmt.Sprintf("%s.%03d", stem, idx))
+
+		if first == "" {
+			first = part
+		}
+
+		require.NoError(t, os.WriteFile(part, data[off:end], 0o600))
+
+		off = end
+	}
+
+	return first
+}
